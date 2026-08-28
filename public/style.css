@@ -173,6 +173,122 @@ ul.clean li:last-child { border-bottom: none; }
   min-width: 34px;
 }
 
+/* --- 100-yard lottery race --- */
+.latest-pick-callout {
+  text-align: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
+}
+.latest-pick-callout .pick-num { color: var(--text-dim); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.latest-pick-callout .pick-name { font-size: 1.9rem; font-weight: 800; color: var(--gold); }
+
+.field-wrap { overflow-x: auto; }
+.field {
+  position: relative;
+  min-width: 560px;
+  border-radius: 10px;
+  border: 3px solid #0b1a0f;
+  background:
+    repeating-linear-gradient(to right, rgba(255,255,255,0.07) 0 2px, transparent 2px calc(8.8% - 2px)),
+    linear-gradient(180deg, #1c5c33, #144526);
+  overflow: hidden;
+}
+.field .end-zone {
+  position: absolute;
+  top: 0; bottom: 0; right: 0;
+  width: 12%;
+  background: repeating-linear-gradient(135deg, #7a5a12 0 10px, #63480d 10px 20px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--gold);
+  font-weight: 800;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  writing-mode: vertical-rl;
+  border-left: 2px dashed rgba(255,255,255,0.5);
+}
+.lane {
+  padding: 3px 0;
+  border-bottom: 1px dashed rgba(255,255,255,0.12);
+}
+.lane:last-child { border-bottom: none; }
+.lane-name {
+  display: block;
+  padding-left: 6px;
+  margin-bottom: 1px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #eaf3ec;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Runner positions are computed as a % of this element's width — keeping it
+   full-lane-width and free of any other inline content is what keeps the
+   percentage math aligned with the end zone, which is measured against the
+   same field width. */
+.lane-track { position: relative; height: 28px; }
+.runner {
+  position: absolute;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  margin-left: -13px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #0b1a0f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: #0b1a0f;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+  transition: left 1.15s cubic-bezier(0.2, 0.8, 0.3, 1);
+  transform: translateY(-50%);
+  z-index: 3;
+}
+.runner.idle-jitter { animation: runner-idle 1.3s ease-in-out infinite; }
+@keyframes runner-idle {
+  0%, 100% { transform: translateY(-50%) translateX(0); }
+  50% { transform: translateY(-50%) translateX(3px); }
+}
+.pick-flag {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: var(--gold);
+  white-space: nowrap;
+  background: rgba(11, 26, 15, 0.75);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.yard-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  padding: 4px 2px 0;
+  min-width: 560px;
+}
+.runner.runner-winner {
+  background: var(--gold);
+  box-shadow: 0 0 0 3px rgba(244, 197, 66, 0.35), 0 2px 6px rgba(0,0,0,0.5);
+  animation: winner-glow 1.2s ease-in-out infinite;
+}
+@keyframes winner-glow {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(244, 197, 66, 0.35), 0 2px 6px rgba(0,0,0,0.5); }
+  50% { box-shadow: 0 0 0 7px rgba(244, 197, 66, 0.15), 0 2px 6px rgba(0,0,0,0.5); }
+}
+
 .reaction-box {
   height: 260px;
   border-radius: var(--radius);

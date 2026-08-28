@@ -10,17 +10,24 @@
 <header class="site">
   <a class="logo" href="/">Draft Order <span>Arena</span></a>
 </header>
-<main>
+<main class="wide">
   <h1>Weighted Draft Lottery</h1>
   <p class="lead" id="status-line">Loading…</p>
 
   <div class="panel" id="run-panel" style="display:none">
-    <p class="muted">You're the commissioner — start the reveal when everyone's watching.</p>
-    <button id="run-btn">Run the draw</button>
+    <p class="muted">You're the commissioner — start the race when everyone's watching.</p>
+    <button id="run-btn">Run the race</button>
   </div>
 
   <div class="panel">
-    <div id="latest-pick" style="text-align:center; padding: 10px 0;"></div>
+    <div id="latest-pick" class="latest-pick-callout" style="display:none"></div>
+    <div class="field-wrap">
+      <div class="field" id="field"></div>
+    </div>
+    <p class="muted" style="margin-top:10px">Every team lines up at the goal line. As picks are decided — worst to first — each team's runner breaks off and plants their flag. The last one still running takes it all the way: the #1 pick.</p>
+  </div>
+
+  <div class="panel">
     <h2 style="margin-top:0">Order so far</h2>
     <ol class="order-list" id="order-list"></ol>
   </div>

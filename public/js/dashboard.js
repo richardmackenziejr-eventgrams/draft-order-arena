@@ -35,13 +35,19 @@ function renderGameChoices(members) {
   container.innerHTML = catalog.map((g) => {
     const oddsInputs = g.id === 'lottery'
       ? `<div class="lottery-odds" data-for="${g.id}" style="display:none; margin-top:10px">
-          <label>Odds weight per member (higher = better odds at pick #1)</label>
-          <div class="row">
-            ${members.map((m) => `
-              <div>
-                <label style="margin:6px 0 2px">${escapeHtml(m.name)}</label>
-                <input type="number" min="0" step="0.5" value="1" data-odds-member="${m.id}" data-odds-game="${g.id}" />
-              </div>`).join('')}
+          <label style="display:flex; align-items:center; gap:8px; margin-top:0">
+            <input type="checkbox" data-randomize-game="${g.id}" style="width:auto" />
+            <span>Make it completely random (ignore standings)</span>
+          </label>
+          <div data-standings-for="${g.id}">
+            <label>Last year's finish for each team (1 = champion, higher = worse — worse finish automatically gets better odds at pick #1)</label>
+            <div class="row">
+              ${members.map((m, i) => `
+                <div>
+                  <label style="margin:6px 0 2px">${escapeHtml(m.name)}</label>
+                  <input type="number" min="1" step="1" value="${i + 1}" data-odds-member="${m.id}" data-odds-game="${g.id}" />
+                </div>`).join('')}
+            </div>
           </div>
         </div>`
       : '';
@@ -66,6 +72,13 @@ function renderGameChoices(members) {
       if (odds) odds.style.display = chk.checked ? 'block' : 'none';
     });
   });
+
+  container.querySelectorAll('[data-randomize-game]').forEach((chk) => {
+    chk.addEventListener('change', () => {
+      const standings = container.querySelector(`[data-standings-for="${chk.dataset.randomizeGame}"]`);
+      if (standings) standings.style.display = chk.checked ? 'none' : 'block';
+    });
+  });
 }
 
 function buildGamesPayload() {
@@ -75,11 +88,14 @@ function buildGamesPayload() {
     const mode = document.querySelector(`[data-game-mode="${gameType}"]`).value;
     let config = {};
     if (gameType === 'lottery') {
+      const randomize = document.querySelector(`[data-randomize-game="${gameType}"]`).checked;
       const odds = {};
       document.querySelectorAll(`[data-odds-game="${gameType}"]`).forEach((inp) => {
-        odds[inp.dataset.oddsMember] = Number(inp.value) || 1;
+        // Weight = finish position directly: last place (highest number) naturally
+        // gets the most weight, i.e. the best odds at pick #1 — no extra math needed.
+        odds[inp.dataset.oddsMember] = randomize ? 1 : (Number(inp.value) || 1);
       });
-      config = { odds };
+      config = { odds, randomized: randomize };
     }
     games.push({ gameType, mode, config });
   });
@@ -95,7 +111,7 @@ function gameStatusLine(gi) {
   if (gi.status === 'draft') return 'Not started yet';
   if (gi.gameType === 'lottery') {
     if (gi.status === 'completed') return 'Draw complete';
-    if (gi.status === 'revealing') return `Revealing… (${gi.revealedOrder ? gi.revealedOrder.length : 0}/${gi.totalPicks || '?'})`;
+    if (gi.status === 'revealing') return `Revealing… (${gi.revealedPicks ? gi.revealedPicks.length : 0}/${gi.totalPicks || '?'})`;
     if (gi.mode === 'live') return 'Ready — commissioner triggers the reveal';
     return 'Pending';
   }
@@ -190,6 +206,8 @@ document.getElementById('comp-form').addEventListener('submit', async (e) => {
     document.getElementById('comp-form').reset();
     document.querySelectorAll('.game-choice').forEach((c) => c.classList.remove('checked'));
     document.querySelectorAll('.lottery-odds').forEach((o) => { o.style.display = 'none'; });
+    document.querySelectorAll('[data-randomize-game]').forEach((c) => { c.checked = false; });
+    document.querySelectorAll('[data-standings-for]').forEach((s) => { s.style.display = 'block'; });
     await refresh();
   } catch (err) {
     showError(errEl, err);
