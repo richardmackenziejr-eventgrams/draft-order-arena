@@ -1,0 +1,14 @@
+{
+  "name": "draft-order-arena",
+  "version": "0.1.0",
+  "description": "Online competitions for fantasy football leagues to determine draft order",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.22.0",
+    "socket.io": "^4.7.5"
+  }
+}

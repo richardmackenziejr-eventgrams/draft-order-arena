@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Draft Lottery — Draft Order Arena</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header class="site">
+  <a class="logo" href="/">Draft Order <span>Arena</span></a>
+</header>
+<main>
+  <h1>Weighted Draft Lottery</h1>
+  <p class="lead" id="status-line">Loading…</p>
+
+  <div class="panel" id="run-panel" style="display:none">
+    <p class="muted">You're the commissioner — start the reveal when everyone's watching.</p>
+    <button id="run-btn">Run the draw</button>
+  </div>
+
+  <div class="panel">
+    <div id="latest-pick" style="text-align:center; padding: 10px 0;"></div>
+    <h2 style="margin-top:0">Order so far</h2>
+    <ol class="order-list" id="order-list"></ol>
+  </div>
+
+  <p><a class="btn secondary" id="back-link" href="/">Back</a></p>
+</main>
+<footer class="site">Draft Order Arena — prototype</footer>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/common.js"></script>
+<script src="/js/play-lottery.js"></script>
+</body>
+</html>
