@@ -324,6 +324,55 @@ ul.clean li:last-child { border-bottom: none; }
 }
 
 .race-panel { position: relative; }
+
+/* Referee's "Ready... Set... GO!" — sits at the top of the field, shown
+   briefly before the runners start moving (both for a fresh live race and
+   for a replay), then gets out of the way. */
+.ready-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  justify-content: center;
+  padding-top: 10px;
+  z-index: 25;
+  pointer-events: none;
+}
+.referee-wrap { display: flex; flex-direction: column; align-items: center; }
+.speech-bubble {
+  position: relative;
+  background: #f4f4f4;
+  color: #14210c;
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+  padding: 7px 18px;
+  border-radius: 14px;
+  margin-bottom: 10px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  min-width: 56px;
+  text-align: center;
+}
+.speech-bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 8px 7px 0 7px;
+  border-style: solid;
+  border-color: #f4f4f4 transparent transparent transparent;
+}
+.speech-bubble.pop { animation: bubble-pop 0.28s ease-out; }
+@keyframes bubble-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  65% { transform: scale(1.18); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.speech-bubble.go-word { background: var(--gold); }
+.speech-bubble.go-word::after { border-color: var(--gold) transparent transparent transparent; }
+.speech-bubble.go-word #ready-text { color: #2a1c02; font-size: 1.25rem; }
+.referee-figure { filter: drop-shadow(0 3px 4px rgba(0,0,0,0.6)); }
+
 .results-overlay {
   position: absolute;
   inset: 0;

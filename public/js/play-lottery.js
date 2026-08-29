@@ -69,6 +69,73 @@ function runnerFigureSvg() {
 // everyone racing in one flat color.
 const JERSEY_COLORS = ['#e63946', '#2a9d8f', '#3a86ff', '#f4a261', '#8338ec', '#06d6a0', '#ef476f', '#118ab2', '#ffbe0b', '#c1121f', '#4cc9f0', '#7209b7'];
 
+// The referee who kicks things off — same low-poly-shapes approach as the
+// runners, just a one-off figure instead of something rendered per lane.
+function refereeFigureSvg() {
+  return `
+    <svg viewBox="0 0 24 34" width="34" height="48" xmlns="http://www.w3.org/2000/svg">
+      <rect x="8" y="23" width="4" height="9" rx="1.6" fill="#1c1c1c" />
+      <rect x="12" y="23" width="4" height="9" rx="1.6" fill="#1c1c1c" />
+      <ellipse cx="10" cy="32.3" rx="2.6" ry="1.4" fill="#050505" />
+      <ellipse cx="14" cy="32.3" rx="2.6" ry="1.4" fill="#050505" />
+      <clipPath id="refStripes">
+        <path d="M6.5 9 Q6.5 7.2 8.3 7.2 L15.7 7.2 Q17.5 7.2 17.5 9 L16.9 23 Q12 24.4 7.1 23 Z" />
+      </clipPath>
+      <g clip-path="url(#refStripes)">
+        <rect x="6.5" y="7.2" width="2.2" height="17" fill="#f4f4f4" />
+        <rect x="8.7" y="7.2" width="2.2" height="17" fill="#151515" />
+        <rect x="10.9" y="7.2" width="2.2" height="17" fill="#f4f4f4" />
+        <rect x="13.1" y="7.2" width="2.2" height="17" fill="#151515" />
+        <rect x="15.3" y="7.2" width="2.2" height="17" fill="#f4f4f4" />
+        <rect x="17.5" y="7.2" width="2.2" height="17" fill="#151515" />
+      </g>
+      <rect x="2.6" y="9.5" width="4" height="9.5" rx="2" fill="#151515" />
+      <rect x="15.7" y="4.6" width="4" height="9.5" rx="2" fill="#151515" transform="rotate(-34 17.7 9.35)" />
+      <circle cx="18.4" cy="6.1" r="1.15" fill="#e8e8e8" />
+      <circle cx="12" cy="4.8" r="4.8" fill="#e8b98a" />
+      <path d="M7.3 3.1 Q12 -0.8 16.7 3.1 L16.5 4.3 Q12 2.3 7.5 4.3 Z" fill="#151515" />
+    </svg>
+  `;
+}
+document.getElementById('referee-figure').innerHTML = refereeFigureSvg();
+
+// "Ready... Set... GO!" in a speech bubble before the runners start moving —
+// on a fresh live race and on every replay alike. `onDone` fires right as GO!
+// clears, which is when the actual race (jitter loops, reveal schedule)
+// should begin — this is purely a pre-roll, it doesn't affect the outcome.
+function playReadySetGo(onDone) {
+  const overlay = document.getElementById('ready-overlay');
+  const bubble = document.getElementById('ready-bubble');
+  const text = document.getElementById('ready-text');
+  overlay.style.display = 'flex';
+
+  const steps = [
+    { word: 'Ready…', ms: 650 },
+    { word: 'Set…', ms: 650 },
+    { word: 'GO!', ms: 500 },
+  ];
+  let i = 0;
+  const showNext = () => {
+    if (i >= steps.length) {
+      overlay.style.display = 'none';
+      bubble.classList.remove('go-word');
+      onDone();
+      return;
+    }
+    const { word, ms } = steps[i];
+    text.textContent = word;
+    bubble.classList.toggle('go-word', word === 'GO!');
+    // Restart the pop-in animation for each new word (just toggling the
+    // class wouldn't retrigger it, since it'd already be present).
+    bubble.classList.remove('pop');
+    void bubble.offsetWidth;
+    bubble.classList.add('pop');
+    i++;
+    setTimeout(showNext, ms);
+  };
+  showNext();
+}
+
 function renderField() {
   const field = document.getElementById('field');
   field.innerHTML = members.map((m, i) => `
@@ -229,16 +296,19 @@ function replayAsync(results, onDone) {
   finalResults = results;
   onRaceFullyDone = onDone || null;
   const order = results.slice().sort((a, b) => a.rank - b.rank); // best to worst — pick #1 finishes first
-  beginRace(order.map((r) => r.memberId));
-  let i = 0;
-  const step = () => {
-    if (i >= order.length) return; // all handed off — completion now waits on finishRunner
-    const { rank, memberId } = order[i];
-    crossFinishLine(rank, memberId);
-    i++;
-    setTimeout(step, 1800);
-  };
-  setTimeout(step, 900);
+  document.getElementById('status-line').textContent = 'Get ready…';
+  playReadySetGo(() => {
+    beginRace(order.map((r) => r.memberId));
+    let i = 0;
+    const step = () => {
+      if (i >= order.length) return; // all handed off — completion now waits on finishRunner
+      const { rank, memberId } = order[i];
+      crossFinishLine(rank, memberId);
+      i++;
+      setTimeout(step, 1800);
+    };
+    setTimeout(step, 900);
+  });
 }
 
 function wireResultsControls() {
@@ -306,7 +376,10 @@ async function init() {
 
   const socket = io();
   socket.emit('join-room', { gameInstanceId: instanceId });
-  socket.on('lottery:started', () => beginRace(members.map((m) => m.id)));
+  socket.on('lottery:started', () => {
+    document.getElementById('status-line').textContent = 'Get ready…';
+    playReadySetGo(() => beginRace(members.map((m) => m.id)));
+  });
   socket.on('lottery:reveal', ({ pick, memberId }) => crossFinishLine(pick, memberId));
   socket.on('lottery:complete', ({ results }) => {
     // Every pick has been handed off to a runner, but the last one or two are
