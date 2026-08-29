@@ -15,12 +15,9 @@
   <p class="lead" id="status-line">Loading…</p>
 
   <div class="panel" id="kick-panel" style="display:none">
-    <div class="fg-scene" id="fg-scene"></div>
-
     <p class="fg-kick-info" id="kick-info"></p>
-    <p class="fg-wind" id="wind-line"></p>
 
-    <div class="fg-meters" id="fg-meters">
+    <div class="fg-layout">
       <div class="fg-power-block">
         <p class="fg-meter-label">Power</p>
         <div class="power-track" id="power-track">
@@ -28,6 +25,15 @@
           <div class="power-marker" id="power-marker"></div>
         </div>
         <button id="power-stop-btn" class="fg-stop-btn">Click to lock power!</button>
+      </div>
+
+      <div class="fg-scene" id="fg-scene">
+        <div class="fg-scene-bg" id="fg-scene-bg"></div>
+        <div class="fg-wind-overlay" id="wind-overlay"></div>
+        <div class="fg-result-overlay" id="result-overlay" style="display:none">
+          <p class="fg-result" id="result-text"></p>
+          <button id="next-kick-btn" style="display:block; margin:8px auto 0">Next Kick →</button>
+        </div>
       </div>
 
       <div class="fg-direction-block" id="direction-block">
@@ -38,11 +44,6 @@
         </div>
         <button id="direction-stop-btn" class="fg-stop-btn" disabled>Click to kick!</button>
       </div>
-    </div>
-
-    <div id="result-step" style="display:none">
-      <p class="fg-result" id="result-text"></p>
-      <button id="next-kick-btn" style="display:block; margin:0 auto">Next Kick →</button>
     </div>
   </div>
 

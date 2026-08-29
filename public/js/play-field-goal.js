@@ -69,15 +69,43 @@ function setDirectionActive(startedAt) {
   animateDirection(startedAt);
 }
 
-function windLine(k) {
-  if (k.windDir === 'calm') return 'Wind: calm';
+function renderWindOverlay(k) {
+  const el = document.getElementById('wind-overlay');
+  if (k.windDir === 'calm') {
+    el.textContent = 'Calm';
+    return;
+  }
   const arrow = k.windDir === 'left' ? '←' : '→';
-  return `Wind: ${k.windMph} mph ${arrow}`;
+  el.textContent = `${arrow} ${k.windMph} mph`;
 }
 
-function showSection(section) {
-  document.getElementById('fg-meters').style.display = section === 'meters' ? 'grid' : 'none';
-  document.getElementById('result-step').style.display = section === 'result' ? 'block' : 'none';
+function hideResultOverlay() {
+  document.getElementById('result-overlay').style.display = 'none';
+}
+
+function outcomeText(outcome, distance) {
+  if (outcome.outcome === 'made') return `IT'S GOOD! ${distance} yards — +${outcome.points} point${outcome.points === 1 ? '' : 's'}`;
+  if (outcome.outcome === 'short') return "NO GOOD — didn't have the distance. Time the power meter's green zone better.";
+  if (outcome.outcome === 'wide-left') return 'WIDE LEFT!';
+  if (outcome.outcome === 'wide-right') return 'WIDE RIGHT!';
+  return outcome.outcome;
+}
+
+// Both meters freeze right where they were clicked and stay visible behind
+// the result card, instead of disappearing — a nice "here's what actually
+// happened" recap alongside the call.
+function freezeAndShowResult(k) {
+  stopAnimations();
+  document.getElementById('power-marker').style.bottom = `${(k.powerPos || 0) * 100}%`;
+  document.getElementById('direction-marker').style.left = `${(k.attempt.directionPos || 0) * 100}%`;
+  document.getElementById('direction-track').classList.remove('idle');
+  document.getElementById('power-stop-btn').disabled = true;
+  document.getElementById('direction-stop-btn').disabled = true;
+
+  const el = document.getElementById('result-text');
+  el.textContent = outcomeText(k.attempt, k.distance);
+  el.className = `fg-result ${k.attempt.made ? 'made' : 'missed'}`;
+  document.getElementById('result-overlay').style.display = 'flex';
 }
 
 function renderKick(gi) {
@@ -90,17 +118,17 @@ function renderKick(gi) {
   document.getElementById('done-panel').style.display = 'none';
   document.getElementById('status-line').textContent = `Kick ${k.index + 1} of ${k.total}`;
   document.getElementById('kick-info').textContent = `${k.distance} yard Field Goal`;
-  document.getElementById('wind-line').textContent = windLine(k);
+  renderWindOverlay(k);
 
   stopAnimations();
+  paintPowerZone();
 
   if (k.phase === 'result') {
-    showResult(k.attempt, k.distance);
+    freezeAndShowResult(k);
     return;
   }
 
-  showSection('meters');
-  paintPowerZone();
+  hideResultOverlay();
 
   if (k.phase === 'direction') {
     // Power's already locked — freeze its marker right where it landed
@@ -122,11 +150,10 @@ document.getElementById('power-stop-btn').addEventListener('click', async () => 
   stopAnimations();
   try {
     const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/power-stop`, { memberId });
-    renderKick(gi);
+    renderKick(gi); // sets the right disabled state for both buttons based on the new phase
   } catch (err) {
     alert(err.message);
-  } finally {
-    btn.disabled = false;
+    btn.disabled = false; // only re-enable on failure, so they can retry
   }
 });
 
@@ -136,30 +163,13 @@ document.getElementById('direction-stop-btn').addEventListener('click', async ()
   btn.disabled = true;
   stopAnimations();
   try {
-    const { outcome, gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/direction-stop`, { memberId });
-    showResult(outcome, gi.currentKick ? gi.currentKick.distance : outcome.distance);
+    const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/direction-stop`, { memberId });
+    freezeAndShowResult(gi.currentKick); // disables both buttons — the kick's resolved
   } catch (err) {
     alert(err.message);
-  } finally {
     btn.disabled = false;
   }
 });
-
-function outcomeText(outcome, distance) {
-  if (outcome.outcome === 'made') return `IT'S GOOD! ${distance} yards — +${outcome.points} point${outcome.points === 1 ? '' : 's'}`;
-  if (outcome.outcome === 'short') return "NO GOOD — didn't have the distance. Time the power meter's green zone better.";
-  if (outcome.outcome === 'wide-left') return 'WIDE LEFT!';
-  if (outcome.outcome === 'wide-right') return 'WIDE RIGHT!';
-  return outcome.outcome;
-}
-
-function showResult(outcome, distance) {
-  stopAnimations();
-  const el = document.getElementById('result-text');
-  el.textContent = outcomeText(outcome, distance);
-  el.className = `fg-result ${outcome.made ? 'made' : 'missed'}`;
-  showSection('result');
-}
 
 document.getElementById('next-kick-btn').addEventListener('click', async () => {
   const btn = document.getElementById('next-kick-btn');
@@ -184,6 +194,7 @@ document.getElementById('next-kick-btn').addEventListener('click', async () => {
 
 function showDone(message) {
   stopAnimations();
+  hideResultOverlay();
   document.getElementById('kick-panel').style.display = 'none';
   document.getElementById('done-panel').style.display = 'block';
   document.getElementById('done-message').textContent = message;
@@ -193,9 +204,6 @@ function showDone(message) {
 // (kicker/holder up front, the offensive line crouched with their backs to
 // us, the defensive line barely visible peeking over them, goalposts off in
 // the distance). Built once — it doesn't change between kicks.
-// Simple squat silhouette (short, wide body + head) reads as "kneeling" at
-// the small scale this actually renders at — fine anatomical detail like a
-// bent knee or reaching arms just turns to mush by then.
 function kneelingHolderSvg() {
   return `
     <svg viewBox="0 0 24 32" width="20" height="27" xmlns="http://www.w3.org/2000/svg">
@@ -207,7 +215,7 @@ function kneelingHolderSvg() {
 }
 
 function buildScene() {
-  const el = document.getElementById('fg-scene');
+  const el = document.getElementById('fg-scene-bg');
   const offense = '#2a4a78';
   const defense = '#6e2733';
 
