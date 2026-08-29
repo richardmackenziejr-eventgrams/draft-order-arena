@@ -176,18 +176,18 @@ ul.clean li:last-child { border-bottom: none; }
 /* --- 100-yard lottery race --- */
 .latest-pick-callout {
   text-align: center;
-  padding: 14px 0;
+  padding: 8px 0;
   border-bottom: 1px solid var(--line);
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
-.latest-pick-callout .pick-num { color: var(--text-dim); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; }
-.latest-pick-callout .pick-name { font-size: 1.9rem; font-weight: 800; color: var(--gold); }
+.latest-pick-callout .pick-num { color: var(--text-dim); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.latest-pick-callout .pick-name { font-size: 1.5rem; font-weight: 800; color: var(--gold); }
 
 .field-wrap { position: relative; overflow-x: auto; }
 .field {
   position: relative;
   min-width: 560px;
-  min-height: 220px;
+  min-height: 160px;
   border-radius: 10px;
   border: 3px solid #0b1a0f;
   background:
@@ -212,15 +212,15 @@ ul.clean li:last-child { border-bottom: none; }
   border-left: 2px dashed rgba(255,255,255,0.5);
 }
 .lane {
-  padding: 3px 0;
+  padding: 1px 0;
   border-bottom: 1px dashed rgba(255,255,255,0.12);
 }
 .lane:last-child { border-bottom: none; }
 .lane-name {
   display: block;
   padding-left: 6px;
-  margin-bottom: 1px;
-  font-size: 0.68rem;
+  margin-bottom: 0;
+  font-size: 0.62rem;
   font-weight: 700;
   color: #eaf3ec;
   text-shadow: 0 1px 3px rgba(0,0,0,0.85);
@@ -233,7 +233,7 @@ ul.clean li:last-child { border-bottom: none; }
    full-lane-width and free of any other inline content is what keeps the
    percentage math aligned with the end zone, which is measured against the
    same field width. */
-.lane-track { position: relative; height: 32px; }
+.lane-track { position: relative; height: 26px; }
 
 /* A little pixel-art runner: blocky rectangles for head/torso/arms/legs,
    colored as a flat silhouette (no gradients/rounding — that's the "a little
@@ -322,6 +322,7 @@ ul.clean li:last-child { border-bottom: none; }
   50% { filter: drop-shadow(0 0 6px rgba(244, 197, 66, 0.95)); }
 }
 
+.race-panel { position: relative; }
 .results-overlay {
   position: absolute;
   inset: 0;
@@ -336,14 +337,27 @@ ul.clean li:last-child { border-bottom: none; }
   background: rgba(11, 26, 15, 0.97);
   border: 2px solid var(--gold);
   border-radius: 12px;
-  padding: 22px 26px 18px;
-  max-width: min(92%, 380px);
-  max-height: 100%;
+  padding: 20px 26px 18px;
+  width: min(94%, 640px);
+  /* Height depends on the viewport, not the (often much shorter) field
+     behind it — a tall roster shouldn't force scrolling inside the card. */
+  max-height: 90vh;
   overflow-y: auto;
   text-align: center;
   box-shadow: 0 10px 40px rgba(0,0,0,0.7);
 }
-.results-card .order-list { text-align: left; margin-top: 14px; }
+.results-card .order-list {
+  text-align: left;
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 14px;
+}
+.results-card .order-list li {
+  padding: 9px 12px;
+  margin-bottom: 0;
+  font-size: 0.92rem;
+}
 .results-close {
   position: absolute;
   top: 8px;

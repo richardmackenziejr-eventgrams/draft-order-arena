@@ -5,6 +5,7 @@ document.getElementById('back-link').href = leagueId ? `/member-home.html?league
 let members = [];
 let totalPicks = 0;
 let finalResults = []; // set once the draw is known — lets the Replay button re-run it
+let onRaceFullyDone = null; // fires once every runner has actually crossed the line
 
 // Everyone races at once, and every runner ends up at the same spot — a
 // little past the goal line, inside the end zone (which starts at 88%) —
@@ -17,7 +18,12 @@ const FINISH_PCT = 94;
 
 const racing = new Set(); // memberIds currently in the stride loop
 const released = new Map(); // memberId -> rank, once their pick is revealed
+const finishedIds = new Set(); // memberIds that have actually crossed the line
 const stumbleTimers = new Map(); // memberId -> timeout id, for reverting the stumble pose
+// Bumped on every resetField() so any in-flight stride loop from a previous
+// race (e.g. one still mid-kick when Replay is clicked) recognizes it's
+// stale and stops, instead of two loops fighting over the same runner.
+let raceGeneration = 0;
 
 function nameFor(memberId) {
   const m = members.find((x) => x.id === memberId);
@@ -51,8 +57,10 @@ function renderField() {
 // Puts every runner back at the goal line and clears all race state — used
 // both before the very first run and before a replay.
 function resetField() {
+  raceGeneration++;
   racing.clear();
   released.clear();
+  finishedIds.clear();
   stumbleTimers.forEach((t) => clearTimeout(t));
   stumbleTimers.clear();
   document.getElementById('latest-pick').style.display = 'none';
@@ -91,6 +99,8 @@ function hideResultsOverlay() {
 // None of this affects the actual outcome, which was already decided
 // server-side — it's purely what it looks like getting there.
 function startJitter(memberId) {
+  if (racing.has(memberId)) return; // already looping this generation — don't double up
+  const myGeneration = raceGeneration;
   racing.add(memberId);
   const runner = document.getElementById(`runner-${memberId}`);
   if (!runner) return;
@@ -98,14 +108,15 @@ function startJitter(memberId) {
   runner.classList.add('running');
 
   const tick = () => {
-    if (!racing.has(memberId)) return; // finished (or race reset) — stop looping
+    // Stale loop from a previous race (e.g. Replay was clicked mid-kick) — stop.
+    if (myGeneration !== raceGeneration || !racing.has(memberId)) return;
     const pos = parseFloat(runner.style.left) || LANE_MARGIN;
     const rank = released.get(memberId);
     const kicking = rank != null;
     // Smaller, more frequent steps than a single big leap — keeps the pace
     // similar while each individual hop stays modest.
     const step = kicking
-      ? 2.5 + Math.random() * 3.5 // 2.5-6%, always forward — the finishing kick
+      ? 1.5 + Math.random() * 3.5 // 1.5-5%, always forward — the finishing kick
       : -0.5 + Math.random() * 2.5; // -0.5 to 2, mostly forward — the cruise
     const ceiling = kicking ? FINISH_PCT : JITTER_CEILING;
     const next = Math.max(LANE_MARGIN, Math.min(ceiling, pos + step));
@@ -125,7 +136,7 @@ function startJitter(memberId) {
       runner.classList.add('stumble');
       clearTimeout(stumbleTimers.get(memberId));
       stumbleTimers.set(memberId, setTimeout(() => {
-        if (racing.has(memberId)) {
+        if (myGeneration === raceGeneration && racing.has(memberId)) {
           runner.classList.remove('stumble');
           runner.classList.add('running');
         }
@@ -136,7 +147,10 @@ function startJitter(memberId) {
   setTimeout(tick, Math.random() * 300); // stagger everyone's first stride so they don't move in lockstep
 }
 
-// Bookkeeping once a runner has actually crossed the line.
+// Bookkeeping once a runner has actually crossed the line. The results
+// overlay waits for *this* — every member actually finished animating — not
+// for the reveal events alone, which arrive well before the last runner's
+// kick animation actually completes.
 function finishRunner(rank, memberId, runner) {
   if (!runner.querySelector('.pick-flag')) {
     const flag = document.createElement('div');
@@ -146,6 +160,13 @@ function finishRunner(rank, memberId, runner) {
   }
   if (rank === 1) runner.classList.add('runner-winner');
   showLatest(rank, memberId);
+
+  finishedIds.add(memberId);
+  if (finishedIds.size === members.length && finalResults.length) {
+    document.getElementById('status-line').textContent = 'Draw complete!';
+    showResultsOverlay(finalResults);
+    if (onRaceFullyDone) { const cb = onRaceFullyDone; onRaceFullyDone = null; cb(); }
+  }
 }
 
 // A pick's been revealed — let that runner's next few strides carry it past
@@ -174,19 +195,17 @@ function beginRace(stillRacingIds) {
 
 // Runs the (already-decided) draw for anyone loading a finished lottery, or
 // replaying one — same pacing and jitter as watching it live, purely for the
-// show of it. `onDone`, if given, fires once the results overlay is showing.
+// show of it. `onDone`, if given, fires once every runner has actually
+// crossed the line and the results overlay is up (not just once every pick
+// has been handed off to a runner — those two can be several seconds apart).
 function replayAsync(results, onDone) {
   finalResults = results;
+  onRaceFullyDone = onDone || null;
   const order = results.slice().sort((a, b) => a.rank - b.rank); // best to worst — pick #1 finishes first
   beginRace(order.map((r) => r.memberId));
   let i = 0;
   const step = () => {
-    if (i >= order.length) {
-      document.getElementById('status-line').textContent = 'Draw complete!';
-      showResultsOverlay(results);
-      if (onDone) onDone();
-      return;
-    }
+    if (i >= order.length) return; // all handed off — completion now waits on finishRunner
     const { rank, memberId } = order[i];
     crossFinishLine(rank, memberId);
     i++;
@@ -263,9 +282,15 @@ async function init() {
   socket.on('lottery:started', () => beginRace(members.map((m) => m.id)));
   socket.on('lottery:reveal', ({ pick, memberId }) => crossFinishLine(pick, memberId));
   socket.on('lottery:complete', ({ results }) => {
+    // Every pick has been handed off to a runner, but the last one or two are
+    // likely still mid-kick — finishRunner shows the overlay once they've
+    // actually all arrived. Cover the (unlikely) case where they somehow beat
+    // this event here rather than leave the overlay stuck.
     finalResults = results;
-    document.getElementById('status-line').textContent = 'Draw complete!';
-    showResultsOverlay(results);
+    if (finishedIds.size === members.length) {
+      document.getElementById('status-line').textContent = 'Draw complete!';
+      showResultsOverlay(results);
+    }
   });
 }
 

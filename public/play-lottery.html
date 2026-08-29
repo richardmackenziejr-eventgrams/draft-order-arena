@@ -14,29 +14,29 @@
   <h1>Weighted Draft Lottery</h1>
   <p class="lead" id="status-line">Loading…</p>
 
-  <div class="panel" id="run-panel" style="display:none">
-    <p class="muted">You're the commissioner — start the race when everyone's watching.</p>
-    <button id="run-btn">Run the race</button>
-  </div>
-
-  <div class="panel">
+  <div class="panel race-panel">
+    <div id="run-panel" style="display:none; margin-bottom:10px">
+      <p class="muted" style="margin:0 0 6px">You're the commissioner — start the race when everyone's watching.</p>
+      <button id="run-btn" style="margin-top:0">Run the race</button>
+    </div>
     <div id="latest-pick" class="latest-pick-callout" style="display:none"></div>
     <div class="field-wrap">
       <div class="field" id="field"></div>
-      <div class="results-overlay" id="results-overlay" style="display:none">
-        <div class="results-card">
-          <button class="results-close" id="results-close" aria-label="Close">✕</button>
-          <h2 style="margin:0 0 4px">🏁 Final Draft Order</h2>
-          <ol class="order-list" id="overlay-order-list"></ol>
-          <div class="results-actions">
-            <button id="replay-btn">▶ Replay the race</button>
-            <button id="copy-link-btn" class="secondary">🔗 Copy share link</button>
-          </div>
-          <p class="muted" id="copy-feedback" style="min-height:1.2em; margin: 8px 0 0"></p>
+    </div>
+    <p class="muted" style="margin: 8px 0 0; font-size:0.85rem">Every team lines up at the goal line. First one to break through and cross the line locks in the #1 pick, and the picks count down from there as the rest come in.</p>
+
+    <div class="results-overlay" id="results-overlay" style="display:none">
+      <div class="results-card">
+        <button class="results-close" id="results-close" aria-label="Close">✕</button>
+        <h2 style="margin:0 0 4px">🏁 100 Yard Dash Finish Order</h2>
+        <ol class="order-list" id="overlay-order-list"></ol>
+        <div class="results-actions">
+          <button id="replay-btn">▶ Replay the race</button>
+          <button id="copy-link-btn" class="secondary">🔗 Copy share link</button>
         </div>
+        <p class="muted" id="copy-feedback" style="min-height:1.2em; margin: 8px 0 0"></p>
       </div>
     </div>
-    <p class="muted" style="margin-top:10px">Every team lines up at the goal line. First one to break through and cross the line locks in the #1 pick, and the picks count down from there as the rest come in.</p>
   </div>
 
   <p><a class="btn secondary" id="back-link" href="/">Back</a></p>
