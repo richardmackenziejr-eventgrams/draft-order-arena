@@ -4,7 +4,7 @@ document.getElementById('back-link').href = leagueId ? `/member-home.html?league
 
 let members = [];
 let totalPicks = 0;
-let revealed = []; // index = pick-1, value = memberId or null
+let finalResults = []; // set once the draw is known — lets the Replay button re-run it
 
 // Everyone races at once, and every runner ends up at the same spot — a
 // little past the goal line, inside the end zone (which starts at 88%) —
@@ -48,15 +48,33 @@ function renderField() {
   `).join('') + '<div class="end-zone">100&nbsp;YD</div>';
 }
 
-function renderOrderList() {
-  const list = document.getElementById('order-list');
-  list.innerHTML = revealed.map((memberId) => `<li>${memberId ? escapeHtml(nameFor(memberId)) : '<span class="muted">TBD</span>'}</li>`).join('');
+// Puts every runner back at the goal line and clears all race state — used
+// both before the very first run and before a replay.
+function resetField() {
+  racing.clear();
+  released.clear();
+  stumbleTimers.forEach((t) => clearTimeout(t));
+  stumbleTimers.clear();
+  document.getElementById('latest-pick').style.display = 'none';
+  hideResultsOverlay();
+  renderField();
 }
 
 function showLatest(rank, memberId) {
   const el = document.getElementById('latest-pick');
   el.style.display = 'block';
   el.innerHTML = `<div class="pick-num">Pick #${rank}</div><div class="pick-name">${escapeHtml(nameFor(memberId))}</div>`;
+}
+
+function showResultsOverlay(results) {
+  const ordered = results.slice().sort((a, b) => a.rank - b.rank);
+  document.getElementById('overlay-order-list').innerHTML =
+    ordered.map((r) => `<li>${escapeHtml(nameFor(r.memberId))}</li>`).join('');
+  document.getElementById('results-overlay').style.display = 'flex';
+}
+
+function hideResultsOverlay() {
+  document.getElementById('results-overlay').style.display = 'none';
 }
 
 // Every team runs continuously once the race starts — nobody's runner sits
@@ -127,10 +145,7 @@ function finishRunner(rank, memberId, runner) {
     runner.appendChild(flag);
   }
   if (rank === 1) runner.classList.add('runner-winner');
-
-  revealed[rank - 1] = memberId;
   showLatest(rank, memberId);
-  renderOrderList();
 }
 
 // A pick's been revealed — let that runner's next few strides carry it past
@@ -157,15 +172,19 @@ function beginRace(stillRacingIds) {
   stillRacingIds.forEach(startJitter);
 }
 
-// Replays the (already-decided) draw for anyone loading a finished async
-// lottery — same pacing and jitter as a live race, purely for the show of it.
-function replayAsync(results) {
+// Runs the (already-decided) draw for anyone loading a finished lottery, or
+// replaying one — same pacing and jitter as watching it live, purely for the
+// show of it. `onDone`, if given, fires once the results overlay is showing.
+function replayAsync(results, onDone) {
+  finalResults = results;
   const order = results.slice().sort((a, b) => a.rank - b.rank); // best to worst — pick #1 finishes first
   beginRace(order.map((r) => r.memberId));
   let i = 0;
   const step = () => {
     if (i >= order.length) {
       document.getElementById('status-line').textContent = 'Draw complete!';
+      showResultsOverlay(results);
+      if (onDone) onDone();
       return;
     }
     const { rank, memberId } = order[i];
@@ -176,15 +195,36 @@ function replayAsync(results) {
   setTimeout(step, 900);
 }
 
+function wireResultsControls() {
+  const replayBtn = document.getElementById('replay-btn');
+  replayBtn.addEventListener('click', () => {
+    replayBtn.disabled = true;
+    resetField();
+    replayAsync(finalResults, () => { replayBtn.disabled = false; });
+  });
+
+  document.getElementById('results-close').addEventListener('click', hideResultsOverlay);
+
+  document.getElementById('copy-link-btn').addEventListener('click', async () => {
+    const feedback = document.getElementById('copy-feedback');
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      feedback.textContent = 'Link copied!';
+    } catch {
+      feedback.textContent = window.location.href; // clipboard blocked — show it to copy by hand
+    }
+    setTimeout(() => { feedback.textContent = ''; }, 2500);
+  });
+}
+
 async function init() {
   const { gameInstance: gi } = await api('GET', `/api/game-instances/${instanceId}`);
   const { league } = await api('GET', `/api/leagues/${leagueId}`);
   members = league.members;
 
   totalPicks = gi.totalPicks || members.length;
-  revealed = new Array(totalPicks).fill(null);
   renderField();
-  renderOrderList();
+  wireResultsControls();
 
   if (gi.status === 'completed') {
     replayAsync(gi.results);
@@ -222,8 +262,10 @@ async function init() {
   socket.emit('join-room', { gameInstanceId: instanceId });
   socket.on('lottery:started', () => beginRace(members.map((m) => m.id)));
   socket.on('lottery:reveal', ({ pick, memberId }) => crossFinishLine(pick, memberId));
-  socket.on('lottery:complete', () => {
+  socket.on('lottery:complete', ({ results }) => {
+    finalResults = results;
     document.getElementById('status-line').textContent = 'Draw complete!';
+    showResultsOverlay(results);
   });
 }
 

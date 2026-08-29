@@ -183,10 +183,11 @@ ul.clean li:last-child { border-bottom: none; }
 .latest-pick-callout .pick-num { color: var(--text-dim); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .latest-pick-callout .pick-name { font-size: 1.9rem; font-weight: 800; color: var(--gold); }
 
-.field-wrap { overflow-x: auto; }
+.field-wrap { position: relative; overflow-x: auto; }
 .field {
   position: relative;
   min-width: 560px;
+  min-height: 220px;
   border-radius: 10px;
   border: 3px solid #0b1a0f;
   background:
@@ -320,6 +321,44 @@ ul.clean li:last-child { border-bottom: none; }
   0%, 100% { filter: drop-shadow(0 0 2px rgba(244, 197, 66, 0.6)); }
   50% { filter: drop-shadow(0 0 6px rgba(244, 197, 66, 0.95)); }
 }
+
+.results-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  padding: 16px;
+}
+.results-card {
+  position: relative;
+  background: rgba(11, 26, 15, 0.97);
+  border: 2px solid var(--gold);
+  border-radius: 12px;
+  padding: 22px 26px 18px;
+  max-width: min(92%, 380px);
+  max-height: 100%;
+  overflow-y: auto;
+  text-align: center;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.7);
+}
+.results-card .order-list { text-align: left; margin-top: 14px; }
+.results-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 4px;
+  margin: 0;
+}
+.results-close:hover { color: var(--text); }
+.results-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.results-actions button { width: 100%; margin-top: 0; }
 
 .reaction-box {
   height: 260px;
