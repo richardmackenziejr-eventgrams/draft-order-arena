@@ -469,27 +469,15 @@ ul.clean li:last-child { border-bottom: none; }
 .match-card .winner { color: var(--accent); font-weight: 700; }
 
 /* --- Trivia: 10-second-per-question timer + answer choices --- */
-.trivia-timer-wrap {
-  height: 8px;
-  border-radius: 4px;
-  background: var(--bg-panel-2);
-  overflow: hidden;
-  border: 1px solid var(--line);
-}
-.trivia-timer-bar {
-  height: 100%;
-  width: 100%;
-  background: var(--accent);
-  border-radius: 4px;
-}
 .trivia-timer-num {
   text-align: center;
-  font-size: 1.6rem;
+  font-size: 3rem;
   font-weight: 800;
-  color: var(--gold);
-  margin-top: 6px;
+  color: var(--accent);
+  line-height: 1;
 }
-.trivia-timer-num.urgent { color: var(--danger); }
+.trivia-timer-num.warn { color: var(--gold); }
+.trivia-timer-num.danger { color: var(--danger); }
 .choice-btn {
   display: block;
   width: 100%;

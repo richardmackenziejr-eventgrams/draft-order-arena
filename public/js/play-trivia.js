@@ -14,26 +14,26 @@ function clearTimers() {
   timeoutTimer = null;
 }
 
-// A shrinking bar (CSS transition, so it's smooth) plus a ticking whole-number
-// readout — purely visual, the server is what actually times the answer.
-function startCountdown(seconds, onExpire) {
-  const bar = document.getElementById('timer-bar');
-  const num = document.getElementById('timer-num');
-  bar.style.transition = 'none';
-  bar.style.width = '100%';
-  void bar.offsetWidth; // force reflow so the transition below starts from 100%, not skips it
-  requestAnimationFrame(() => {
-    bar.style.transition = `width ${seconds}s linear`;
-    bar.style.width = '0%';
-  });
+// A ticking whole-number readout, colored green/yellow/red by how much time
+// is left — purely visual, the server is what actually times the answer.
+// clearTimers() (called the instant a choice is clicked) stops this dead, so
+// it never keeps ticking past the moment someone's answered.
+function timerColorClass(remaining) {
+  if (remaining >= 5) return '';
+  if (remaining >= 3) return 'warn';
+  return 'danger';
+}
 
+function startCountdown(seconds, onExpire) {
+  const num = document.getElementById('timer-num');
   let remaining = seconds;
   num.textContent = remaining;
-  num.className = 'trivia-timer-num';
+  num.className = `trivia-timer-num ${timerColorClass(remaining)}`;
   countdownInterval = setInterval(() => {
     remaining -= 1;
-    num.textContent = Math.max(remaining, 0);
-    if (remaining <= 3) num.classList.add('urgent');
+    const shown = Math.max(remaining, 0);
+    num.textContent = shown;
+    num.className = `trivia-timer-num ${timerColorClass(shown)}`;
     if (remaining <= 0) { clearInterval(countdownInterval); countdownInterval = null; }
   }, 1000);
   timeoutTimer = setTimeout(onExpire, seconds * 1000 + 80); // small buffer past the server's own clock
