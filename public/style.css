@@ -545,23 +545,23 @@ ul.clean li:last-child { border-bottom: none; }
   position: absolute;
   left: 50%;
   top: 3%;
-  width: 13%;
+  width: 16%;
   transform: translateX(-50%);
 }
 .fg-goalpost svg { width: 100%; height: auto; display: block; }
 
 .fg-tee {
   position: absolute;
-  left: 47%;
-  top: 62%;
+  left: 58%;
+  top: 80%;
   width: 4.5%;
   transform: translate(-50%, -50%);
 }
 .fg-tee svg { width: 100%; height: auto; display: block; }
 .fg-kicker {
   position: absolute;
-  left: 58%;
-  top: 58%;
+  left: 43%;
+  top: 76%;
   width: 15%;
   transform: translate(-50%, -50%);
 }
