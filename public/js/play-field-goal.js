@@ -3,8 +3,8 @@ const leagueId = qs('league');
 const memberId = qs('member');
 document.getElementById('back-link').href = leagueId ? `/member-home.html?league=${leagueId}` : '/';
 
-let powerPeriodMs = 1150;
-let directionPeriodMs = 1150;
+let powerPeriodMs = 1000;
+let directionPeriodMs = 1000;
 let powerSweetHalf = 0.09;
 let zonesPainted = false;
 
