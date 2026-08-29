@@ -1,15 +1,18 @@
-const ICONS = { trivia: '🧠', kicking: '🥅' };
+const ICONS = { trivia: '🧠' };
 
 function modePill(mode) {
   const label = mode === 'live' ? 'Live' : 'Async';
   return `<span class="pill ${mode === 'live' ? 'active' : ''}">${label}</span>`;
 }
 
-// The 40 Yard Dash gets an actual runner from the race (in blue) as its
-// icon instead of an emoji; the other games keep a plain emoji.
+// The 40 Yard Dash and Field Goal Kick get an actual runner/goalpost as
+// their icon instead of an emoji; the other games keep a plain emoji.
 function iconFor(category) {
   if (category === 'lottery') {
     return `<div style="color:#3a86ff; width:28px; height:36px; display:inline-block">${runnerFigureSvg()}</div>`;
+  }
+  if (category === 'kicking') {
+    return `<div style="width:28px; height:36px; display:inline-block">${goalpostSvg()}</div>`;
   }
   return `<div style="font-size:1.8rem">${ICONS[category] || '🎮'}</div>`;
 }
