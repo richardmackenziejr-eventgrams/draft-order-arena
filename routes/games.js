@@ -109,7 +109,7 @@ module.exports = function gamesRouter(io) {
   // and, after direction, gate advancing behind a "Next Kick" button —
   // same pattern as trivia's answer/next split.
   router.post('/game-instances/:id/field-goal/power-stop', async (req, res) => {
-    const { memberId } = req.body || {};
+    const { memberId, elapsedMs } = req.body || {};
     if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
 
     const db = await store.load();
@@ -119,18 +119,21 @@ module.exports = function gamesRouter(io) {
     const membership = checkMembership(db, gi, memberId);
     if (!membership.ok) return res.status(403).json({ error: membership.error });
 
-    const result = fieldGoal.stopPower(gi.state, memberId);
+    // Trust the client's own elapsed-time reading (it renders the meter off
+    // the same server-provided start time, so it's a faithful record of
+    // what was actually clicked) — see resolveElapsed()'s comment for why.
+    const result = fieldGoal.stopPower(gi.state, memberId, elapsedMs);
     if (result && result.error) return res.status(400).json({ error: result.error });
 
     await store.save(db);
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
-  // Scores the current kick from the server's own elapsed-time timing
-  // (idempotent — a retried request won't re-score it) but does NOT advance;
-  // /field-goal/next does that, once the result has been shown.
+  // Scores the current kick (idempotent — a retried request won't re-score
+  // it) but does NOT advance; /field-goal/next does that, once the result
+  // has been shown.
   router.post('/game-instances/:id/field-goal/direction-stop', async (req, res) => {
-    const { memberId } = req.body || {};
+    const { memberId, elapsedMs } = req.body || {};
     if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
 
     const db = await store.load();
@@ -140,7 +143,7 @@ module.exports = function gamesRouter(io) {
     const membership = checkMembership(db, gi, memberId);
     if (!membership.ok) return res.status(403).json({ error: membership.error });
 
-    const outcome = fieldGoal.stopDirection(gi.state, memberId);
+    const outcome = fieldGoal.stopDirection(gi.state, memberId, elapsedMs);
     if (outcome && outcome.error) return res.status(400).json({ error: outcome.error });
 
     await store.save(db);

@@ -11,9 +11,19 @@ let zonesPainted = false;
 let powerAnimId = null;
 let directionAnimId = null;
 
+// The exact server-provided start times the meters currently on screen are
+// animating from — kept around so a click handler can measure "how long
+// was I actually looking at this before I clicked" itself, in the same
+// Date.now()-startedAt terms the animation is drawn in, and send THAT to
+// the server rather than let the server's own (network-latency-delayed)
+// receipt time silently score a different moment than what was on screen.
+let currentPowerStartedAt = null;
+let currentDirectionStartedAt = null;
+
 // Same deterministic triangle wave the server scores with (0 -> 1 -> 0 over
-// one period) — used here purely to draw the marker; the server always
-// recomputes this itself from its own elapsed time when a click lands.
+// one period) — used here purely to draw the marker; the server trusts the
+// client's own elapsed-time reading at click time (see resolveElapsed() in
+// lib/gameEngine/fieldGoal.js for why), not its own receipt time.
 function trianglePosition(elapsedMs, periodMs) {
   const cycle = ((elapsedMs % periodMs) + periodMs) % periodMs;
   const t = cycle / periodMs;
@@ -28,6 +38,7 @@ function stopAnimations() {
 }
 
 function animatePower(startedAt) {
+  currentPowerStartedAt = startedAt;
   const marker = document.getElementById('power-marker');
   function frame() {
     const pos = trianglePosition(Date.now() - startedAt, powerPeriodMs);
@@ -38,6 +49,7 @@ function animatePower(startedAt) {
 }
 
 function animateDirection(startedAt) {
+  currentDirectionStartedAt = startedAt;
   const marker = document.getElementById('direction-marker');
   function frame() {
     const pos = trianglePosition(Date.now() - startedAt, directionPeriodMs);
@@ -146,10 +158,13 @@ function renderKick(gi) {
 document.getElementById('power-stop-btn').addEventListener('click', async () => {
   const btn = document.getElementById('power-stop-btn');
   if (btn.disabled) return;
+  // Measured first, before anything else runs — this is what the player
+  // actually saw the instant they clicked.
+  const elapsedMs = currentPowerStartedAt != null ? Date.now() - currentPowerStartedAt : null;
   btn.disabled = true;
   stopAnimations();
   try {
-    const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/power-stop`, { memberId });
+    const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/power-stop`, { memberId, elapsedMs });
     renderKick(gi); // sets the right disabled state for both buttons based on the new phase
   } catch (err) {
     alert(err.message);
@@ -160,10 +175,11 @@ document.getElementById('power-stop-btn').addEventListener('click', async () => 
 document.getElementById('direction-stop-btn').addEventListener('click', async () => {
   const btn = document.getElementById('direction-stop-btn');
   if (btn.disabled) return;
+  const elapsedMs = currentDirectionStartedAt != null ? Date.now() - currentDirectionStartedAt : null;
   btn.disabled = true;
   stopAnimations();
   try {
-    const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/direction-stop`, { memberId });
+    const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/direction-stop`, { memberId, elapsedMs });
     freezeAndShowResult(gi.currentKick); // disables both buttons — the kick's resolved
   } catch (err) {
     alert(err.message);
