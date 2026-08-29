@@ -544,52 +544,25 @@ ul.clean li:last-child { border-bottom: none; }
 .fg-goalpost {
   position: absolute;
   left: 50%;
-  top: 4%;
-  width: 9%;
+  top: 3%;
+  width: 13%;
   transform: translateX(-50%);
 }
 .fg-goalpost svg { width: 100%; height: auto; display: block; }
 
-.fg-dline-helmet {
+.fg-tee {
   position: absolute;
-  top: 40%;
-  width: 5%;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  opacity: 0.9;
-}
-.fg-oline-player {
-  position: absolute;
-  top: 44%;
-  width: 11%;
-  height: 16%;
-  border-radius: 45% 45% 30% 30%;
-  transform: translate(-50%, -20%);
-}
-.fg-oline-helmet {
-  position: absolute;
-  left: 50%;
-  top: -22%;
-  width: 55%;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  transform: translateX(-50%);
-  filter: brightness(1.15);
-}
-.fg-holder {
-  position: absolute;
-  left: 38%;
-  top: 60%;
-  width: 11%;
+  left: 47%;
+  top: 62%;
+  width: 4.5%;
   transform: translate(-50%, -50%);
 }
-.fg-holder svg { width: 100%; height: auto; display: block; }
+.fg-tee svg { width: 100%; height: auto; display: block; }
 .fg-kicker {
   position: absolute;
   left: 58%;
   top: 58%;
-  width: 12%;
+  width: 15%;
   transform: translate(-50%, -50%);
 }
 .fg-kicker svg { width: 100%; height: auto; display: block; }

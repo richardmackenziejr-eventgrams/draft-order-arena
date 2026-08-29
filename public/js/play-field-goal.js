@@ -3,9 +3,9 @@ const leagueId = qs('league');
 const memberId = qs('member');
 document.getElementById('back-link').href = leagueId ? `/member-home.html?league=${leagueId}` : '/';
 
-let powerPeriodMs = 1300;
-let directionPeriodMs = 1000;
-let powerSweetHalf = 0.12;
+let powerPeriodMs = 1150;
+let directionPeriodMs = 1150;
+let powerSweetHalf = 0.09;
 let zonesPainted = false;
 
 let powerAnimId = null;
@@ -222,16 +222,15 @@ function showDone(message) {
   document.getElementById('done-message').textContent = message;
 }
 
-// --- Pre-snap scene: a static illustration of the play about to happen ---
-// (kicker/holder up front, the offensive line crouched with their backs to
-// us, the defensive line barely visible peeking over them, goalposts off in
-// the distance). Built once — it doesn't change between kicks.
-function kneelingHolderSvg() {
+// --- Pre-snap scene: a static illustration of the kick about to happen ---
+// (just the kicker and the ball on a tee, distant goalposts behind). Built
+// once — it doesn't change between kicks.
+function ballOnTeeSvg() {
   return `
-    <svg viewBox="0 0 24 32" width="20" height="27" xmlns="http://www.w3.org/2000/svg">
-      <ellipse cx="12" cy="29.5" rx="7.5" ry="2.4" fill="rgba(0,0,0,0.3)" />
-      <rect x="5.5" y="15" width="13" height="14" rx="5.5" fill="currentColor" />
-      <circle cx="12" cy="9.5" r="5.2" fill="currentColor" stroke="rgba(0,0,0,0.35)" stroke-width="0.5" />
+    <svg viewBox="0 0 16 22" width="16" height="22" xmlns="http://www.w3.org/2000/svg">
+      <rect x="6.7" y="13" width="2.6" height="9" rx="1.2" fill="#d9d9dc" />
+      <ellipse cx="8" cy="10.5" rx="6.2" ry="3.8" fill="#8a4b26" transform="rotate(-14 8 10.5)" />
+      <path d="M3.3 9.6 L12.7 11.4" stroke="#f2e6d6" stroke-width="0.8" transform="rotate(-14 8 10.5)" />
     </svg>
   `;
 }
@@ -239,27 +238,12 @@ function kneelingHolderSvg() {
 function buildScene() {
   const el = document.getElementById('fg-scene-bg');
   const offense = '#2a4a78';
-  const defense = '#6e2733';
-
-  const oLineXs = [12, 30, 50, 70, 88];
-  const oLineHtml = oLineXs.map((x) => `
-    <div class="fg-oline-player" style="left:${x}%; background:${offense}">
-      <div class="fg-oline-helmet" style="background:${offense}"></div>
-    </div>
-  `).join('');
-
-  const dLineXs = [28, 39, 50, 61, 72];
-  const dLineHtml = dLineXs.map((x) => `
-    <div class="fg-dline-helmet" style="left:${x}%; background:${defense}"></div>
-  `).join('');
 
   el.innerHTML = `
     <div class="fg-yardline" style="top:38%"></div>
     <div class="fg-yardline" style="top:58%"></div>
     <div class="fg-goalpost" style="color:#f4c542">${goalpostSvg()}</div>
-    ${dLineHtml}
-    ${oLineHtml}
-    <div class="fg-holder" style="color:${offense}">${kneelingHolderSvg()}</div>
+    <div class="fg-tee">${ballOnTeeSvg()}</div>
     <div class="fg-kicker" style="color:${offense}">${runnerFigureSvg()}</div>
   `;
 }
