@@ -5,8 +5,6 @@ document.getElementById('back-link').href = leagueId ? `/member-home.html?league
 
 let powerPeriodMs = 1000;
 let directionPeriodMs = 1000;
-let powerSweetHalf = 0.09;
-let zonesPainted = false;
 
 let powerAnimId = null;
 let directionAnimId = null;
@@ -59,12 +57,13 @@ function animateDirection(startedAt) {
   frame();
 }
 
-function paintPowerZone() {
-  if (zonesPainted) return;
-  zonesPainted = true;
+// The green band's width isn't fixed anymore — it's sized per-kick to that
+// kick's distance (narrower for longer kicks), so this repaints every kick
+// rather than once.
+function paintPowerZone(sweetHalf) {
   const sweet = document.getElementById('power-sweet');
-  sweet.style.bottom = `${(0.5 - powerSweetHalf) * 100}%`;
-  sweet.style.height = `${powerSweetHalf * 2 * 100}%`;
+  sweet.style.bottom = `${(0.5 - sweetHalf) * 100}%`;
+  sweet.style.height = `${sweetHalf * 2 * 100}%`;
 }
 
 // The direction meter sits idle (dimmed, disabled, marker parked dead
@@ -139,7 +138,6 @@ function renderKick(gi) {
   const k = gi.currentKick;
   powerPeriodMs = gi.powerPeriodMs || powerPeriodMs;
   directionPeriodMs = gi.directionPeriodMs || directionPeriodMs;
-  powerSweetHalf = gi.powerSweetHalf != null ? gi.powerSweetHalf : powerSweetHalf;
 
   document.getElementById('kick-panel').style.display = 'block';
   document.getElementById('done-panel').style.display = 'none';
@@ -152,7 +150,7 @@ function renderKick(gi) {
   resetReferees();
   resetKicker();
   showTeeBall();
-  paintPowerZone();
+  paintPowerZone(k.powerSweetHalf);
 
   if (k.phase === 'result') {
     freezeAndShowResult(k, false); // already resolved — restore instantly, don't replay
@@ -479,7 +477,6 @@ async function init() {
   const { gameInstance: gi } = await api('GET', `/api/game-instances/${instanceId}?memberId=${memberId}`);
   powerPeriodMs = gi.powerPeriodMs || powerPeriodMs;
   directionPeriodMs = gi.directionPeriodMs || directionPeriodMs;
-  powerSweetHalf = gi.powerSweetHalf != null ? gi.powerSweetHalf : powerSweetHalf;
 
   if (gi.status === 'completed') {
     showDone(gi.yourScore != null ? `Contest finished. You went ${gi.yourMakes}/${gi.kicksPerPlayer} for ${gi.yourScore} point${gi.yourScore === 1 ? '' : 's'}.` : 'Contest finished.');

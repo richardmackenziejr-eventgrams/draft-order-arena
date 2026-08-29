@@ -316,7 +316,8 @@ function viewForMember(gi, memberId) {
       kicksPerPlayer: mod.KICKS_PER_PLAYER,
       powerPeriodMs: mod.POWER_PERIOD_MS,
       directionPeriodMs: mod.DIRECTION_PERIOD_MS,
-      powerSweetHalf: mod.POWER_SWEET_HALF,
+      // powerSweetHalf isn't a fixed constant anymore — it's on currentKick
+      // below, sized per-kick to that kick's distance.
       hasCompleted: player ? player.completed : false,
       yourScore: player ? player.totalPoints : null,
       yourMakes: player ? player.totalMakes : null,
