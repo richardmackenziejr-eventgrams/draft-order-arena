@@ -160,9 +160,14 @@ document.getElementById('power-stop-btn').addEventListener('click', async () => 
   if (btn.disabled) return;
   // Measured first, before anything else runs — this is what the player
   // actually saw the instant they clicked.
-  const elapsedMs = currentPowerStartedAt != null ? Date.now() - currentPowerStartedAt : null;
+  const elapsedMs = currentPowerStartedAt != null ? Date.now() - currentPowerStartedAt : 0;
   btn.disabled = true;
   stopAnimations();
+  // Snap the marker to the exact position this elapsedMs maps to right now,
+  // instead of leaving it wherever the last animation frame (up to ~16ms
+  // stale) happened to land — the server will confirm this same spot once
+  // it responds, so there's nothing left to visibly "jump" to afterward.
+  document.getElementById('power-marker').style.bottom = `${trianglePosition(elapsedMs, powerPeriodMs) * 100}%`;
   try {
     const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/power-stop`, { memberId, elapsedMs });
     renderKick(gi); // sets the right disabled state for both buttons based on the new phase
@@ -175,9 +180,10 @@ document.getElementById('power-stop-btn').addEventListener('click', async () => 
 document.getElementById('direction-stop-btn').addEventListener('click', async () => {
   const btn = document.getElementById('direction-stop-btn');
   if (btn.disabled) return;
-  const elapsedMs = currentDirectionStartedAt != null ? Date.now() - currentDirectionStartedAt : null;
+  const elapsedMs = currentDirectionStartedAt != null ? Date.now() - currentDirectionStartedAt : 0;
   btn.disabled = true;
   stopAnimations();
+  document.getElementById('direction-marker').style.left = `${trianglePosition(elapsedMs, directionPeriodMs) * 100}%`;
   try {
     const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/direction-stop`, { memberId, elapsedMs });
     freezeAndShowResult(gi.currentKick); // disables both buttons — the kick's resolved
