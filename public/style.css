@@ -371,7 +371,21 @@ ul.clean li:last-child { border-bottom: none; }
 .speech-bubble.go-word { background: var(--gold); }
 .speech-bubble.go-word::after { border-color: var(--gold) transparent transparent transparent; }
 .speech-bubble.go-word #ready-text { color: #2a1c02; font-size: 1.25rem; }
-.referee-figure { filter: drop-shadow(0 3px 4px rgba(0,0,0,0.6)); }
+.speech-bubble { transition: opacity 0.2s ease; }
+.speech-bubble.fade-out { opacity: 0; }
+
+.referee-figure {
+  filter: drop-shadow(0 3px 4px rgba(0,0,0,0.6));
+  transition: transform 0.5s cubic-bezier(0.3, 0, 0.7, 1), opacity 0.5s ease-in 0.1s;
+}
+/* Once GO! clears, the ref sprints straight up off the top of the field
+   rather than just vanishing — legs pump (reusing the runners' swing
+   keyframes) while the whole figure translates up and fades. */
+.referee-figure.running-off { transform: translateY(-210px); opacity: 0; }
+.referee-figure .ref-leg-l { transform-origin: 10px 23px; }
+.referee-figure .ref-leg-r { transform-origin: 14px 23px; }
+.referee-figure.running-off .ref-leg-l { animation: swing-leg-l 0.2s infinite; }
+.referee-figure.running-off .ref-leg-r { animation: swing-leg-r 0.2s infinite; }
 
 .results-overlay {
   position: absolute;

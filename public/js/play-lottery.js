@@ -74,10 +74,14 @@ const JERSEY_COLORS = ['#e63946', '#2a9d8f', '#3a86ff', '#f4a261', '#8338ec', '#
 function refereeFigureSvg() {
   return `
     <svg viewBox="0 0 24 34" width="34" height="48" xmlns="http://www.w3.org/2000/svg">
-      <rect x="8" y="23" width="4" height="9" rx="1.6" fill="#1c1c1c" />
-      <rect x="12" y="23" width="4" height="9" rx="1.6" fill="#1c1c1c" />
-      <ellipse cx="10" cy="32.3" rx="2.6" ry="1.4" fill="#050505" />
-      <ellipse cx="14" cy="32.3" rx="2.6" ry="1.4" fill="#050505" />
+      <g class="ref-leg-l">
+        <rect x="8" y="23" width="4" height="9" rx="1.6" fill="#1c1c1c" />
+        <ellipse cx="10" cy="32.3" rx="2.6" ry="1.4" fill="#050505" />
+      </g>
+      <g class="ref-leg-r">
+        <rect x="12" y="23" width="4" height="9" rx="1.6" fill="#1c1c1c" />
+        <ellipse cx="14" cy="32.3" rx="2.6" ry="1.4" fill="#050505" />
+      </g>
       <clipPath id="refStripes">
         <path d="M6.5 9 Q6.5 7.2 8.3 7.2 L15.7 7.2 Q17.5 7.2 17.5 9 L16.9 23 Q12 24.4 7.1 23 Z" />
       </clipPath>
@@ -107,6 +111,7 @@ function playReadySetGo(onDone) {
   const overlay = document.getElementById('ready-overlay');
   const bubble = document.getElementById('ready-bubble');
   const text = document.getElementById('ready-text');
+  const referee = document.getElementById('referee-figure');
   overlay.style.display = 'flex';
 
   const steps = [
@@ -117,9 +122,17 @@ function playReadySetGo(onDone) {
   let i = 0;
   const showNext = () => {
     if (i >= steps.length) {
-      overlay.style.display = 'none';
-      bubble.classList.remove('go-word');
-      onDone();
+      // GO! has had its moment — rather than just vanish, the ref sprints
+      // straight up off the top of the field. The actual race doesn't start
+      // until *that* finishes, not when it merely begins.
+      bubble.classList.add('fade-out');
+      referee.classList.add('running-off');
+      setTimeout(() => {
+        overlay.style.display = 'none';
+        bubble.classList.remove('go-word', 'fade-out');
+        referee.classList.remove('running-off');
+        onDone();
+      }, 600); // matches the .referee-figure.running-off transition (500ms transform + 100ms opacity delay)
       return;
     }
     const { word, ms } = steps[i];
