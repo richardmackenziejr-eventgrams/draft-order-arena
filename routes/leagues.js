@@ -141,40 +141,6 @@ router.post('/leagues/:id/test-trivia', async (req, res) => {
   res.status(201).json({ instanceId: giId });
 });
 
-// Lets the commissioner try the Reaction Duel Bracket solo — a single-match
-// bracket against a simulated "Test CPU" opponent whose reaction time is
-// generated immediately, so the only thing left to do is take your own turn.
-// No competition/league attached, so it's invisible to "Competitions" and
-// never affects a real draft order. Temporary/testing use only.
-router.post('/leagues/:id/test-reaction', async (req, res) => {
-  const db = await store.load();
-  const league = db.leagues[req.params.id];
-  if (!league) return res.status(404).json({ error: 'League not found.' });
-
-  const mod = getModule('reactionBracket');
-  const init = mod.initInstance({}, [{ id: 'solo-test' }, { id: 'reaction-test-cpu' }]);
-  // A plausible human reaction time, filled in right away — the moment the
-  // commissioner submits their own attempt, the match (and the whole
-  // one-match bracket) resolves immediately.
-  const cpuTimeMs = 220 + Math.floor(Math.random() * 160);
-  mod.recordAsyncAttempt(init.state.bracket, 'reaction-test-cpu', cpuTimeMs);
-
-  const giId = store.makeId('gi');
-  db.gameInstances[giId] = {
-    id: giId,
-    competitionId: null,
-    gameType: 'reactionBracket',
-    mode: 'async',
-    config: init.config,
-    status: init.status,
-    state: init.state,
-    results: [],
-    isTest: true,
-  };
-  await store.save(db);
-  res.status(201).json({ instanceId: giId });
-});
-
 router.post('/competitions/:id/start', async (req, res) => {
   const db = await store.load();
   const competition = db.competitions[req.params.id];
@@ -197,12 +163,6 @@ router.post('/competitions/:id/start', async (req, res) => {
       const order = mod.runDraw(members, gi.config.odds);
       gi.state.order = order;
       gi.results = mod.toResults(order);
-      gi.status = 'completed';
-    }
-
-    // Tiny leagues can resolve a bracket entirely via byes right at init.
-    if (gi.gameType === 'reactionBracket' && mod.isComplete(gi.state.bracket)) {
-      gi.results = mod.computeResults(gi.state.bracket);
       gi.status = 'completed';
     }
   });
@@ -238,9 +198,6 @@ function publicGameInstance(gi) {
       totalPicks: (gi.state.order || []).length,
       results: gi.status === 'completed' ? gi.results : [],
     };
-  }
-  if (gi.gameType === 'reactionBracket') {
-    return { ...base, bracket: gi.state.bracket, results: gi.status === 'completed' ? gi.results : [] };
   }
   if (gi.gameType === 'trivia') {
     const submittedBy = Object.keys((gi.state && gi.state.submissions) || {});

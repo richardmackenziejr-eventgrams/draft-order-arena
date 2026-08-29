@@ -9,14 +9,13 @@ if (!leagueId || !member) {
 document.getElementById('greeting').textContent = `Hi, ${member.name}!`;
 
 function gameLink(gi) {
-  const pageByType = { lottery: 'play-lottery.html', reactionBracket: 'play-reaction-bracket.html', trivia: 'play-trivia.html' };
+  const pageByType = { lottery: 'play-lottery.html', trivia: 'play-trivia.html' };
   return `/${pageByType[gi.gameType]}?instance=${gi.id}&league=${leagueId}&member=${member.id}`;
 }
 
 function actionLabel(gi) {
   if (gi.status === 'completed') return 'View result';
   if (gi.gameType === 'lottery') return 'Watch the draw';
-  if (gi.gameType === 'reactionBracket') return 'Play my match';
   if (gi.gameType === 'trivia') return gi.hasCompleted ? 'View / waiting' : 'Take the quiz';
   return 'Open';
 }

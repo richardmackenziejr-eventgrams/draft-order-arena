@@ -1,4 +1,4 @@
-const ICONS = { bracket: '⚡', trivia: '🧠' };
+const ICONS = { trivia: '🧠' };
 
 function modePill(mode) {
   const label = mode === 'live' ? 'Live' : 'Async';

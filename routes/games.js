@@ -3,7 +3,6 @@ const store = require('../lib/store');
 const { getModule } = require('../lib/gameEngine');
 const { checkAndFinalizeCompetition } = require('../lib/competition');
 const trivia = require('../lib/gameEngine/trivia');
-const reactionBracket = require('../lib/gameEngine/reactionBracket');
 
 // Routes need `io` to broadcast the live lottery reveal, so this module is a
 // factory: server.js calls games(io) to get the mounted router.
@@ -94,30 +93,6 @@ module.exports = function gamesRouter(io) {
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
-  router.post('/game-instances/:id/reaction/attempt', async (req, res) => {
-    const { memberId, reactionTimeMs } = req.body || {};
-    if (!memberId || typeof reactionTimeMs !== 'number') {
-      return res.status(400).json({ error: 'memberId and reactionTimeMs are required.' });
-    }
-
-    const db = await store.load();
-    const gi = db.gameInstances[req.params.id];
-    if (!gi || gi.gameType !== 'reactionBracket') return res.status(404).json({ error: 'Bracket game not found.' });
-    if (gi.mode !== 'async') return res.status(400).json({ error: 'This bracket is live-mode — play it in the live room instead.' });
-    if (gi.status === 'completed') return res.status(400).json({ error: 'This bracket is already finished.' });
-
-    const outcome = reactionBracket.recordAsyncAttempt(gi.state.bracket, memberId, reactionTimeMs);
-    if (reactionBracket.isComplete(gi.state.bracket)) {
-      gi.results = reactionBracket.computeResults(gi.state.bracket);
-      gi.status = 'completed';
-      // Solo test instances (see /leagues/:id/test-reaction) have no real
-      // competition attached — nothing to finalize.
-      if (!gi.isTest) checkAndFinalizeCompetition(db, gi.competitionId);
-    }
-    await store.save(db);
-    res.json({ outcome, gameInstance: viewForMember(gi, memberId) });
-  });
-
   // Commissioner triggers the live, animated lottery reveal — picks are announced
   // one at a time (last pick to first) with a short delay between each, broadcast
   // over the game's Socket.IO room so every spectator sees the same sequence.
@@ -196,11 +171,6 @@ function viewForMember(gi, memberId) {
       totalPicks: (gi.state.order || []).length,
       results: gi.status === 'completed' ? gi.results : [],
     };
-  }
-
-  if (gi.gameType === 'reactionBracket') {
-    const yourMatch = memberId ? reactionBracket.getMatchForMember(gi.state.bracket, memberId) : null;
-    return { ...base, bracket: gi.state.bracket, yourMatch: yourMatch ? yourMatch.match : null, results: gi.status === 'completed' ? gi.results : [] };
   }
 
   if (gi.gameType === 'trivia') {
