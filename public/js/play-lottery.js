@@ -30,25 +30,52 @@ function nameFor(memberId) {
   return m ? m.name : memberId;
 }
 
-// A little pixel runner made of separately-animatable blocks (see .runner
-// .part rules in style.css) rather than a single circle — team identity
-// comes from the lane label above, not from anything printed on the figure.
-const RUNNER_FIGURE_HTML = `
-  <div class="part head"></div>
-  <div class="part torso"></div>
-  <div class="part arm-l"></div>
-  <div class="part arm-r"></div>
-  <div class="part leg-l"></div>
-  <div class="part leg-r"></div>
-`;
+// A small SVG football player — helmet, jersey with a trim stripe, padded
+// arms/legs, cleats — built from a handful of shapes rather than a photo or
+// 3D model (this is a self-contained static site, no asset pipeline for
+// that), but with the same "little animated character" spirit. The jersey
+// and helmet use currentColor so a team's assigned color (and the winner's
+// gold override) both come from the outer .runner element's CSS `color`,
+// same mechanism as before — only the pants/cleats/facemask are fixed
+// colors so they don't flip gold too.
+function runnerFigureSvg() {
+  return `
+    <svg viewBox="0 0 24 32" width="23" height="30" xmlns="http://www.w3.org/2000/svg">
+      <g class="leg leg-l">
+        <rect x="8" y="19" width="4" height="9" rx="2" fill="#e9e9ec" />
+        <ellipse cx="10" cy="28.4" rx="3" ry="1.7" fill="#232323" />
+      </g>
+      <g class="leg leg-r">
+        <rect x="12" y="19" width="4" height="9" rx="2" fill="#e9e9ec" />
+        <ellipse cx="14" cy="28.4" rx="3" ry="1.7" fill="#232323" />
+      </g>
+      <path class="torso" d="M6 8 Q6 6.5 8 6.5 L16 6.5 Q18 6.5 18 8 L17.3 19 Q12 20.6 6.7 19 Z" fill="currentColor" />
+      <rect x="6.2" y="9.6" width="11.6" height="2" fill="rgba(255,255,255,0.32)" />
+      <g class="arm arm-l">
+        <rect x="2.2" y="8.5" width="4.4" height="9.5" rx="2.2" fill="currentColor" />
+      </g>
+      <g class="arm arm-r">
+        <rect x="17.4" y="8.5" width="4.4" height="9.5" rx="2.2" fill="currentColor" />
+      </g>
+      <circle class="head" cx="12" cy="5" r="5.4" fill="currentColor" stroke="rgba(0,0,0,0.35)" stroke-width="0.5" />
+      <path d="M12 0.2 L12 5.6" stroke="rgba(255,255,255,0.4)" stroke-width="1.1" />
+      <path class="facemask" d="M7.6 5.6 Q12 8.6 16.4 5.6" fill="none" stroke="#f4f4f4" stroke-width="1.1" stroke-linecap="round" />
+    </svg>
+  `;
+}
+
+// A distinct jersey color per team, assigned by roster position so it stays
+// the same across re-renders/replays — closer to real team colors than
+// everyone racing in one flat color.
+const JERSEY_COLORS = ['#e63946', '#2a9d8f', '#3a86ff', '#f4a261', '#8338ec', '#06d6a0', '#ef476f', '#118ab2', '#ffbe0b', '#c1121f', '#4cc9f0', '#7209b7'];
 
 function renderField() {
   const field = document.getElementById('field');
-  field.innerHTML = members.map((m) => `
+  field.innerHTML = members.map((m, i) => `
     <div class="lane" data-member="${m.id}">
       <span class="lane-name">${escapeHtml(m.name)}</span>
       <div class="lane-track">
-        <div class="runner idle-jitter" id="runner-${m.id}" style="left:${LANE_MARGIN}%">${RUNNER_FIGURE_HTML}</div>
+        <div class="runner idle-jitter" id="runner-${m.id}" style="left:${LANE_MARGIN}%; color:${JERSEY_COLORS[i % JERSEY_COLORS.length]}">${runnerFigureSvg()}</div>
       </div>
     </div>
   `).join('') + '<div class="end-zone">100&nbsp;YD</div>';

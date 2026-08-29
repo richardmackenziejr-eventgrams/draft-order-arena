@@ -233,18 +233,18 @@ ul.clean li:last-child { border-bottom: none; }
    full-lane-width and free of any other inline content is what keeps the
    percentage math aligned with the end zone, which is measured against the
    same field width. */
-.lane-track { position: relative; height: 26px; }
+.lane-track { position: relative; height: 30px; }
 
-/* A little pixel-art runner: blocky rectangles for head/torso/arms/legs,
-   colored as a flat silhouette (no gradients/rounding — that's the "a little
-   pixelated" look), with the limbs as separately animatable pieces so they
-   can swing while the whole figure travels via `left`. */
+/* A small SVG football player — see runnerFigureSvg() in play-lottery.js.
+   The limbs/torso/head are separately animatable <g>/shape elements inside
+   the SVG (positioned via its own viewBox coordinates, not CSS), while the
+   whole figure travels across the field via `left` on this wrapper. */
 .runner {
   position: absolute;
   top: 50%;
-  width: 20px;
-  height: 26px;
-  margin-left: -10px;
+  width: 23px;
+  height: 30px;
+  margin-left: -11.5px;
   color: var(--accent);
   filter: drop-shadow(0 2px 2px rgba(0,0,0,0.55));
   /* Short per-hop transition — the run itself is composed of many small
@@ -254,15 +254,13 @@ ul.clean li:last-child { border-bottom: none; }
   transform: translateY(-50%);
   z-index: 3;
 }
-.runner .part { position: absolute; background: currentColor; }
-.runner .head  { width: 8px; height: 8px; top: 0; left: 6px; }
-.runner .torso { width: 8px; height: 9px; top: 8px; left: 6px; }
-.runner .arm-l, .runner .arm-r { width: 3px; height: 8px; top: 8px; transform-origin: top center; }
-.runner .arm-l { left: 3px; }
-.runner .arm-r { left: 14px; }
-.runner .leg-l, .runner .leg-r { width: 3px; height: 9px; top: 17px; transform-origin: top center; }
-.runner .leg-l { left: 6px; }
-.runner .leg-r { left: 11px; }
+.runner svg { display: block; overflow: visible; }
+.runner .leg-l { transform-origin: 10px 19px; }
+.runner .leg-r { transform-origin: 14px 19px; }
+.runner .arm-l { transform-origin: 4.4px 8.5px; }
+.runner .arm-r { transform-origin: 19.6px 8.5px; }
+.runner .torso { transform-origin: 12px 13px; }
+.runner .head { transform-origin: 12px 5px; }
 
 .runner.idle-jitter { animation: runner-idle 1.3s ease-in-out infinite; }
 @keyframes runner-idle {
@@ -284,8 +282,11 @@ ul.clean li:last-child { border-bottom: none; }
 .runner.running .arm-r { animation: swing-arm-r 0.32s infinite; }
 @keyframes swing-leg-l { 0%, 49.9% { transform: rotate(28deg); } 50%, 100% { transform: rotate(-28deg); } }
 @keyframes swing-leg-r { 0%, 49.9% { transform: rotate(-28deg); } 50%, 100% { transform: rotate(28deg); } }
-@keyframes swing-arm-l { 0%, 49.9% { transform: rotate(-22deg); } 50%, 100% { transform: rotate(22deg); } }
-@keyframes swing-arm-r { 0%, 49.9% { transform: rotate(22deg); } 50%, 100% { transform: rotate(-22deg); } }
+/* Each arm stays entirely on its own side (outward-leaning range only) —
+   letting them swing across center made them visually cross/overlap at the
+   chest, which reads as broken rather than as a natural front-facing pump. */
+@keyframes swing-arm-l { 0%, 49.9% { transform: rotate(-8deg); } 50%, 100% { transform: rotate(-28deg); } }
+@keyframes swing-arm-r { 0%, 49.9% { transform: rotate(28deg); } 50%, 100% { transform: rotate(8deg); } }
 
 /* A backward slip during the cruise — caught mid-stride, down on one knee. */
 .runner.stumble .torso, .runner.stumble .head { transform: translateY(2px) rotate(10deg); }
