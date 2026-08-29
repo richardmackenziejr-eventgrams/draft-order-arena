@@ -84,7 +84,7 @@ module.exports = function gamesRouter(io) {
 
     const room = `game:${gi.id}`;
     io.to(room).emit('lottery:started', { totalPicks: order.length });
-    revealNextPick(gi.id, order, order.length - 1, room);
+    revealNextPick(gi.id, order, 0, room);
 
     res.status(202).json({ status: 'revealing' });
   });
@@ -92,8 +92,10 @@ module.exports = function gamesRouter(io) {
   // Runs outside any request's lifecycle (a chain of setTimeouts), so a transient
   // DB hiccup here is wrapped rather than left to crash the whole process as an
   // uncaught exception — it just stops that one draw's reveal.
+  // Picks are revealed best to worst (pick #1 first) — first to finish the
+  // race wins the top pick, matching how the race actually reads.
   function revealNextPick(giId, order, positionIndex, room) {
-    if (positionIndex < 0) {
+    if (positionIndex >= order.length) {
       finishReveal(giId, order, room).catch((err) => console.error('Lottery reveal finish failed:', err));
       return;
     }
@@ -109,7 +111,7 @@ module.exports = function gamesRouter(io) {
     gi.state.revealedPicks.push({ pick: positionIndex + 1, memberId: order[positionIndex] });
     await store.save(db);
     io.to(room).emit('lottery:reveal', { pick: positionIndex + 1, memberId: order[positionIndex] });
-    revealNextPick(giId, order, positionIndex - 1, room);
+    revealNextPick(giId, order, positionIndex + 1, room);
   }
 
   async function finishReveal(giId, order, room) {

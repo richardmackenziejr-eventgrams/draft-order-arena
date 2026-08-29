@@ -136,7 +136,7 @@ function beginRace(stillRacingIds) {
 // Replays the (already-decided) draw for anyone loading a finished async
 // lottery — same pacing and jitter as a live race, purely for the show of it.
 function replayAsync(results) {
-  const order = results.slice().sort((a, b) => b.rank - a.rank); // worst to first
+  const order = results.slice().sort((a, b) => a.rank - b.rank); // best to worst — pick #1 finishes first
   beginRace(order.map((r) => r.memberId));
   let i = 0;
   const step = () => {
