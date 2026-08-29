@@ -15,7 +15,8 @@ const LANE_MARGIN = 2;
 const JITTER_CEILING = 84;
 const FINISH_PCT = 94;
 
-const racing = new Set(); // memberIds currently in the jitter loop
+const racing = new Set(); // memberIds currently in the stride loop
+const released = new Map(); // memberId -> rank, once their pick is revealed
 
 function nameFor(memberId) {
   const m = members.find((x) => x.id === memberId);
@@ -52,10 +53,18 @@ function showLatest(rank, memberId) {
 }
 
 // Every team runs continuously once the race starts — nobody's runner sits
-// still waiting their turn. Speed varies tick to tick (occasional small
-// backward slips included) so it reads as a real, tense race rather than a
-// steady march, and none of it affects the actual outcome: who wins was
-// already decided server-side, this is purely what it looks like getting there.
+// still waiting their turn. Two phases, both made of visible strides (never
+// one smooth glide):
+//   - cruising: slow, jittery, backward slips included — this is most of the
+//     race, and it's deliberately unhurried.
+//   - kicking: once a pick is revealed, the runner switches to a quicker,
+//     always-forward sprint for the line — like a real racer's finishing
+//     kick, not a teleport. It's still made of the same kind of hops, just
+//     faster ones, and it's what keeps the finish from dragging on: reveals
+//     are only ~1.8s apart, and cruising pace alone could take a cruising
+//     runner *much* longer than that to close an arbitrary remaining gap.
+// None of this affects the actual outcome, which was already decided
+// server-side — it's purely what it looks like getting there.
 function startJitter(memberId) {
   racing.add(memberId);
   const runner = document.getElementById(`runner-${memberId}`);
@@ -66,10 +75,22 @@ function startJitter(memberId) {
   const tick = () => {
     if (!racing.has(memberId)) return; // finished (or race reset) — stop looping
     const pos = parseFloat(runner.style.left) || LANE_MARGIN;
-    const step = -1 + Math.random() * 4.5; // mostly forward, occasionally a small slip back
-    const next = Math.max(LANE_MARGIN, Math.min(JITTER_CEILING, pos + step));
+    const rank = released.get(memberId);
+    const kicking = rank != null;
+    const step = kicking
+      ? 4 + Math.random() * 5 // 4-9%, always forward — the finishing kick
+      : -1 + Math.random() * 4.5; // -1 to 3.5, mostly forward — the cruise
+    const ceiling = kicking ? FINISH_PCT : JITTER_CEILING;
+    const next = Math.max(LANE_MARGIN, Math.min(ceiling, pos + step));
     runner.style.left = `${next}%`;
-    setTimeout(tick, 280 + Math.random() * 220); // 280-500ms between strides
+
+    if (kicking && next >= FINISH_PCT - 0.1) {
+      racing.delete(memberId);
+      runner.classList.remove('running');
+      finishRunner(rank, memberId, runner);
+      return;
+    }
+    setTimeout(tick, kicking ? 150 + Math.random() * 80 : 280 + Math.random() * 220);
   };
   setTimeout(tick, Math.random() * 300); // stagger everyone's first stride so they don't move in lockstep
 }
@@ -89,17 +110,10 @@ function finishRunner(rank, memberId, runner) {
   renderOrderList();
 }
 
-// Pulls a still-racing runner out of the jitter loop and lets them break for
-// the line — a distinct, longer, decisive move rather than another small hop.
+// A pick's been revealed — let that runner's next few strides carry it past
+// JITTER_CEILING and on to FINISH_PCT instead of stopping short.
 function crossFinishLine(rank, memberId) {
-  racing.delete(memberId);
-  const runner = document.getElementById(`runner-${memberId}`);
-  if (!runner) return;
-  runner.classList.remove('running');
-  runner.style.transitionDuration = '0.55s';
-  runner.style.transitionTimingFunction = 'ease-out';
-  runner.style.left = `${FINISH_PCT}%`;
-  setTimeout(() => finishRunner(rank, memberId, runner), 550);
+  released.set(memberId, rank);
 }
 
 // Late joiners catching up on picks that were already revealed before they
