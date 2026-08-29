@@ -17,17 +17,24 @@ const FINISH_PCT = 94;
 
 const racing = new Set(); // memberIds currently in the stride loop
 const released = new Map(); // memberId -> rank, once their pick is revealed
+const stumbleTimers = new Map(); // memberId -> timeout id, for reverting the stumble pose
 
 function nameFor(memberId) {
   const m = members.find((x) => x.id === memberId);
   return m ? m.name : memberId;
 }
 
-function initials(name) {
-  const parts = String(name).trim().split(/\s+/).filter(Boolean);
-  const letters = parts.length >= 2 ? parts[0][0] + parts[1][0] : (name || '?').slice(0, 2);
-  return letters.toUpperCase();
-}
+// A little pixel runner made of separately-animatable blocks (see .runner
+// .part rules in style.css) rather than a single circle — team identity
+// comes from the lane label above, not from anything printed on the figure.
+const RUNNER_FIGURE_HTML = `
+  <div class="part head"></div>
+  <div class="part torso"></div>
+  <div class="part arm-l"></div>
+  <div class="part arm-r"></div>
+  <div class="part leg-l"></div>
+  <div class="part leg-r"></div>
+`;
 
 function renderField() {
   const field = document.getElementById('field');
@@ -35,10 +42,10 @@ function renderField() {
     <div class="lane" data-member="${m.id}">
       <span class="lane-name">${escapeHtml(m.name)}</span>
       <div class="lane-track">
-        <div class="runner idle-jitter" id="runner-${m.id}" style="left:${LANE_MARGIN}%">${escapeHtml(initials(m.name))}</div>
+        <div class="runner idle-jitter" id="runner-${m.id}" style="left:${LANE_MARGIN}%">${RUNNER_FIGURE_HTML}</div>
       </div>
     </div>
-  `).join('') + '<div class="end-zone">PICK&nbsp;#1</div>';
+  `).join('') + '<div class="end-zone">100&nbsp;YD</div>';
 }
 
 function renderOrderList() {
@@ -77,20 +84,36 @@ function startJitter(memberId) {
     const pos = parseFloat(runner.style.left) || LANE_MARGIN;
     const rank = released.get(memberId);
     const kicking = rank != null;
+    // Smaller, more frequent steps than a single big leap — keeps the pace
+    // similar while each individual hop stays modest.
     const step = kicking
-      ? 4 + Math.random() * 5 // 4-9%, always forward — the finishing kick
-      : -1 + Math.random() * 4.5; // -1 to 3.5, mostly forward — the cruise
+      ? 2.5 + Math.random() * 3.5 // 2.5-6%, always forward — the finishing kick
+      : -0.5 + Math.random() * 2.5; // -0.5 to 2, mostly forward — the cruise
     const ceiling = kicking ? FINISH_PCT : JITTER_CEILING;
     const next = Math.max(LANE_MARGIN, Math.min(ceiling, pos + step));
     runner.style.left = `${next}%`;
 
     if (kicking && next >= FINISH_PCT - 0.1) {
       racing.delete(memberId);
-      runner.classList.remove('running');
+      clearTimeout(stumbleTimers.get(memberId));
+      runner.classList.remove('running', 'stumble');
       finishRunner(rank, memberId, runner);
       return;
     }
-    setTimeout(tick, kicking ? 150 + Math.random() * 80 : 280 + Math.random() * 220);
+    // A backward slip mid-cruise — caught off balance, down on one knee for
+    // a beat before getting back up and rejoining the run.
+    if (!kicking && step < 0) {
+      runner.classList.remove('running');
+      runner.classList.add('stumble');
+      clearTimeout(stumbleTimers.get(memberId));
+      stumbleTimers.set(memberId, setTimeout(() => {
+        if (racing.has(memberId)) {
+          runner.classList.remove('stumble');
+          runner.classList.add('running');
+        }
+      }, 260));
+    }
+    setTimeout(tick, kicking ? 130 + Math.random() * 90 : 220 + Math.random() * 180);
   };
   setTimeout(tick, Math.random() * 300); // stagger everyone's first stride so they don't move in lockstep
 }
@@ -122,7 +145,8 @@ function snapToFinish(rank, memberId) {
   const runner = document.getElementById(`runner-${memberId}`);
   if (!runner) return;
   racing.delete(memberId);
-  runner.classList.remove('idle-jitter', 'running');
+  clearTimeout(stumbleTimers.get(memberId));
+  runner.classList.remove('idle-jitter', 'running', 'stumble');
   runner.style.left = `${FINISH_PCT}%`;
   finishRunner(rank, memberId, runner);
 }
