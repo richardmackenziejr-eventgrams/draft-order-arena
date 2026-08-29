@@ -158,7 +158,7 @@ function renderField() {
         <div class="runner idle-jitter" id="runner-${m.id}" style="left:${LANE_MARGIN}%; color:${JERSEY_COLORS[i % JERSEY_COLORS.length]}">${runnerFigureSvg()}</div>
       </div>
     </div>
-  `).join('') + '<div class="end-zone">100&nbsp;YD</div>';
+  `).join('') + '<div class="end-zone">40&nbsp;YD</div>';
 }
 
 // Puts every runner back at the goal line and clears all race state — used
