@@ -590,6 +590,11 @@ ul.clean li:last-child { border-bottom: none; }
   transform: translate(-50%, -50%);
 }
 .fg-kicker svg { width: 100%; height: auto; display: block; }
+/* Same pivot points runnerFigureSvg()'s legs use on the 40 Yard Dash track —
+   defined here too (rather than sharing the .runner class) so the kicker's
+   own position/sizing rules above don't have to fight that class's. */
+.fg-kicker .leg-r { transform-origin: 14px 19px; }
+.fg-kicker .leg-l { transform-origin: 10px 19px; }
 
 .power-track {
   position: relative;

@@ -119,7 +119,10 @@ async function freezeAndShowResult(k, animate) {
   document.getElementById('direction-stop-btn').disabled = true;
 
   if (animate) {
-    await animateBallFlight(k.attempt.outcome);
+    await animateKickerApproach();
+    // The swing is what "hits" the ball, so it starts at the same instant
+    // the ball's flight does — wait for both together.
+    await Promise.all([animateKickerSwing(), animateBallFlight(k.attempt.outcome)]);
     await animateReferees(k.attempt.made);
   } else {
     showBallAtFinalSpot(k.attempt.outcome);
@@ -147,6 +150,8 @@ function renderKick(gi) {
   stopAnimations();
   resetBall();
   resetReferees();
+  resetKicker();
+  showTeeBall();
   paintPowerZone();
 
   if (k.phase === 'result') {
@@ -310,9 +315,9 @@ function buildScene() {
     <div class="fg-goalpost" style="color:#f4c542">${goalpostSvg()}</div>
     <div class="fg-referee fg-referee-left">${signalRefSvg()}</div>
     <div class="fg-referee fg-referee-right">${signalRefSvg()}</div>
-    <div class="fg-tee">${ballOnTeeSvg()}</div>
+    <div class="fg-tee" id="fg-tee">${ballOnTeeSvg()}</div>
     <div class="fg-ball" id="fg-ball" style="display:none">${flyingBallSvg()}</div>
-    <div class="fg-kicker" style="color:${offense}">${runnerFigureSvg()}</div>
+    <div class="fg-kicker" id="fg-kicker" style="color:${offense}">${runnerFigureSvg()}</div>
   `;
 }
 
@@ -343,8 +348,52 @@ function resetReferees() {
   });
 }
 
+function hideTeeBall() {
+  document.getElementById('fg-tee').style.display = 'none';
+}
+function showTeeBall() {
+  document.getElementById('fg-tee').style.display = '';
+}
+
+function resetKicker() {
+  const kicker = document.getElementById('fg-kicker');
+  kicker.getAnimations().forEach((a) => a.cancel());
+  kicker.style.left = '';
+  kicker.style.top = '';
+  const legR = kicker.querySelector('.leg-r');
+  if (legR) {
+    legR.getAnimations().forEach((a) => a.cancel());
+    legR.style.transform = '';
+  }
+}
+
+// The kicker steps up from its resting spot to right behind the ball —
+// resolves once the approach is complete (i.e. right before contact).
+function animateKickerApproach() {
+  const kicker = document.getElementById('fg-kicker');
+  return kicker.animate(
+    [{ left: '38%', top: '76%' }, { left: '45%', top: '78%' }],
+    { duration: 500, easing: 'ease-in', fill: 'forwards' },
+  ).finished;
+}
+
+// The follow-through of the kicking (right) leg swinging forward — this is
+// what "hits" the ball, so it should start at the same moment as the ball's
+// flight animation, not before or after it.
+function animateKickerSwing() {
+  const legR = document.querySelector('#fg-kicker .leg-r');
+  return legR.animate(
+    [{ transform: 'rotate(0deg)' }, { transform: 'rotate(75deg)' }, { transform: 'rotate(30deg)' }],
+    { duration: 350, easing: 'ease-out', fill: 'forwards' },
+  ).finished;
+}
+
 // Kicks off, arcs toward the target, and settles — resolves once it lands.
+// The ball on the tee is a separate element from this one (so it can sit
+// there motionless while idle) — it disappears the instant this one takes
+// over, so there's never a moment with two balls visible at once.
 function animateBallFlight(outcome) {
+  hideTeeBall();
   const ball = document.getElementById('fg-ball');
   ball.style.display = 'block';
   const keyframes = ballPathFor(outcome).map(([left, top, scale]) => ({
@@ -354,6 +403,7 @@ function animateBallFlight(outcome) {
 }
 
 function showBallAtFinalSpot(outcome) {
+  hideTeeBall();
   const ball = document.getElementById('fg-ball');
   const pts = ballPathFor(outcome);
   const [left, top, scale] = pts[pts.length - 1];
