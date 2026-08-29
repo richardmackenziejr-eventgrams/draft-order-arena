@@ -17,6 +17,15 @@
   }
   #fg3d-canvas-wrap canvas { display: block; width: 100%; height: 100%; }
   .fg3d-hint { text-align: center; opacity: 0.7; font-size: 0.9em; margin-top: 8px; }
+  .fg3d-distance-row {
+    max-width: 960px;
+    margin: 16px auto 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .fg3d-distance-row input[type="range"] { flex: 1; }
+  .fg3d-distance-row label { white-space: nowrap; min-width: 9em; }
 </style>
 </head>
 <body>
@@ -29,6 +38,10 @@
   <div class="panel">
     <div id="fg3d-canvas-wrap"></div>
     <p class="fg3d-hint">Drag to orbit &middot; scroll to zoom</p>
+    <div class="fg3d-distance-row">
+      <input type="range" id="fg3d-distance" min="25" max="55" value="40" />
+      <label id="fg3d-distance-label" for="fg3d-distance">40 yd Field Goal</label>
+    </div>
   </div>
   <p><a class="btn secondary" href="/">Back</a></p>
 </main>

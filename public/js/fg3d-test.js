@@ -4,7 +4,9 @@
 // so we can evaluate whether a 3D version of the kicking scene is worth
 // building out for real. Nothing here is wired to game state yet — it's a
 // static scene with a free-look camera (OrbitControls) so it can be judged
-// from any angle.
+// from any angle, plus a distance slider that repositions the kicker/ball
+// (and the camera, which follows like a broadcast "kick cam") to preview how
+// different kick distances would actually look.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -21,10 +23,10 @@ scene.background = new THREE.Color(0x8ec9f0);
 scene.fog = new THREE.Fog(0x8ec9f0, 35, 95);
 
 const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 500);
-camera.position.set(-2, 3.2, 13);
+camera.position.set(-2, 3.2, 13); // placeholder — updateDistance() below sets the real framing
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 2, -30);
+controls.target.set(0, 2, -30); // placeholder, same reason
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.minDistance = 4;
@@ -163,12 +165,15 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a }) {
   return g;
 }
 
-// Kicker: blue jersey, to the left of the ball, facing downfield.
+// Kicker: blue jersey, to the left of the ball, facing downfield. Position
+// is set by updateDistance() below, once the kick-distance control exists.
 const kicker = buildFigure({ jersey: 0x2f5fbf, pants: 0xffffff });
-kicker.position.set(-1.1, 0, 6);
+kicker.position.x = -1.1;
 scene.add(kicker);
 
-// Referees: black/white stripes, positioned just this side of the goalpost.
+// Referees: black/white stripes, positioned just this side of the goalpost
+// (real refs hold the goal line regardless of kick distance, so these don't
+// move with the slider).
 function stripedJerseyMat() {
   const canvas = document.createElement('canvas');
   canvas.width = 32;
@@ -195,11 +200,12 @@ function stripedJerseyMat() {
 });
 
 // ---- Ball on tee -----------------------------------------------------------
+// z is set by updateDistance() below.
 const tee = new THREE.Mesh(
   new THREE.ConeGeometry(0.06, 0.16, 10),
   new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 })
 );
-tee.position.set(0, 0.08, 6);
+tee.position.y = 0.08;
 tee.castShadow = true;
 scene.add(tee);
 
@@ -209,19 +215,152 @@ const ball = new THREE.Mesh(
 );
 ball.scale.set(1, 1, 1.5);
 ball.rotation.x = Math.PI / 2;
-ball.position.set(0, 0.24, 6);
+ball.position.y = 0.24;
 ball.castShadow = true;
 scene.add(ball);
 
-// ---- Simple bleachers for atmosphere ---------------------------------------
-const standMat = new THREE.MeshStandardMaterial({ color: 0x384049, roughness: 0.9 });
+// ---- Stadium: crowd-textured stands + light stanchions ---------------------
+// A stylized, deliberately blurry stadium crowd — a low-res grid of random
+// crowd-colored pixels on a seat-colored background. Left at low resolution
+// and stretched across a big stand face, the texture's own linear filtering
+// blurs it into an impressionistic "distant fans" look rather than
+// individually-readable people (which would be way more detail than this
+// scene needs, and wouldn't hold up this close for real).
+function crowdTexture() {
+  const cols = 48;
+  const rows = 14;
+  const canvas = document.createElement('canvas');
+  canvas.width = cols;
+  canvas.height = rows;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#26313d';
+  ctx.fillRect(0, 0, cols, rows);
+  const colors = ['#e8b98a', '#8a5a3c', '#f4f4f4', '#c0392b', '#2f5fbf', '#f1c40f', '#27ae60', '#7f8c8d', '#ecf0f1', '#9b59b6'];
+  // Leave the bottom couple of rows solid (a concrete wall under the seats)
+  // and only scatter "fans" in the upper rows.
+  for (let y = 0; y < rows - 2; y++) {
+    for (let x = 0; x < cols; x++) {
+      if (Math.random() < 0.88) {
+        ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+const concreteMat = new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.95 });
+
+function crowdMaterial(repeatX, repeatY) {
+  const tex = crowdTexture();
+  tex.repeat.set(repeatX, repeatY);
+  return new THREE.MeshStandardMaterial({ map: tex, roughness: 1 });
+}
+
+// BoxGeometry's face material order is [+x, -x, +y, -y, +z, -z]. Only the
+// face actually pointing back toward the field gets the crowd texture — the
+// rest are plain stadium concrete, since nobody ever sees them.
+function standMaterials(facingIndex, repeatX, repeatY) {
+  const mats = [concreteMat, concreteMat, concreteMat, concreteMat, concreteMat, concreteMat];
+  mats[facingIndex] = crowdMaterial(repeatX, repeatY);
+  return mats;
+}
+
+const STAND_HEIGHT = 8;
+const STAND_DEPTH = NEAR_Z - FAR_Z + 30;
+
 [-1, 1].forEach((side) => {
-  const stand = new THREE.Mesh(new THREE.BoxGeometry(6, 5, NEAR_Z - FAR_Z + 20), standMat);
-  stand.position.set(side * (FIELD_HALF_WIDTH + 6), 2.5, (NEAR_Z + FAR_Z) / 2);
-  stand.castShadow = false;
+  // side === -1 (left stand, negative x) faces the field in the +x
+  // direction, so it needs the +x face (index 0). The right stand faces -x
+  // (index 1).
+  const facingIndex = side === -1 ? 0 : 1;
+  const stand = new THREE.Mesh(
+    new THREE.BoxGeometry(6, STAND_HEIGHT, STAND_DEPTH),
+    standMaterials(facingIndex, 6, 2)
+  );
+  stand.position.set(side * (FIELD_HALF_WIDTH + 6), STAND_HEIGHT / 2, (NEAR_Z + FAR_Z) / 2);
   stand.receiveShadow = true;
   scene.add(stand);
+
+  // Stadium light stanchions at each end of the stand, poking up above the
+  // roofline — mostly a silhouette against the sky, but it sells "stadium"
+  // a lot harder than bare stands do.
+  [-1, 1].forEach((endSide) => {
+    const poleX = side * (FIELD_HALF_WIDTH + 6);
+    const poleZ = (NEAR_Z + FAR_Z) / 2 + endSide * (STAND_DEPTH / 2 - 4);
+
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 14, 8), concreteMat);
+    pole.position.set(poleX, 7, poleZ);
+    scene.add(pole);
+
+    const fixture = new THREE.Mesh(
+      new THREE.BoxGeometry(1.6, 0.8, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0xfff8e0, emissive: 0xfff2c0, emissiveIntensity: 0.6 })
+    );
+    fixture.position.set(poleX, 14, poleZ);
+    scene.add(fixture);
+  });
 });
+
+// A stand behind the goalpost too, so missing a kick doesn't sail off into
+// empty sky — closes out the "bowl" on the one side that was still open.
+const BACK_STAND_Z = FAR_Z - 4;
+const backStand = new THREE.Mesh(
+  new THREE.BoxGeometry(FIELD_HALF_WIDTH * 2 + 12, STAND_HEIGHT + 2, 5),
+  standMaterials(4, 8, 2) // +z face (index 4) is the one facing back toward the field
+);
+backStand.position.set(0, (STAND_HEIGHT + 2) / 2, BACK_STAND_Z);
+backStand.receiveShadow = true;
+scene.add(backStand);
+
+// ---- Kick distance control ---------------------------------------------
+// Stylized, not to real-world scale — a true 55-yard kick would put the
+// kicker so far from the goalpost it'd vanish into the fog. Compressing the
+// range keeps every distance clearly readable while still visibly farther
+// apart from each other.
+const MIN_DISTANCE = 25;
+const MAX_DISTANCE = 55;
+const DEFAULT_DISTANCE = 40;
+const UNITS_PER_YARD = 0.85;
+
+function kickerZFor(distanceYards) {
+  return GOAL_LINE_Z + 2 + distanceYards * UNITS_PER_YARD;
+}
+
+// Moves the kicker/ball back for longer kicks and pulls the camera back
+// along with them (like a broadcast "kick cam" riding behind the kicker),
+// while always framing toward the goalpost — so the goalpost reads as
+// farther away on a long kick instead of just leaving the kicker off-screen.
+function updateDistance(distanceYards) {
+  const z = kickerZFor(distanceYards);
+  kicker.position.z = z;
+  tee.position.z = z;
+  ball.position.z = z;
+  camera.position.set(-2, 3.2, z + 7);
+  controls.target.set(0, 2, GOAL_LINE_Z + 10);
+  controls.update();
+}
+
+const distanceSlider = document.getElementById('fg3d-distance');
+const distanceLabel = document.getElementById('fg3d-distance-label');
+if (distanceSlider) {
+  distanceSlider.min = MIN_DISTANCE;
+  distanceSlider.max = MAX_DISTANCE;
+  distanceSlider.value = DEFAULT_DISTANCE;
+  distanceSlider.addEventListener('input', () => {
+    const d = Number(distanceSlider.value);
+    if (distanceLabel) distanceLabel.textContent = `${d} yd Field Goal`;
+    updateDistance(d);
+  });
+}
+if (distanceLabel) distanceLabel.textContent = `${DEFAULT_DISTANCE} yd Field Goal`;
+updateDistance(DEFAULT_DISTANCE);
 
 // ---- Resize handling --------------------------------------------------------
 function resize() {
