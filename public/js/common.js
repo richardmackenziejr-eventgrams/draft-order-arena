@@ -98,3 +98,37 @@ function goalpostSvg() {
     </svg>
   `;
 }
+
+// A referee — black-and-white striped jersey, black cap, one arm raised —
+// used for the 40 Yard Dash's "Ready, Set, Go!" announcer and reused as the
+// pair of officials standing the goal line on the Field Goal Kick scene.
+function refereeFigureSvg() {
+  return `
+    <svg viewBox="0 0 24 34" width="34" height="48" xmlns="http://www.w3.org/2000/svg">
+      <g class="ref-leg-l">
+        <rect x="8" y="23" width="4" height="9" rx="1.6" fill="#1c1c1c" />
+        <ellipse cx="10" cy="32.3" rx="2.6" ry="1.4" fill="#050505" />
+      </g>
+      <g class="ref-leg-r">
+        <rect x="12" y="23" width="4" height="9" rx="1.6" fill="#1c1c1c" />
+        <ellipse cx="14" cy="32.3" rx="2.6" ry="1.4" fill="#050505" />
+      </g>
+      <clipPath id="refStripes">
+        <path d="M6.5 9 Q6.5 7.2 8.3 7.2 L15.7 7.2 Q17.5 7.2 17.5 9 L16.9 23 Q12 24.4 7.1 23 Z" />
+      </clipPath>
+      <g clip-path="url(#refStripes)">
+        <rect x="6.5" y="7.2" width="2.2" height="17" fill="#f4f4f4" />
+        <rect x="8.7" y="7.2" width="2.2" height="17" fill="#151515" />
+        <rect x="10.9" y="7.2" width="2.2" height="17" fill="#f4f4f4" />
+        <rect x="13.1" y="7.2" width="2.2" height="17" fill="#151515" />
+        <rect x="15.3" y="7.2" width="2.2" height="17" fill="#f4f4f4" />
+        <rect x="17.5" y="7.2" width="2.2" height="17" fill="#151515" />
+      </g>
+      <rect x="2.6" y="9.5" width="4" height="9.5" rx="2" fill="#151515" />
+      <rect x="15.7" y="4.6" width="4" height="9.5" rx="2" fill="#151515" transform="rotate(-34 17.7 9.35)" />
+      <circle cx="18.4" cy="6.1" r="1.15" fill="#e8e8e8" />
+      <circle cx="12" cy="4.8" r="4.8" fill="#e8b98a" />
+      <path d="M7.3 3.1 Q12 -0.8 16.7 3.1 L16.5 4.3 Q12 2.3 7.5 4.3 Z" fill="#151515" />
+    </svg>
+  `;
+}

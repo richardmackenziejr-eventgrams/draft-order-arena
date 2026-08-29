@@ -541,6 +541,7 @@ ul.clean li:last-child { border-bottom: none; }
   height: 1px;
   background: rgba(255, 255, 255, 0.14);
 }
+.fg-goal-line { background: rgba(255, 255, 255, 0.3); }
 .fg-goalpost {
   position: absolute;
   left: 50%;
@@ -550,9 +551,22 @@ ul.clean li:last-child { border-bottom: none; }
 }
 .fg-goalpost svg { width: 100%; height: auto; display: block; }
 
+.fg-referee {
+  position: absolute;
+  top: 33%;
+  width: 7%;
+  transform: translate(-50%, -50%);
+}
+.fg-referee svg { width: 100%; height: auto; display: block; }
+.fg-referee-left { left: 5%; }
+.fg-referee-right { left: 95%; }
+
+/* Ball on the tee lines up with the goalposts' center; the kicker sets up
+   to its left (most kickers are right-footed, approaching to swing through
+   with the right leg). */
 .fg-tee {
   position: absolute;
-  left: 58%;
+  left: 50%;
   top: 80%;
   width: 4.5%;
   transform: translate(-50%, -50%);
@@ -560,7 +574,7 @@ ul.clean li:last-child { border-bottom: none; }
 .fg-tee svg { width: 100%; height: auto; display: block; }
 .fg-kicker {
   position: absolute;
-  left: 43%;
+  left: 38%;
   top: 76%;
   width: 15%;
   transform: translate(-50%, -50%);

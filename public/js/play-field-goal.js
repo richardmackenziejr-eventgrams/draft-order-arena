@@ -240,9 +240,11 @@ function buildScene() {
   const offense = '#2a4a78';
 
   el.innerHTML = `
-    <div class="fg-yardline" style="top:38%"></div>
+    <div class="fg-yardline fg-goal-line" style="top:33%"></div>
     <div class="fg-yardline" style="top:58%"></div>
     <div class="fg-goalpost" style="color:#f4c542">${goalpostSvg()}</div>
+    <div class="fg-referee fg-referee-left">${refereeFigureSvg()}</div>
+    <div class="fg-referee fg-referee-right">${refereeFigureSvg()}</div>
     <div class="fg-tee">${ballOnTeeSvg()}</div>
     <div class="fg-kicker" style="color:${offense}">${runnerFigureSvg()}</div>
   `;
