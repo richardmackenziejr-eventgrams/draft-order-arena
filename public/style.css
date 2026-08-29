@@ -476,11 +476,97 @@ ul.clean li:last-child { border-bottom: none; }
 .fg-kick-info { text-align: center; font-weight: 800; font-size: 1.3rem; margin: 0 0 4px; }
 .fg-wind { text-align: center; color: var(--text-dim); margin: 0 0 12px; }
 
+/* Pre-snap scene: field, distant goalposts, D-line barely visible behind
+   the crouched O-line, holder + kicker set up in front. Pure CSS/SVG,
+   generated once by buildScene() in play-field-goal.js. */
+.fg-scene {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  aspect-ratio: 2.1 / 1;
+  margin: 0 auto 16px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(to bottom, #234f2c 0%, #1b3d22 55%, #142d19 100%);
+  border: 1px solid var(--line);
+}
+.fg-yardline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.14);
+}
+.fg-goalpost {
+  position: absolute;
+  left: 50%;
+  top: 4%;
+  width: 9%;
+  transform: translateX(-50%);
+}
+.fg-goalpost svg { width: 100%; height: auto; display: block; }
+
+.fg-dline-helmet {
+  position: absolute;
+  top: 40%;
+  width: 5%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0.9;
+}
+.fg-oline-player {
+  position: absolute;
+  top: 44%;
+  width: 11%;
+  height: 16%;
+  border-radius: 45% 45% 30% 30%;
+  transform: translate(-50%, -20%);
+}
+.fg-oline-helmet {
+  position: absolute;
+  left: 50%;
+  top: -22%;
+  width: 55%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  filter: brightness(1.15);
+}
+.fg-holder {
+  position: absolute;
+  left: 38%;
+  top: 60%;
+  width: 11%;
+  transform: translate(-50%, -50%);
+}
+.fg-holder svg { width: 100%; height: auto; display: block; }
+.fg-kicker {
+  position: absolute;
+  left: 58%;
+  top: 58%;
+  width: 12%;
+  transform: translate(-50%, -50%);
+}
+.fg-kicker svg { width: 100%; height: auto; display: block; }
+
+/* Power sits bottom-left, direction stays centered — both visible at once,
+   direction dimmed/disabled until power's been locked in. */
+.fg-meters {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  align-items: end;
+  column-gap: 10px;
+  margin-top: 6px;
+}
+.fg-power-block { grid-column: 1; justify-self: start; }
+.fg-direction-block { grid-column: 2; justify-self: center; width: 100%; max-width: 260px; }
+.fg-meter-label { text-align: center; color: var(--text-dim); margin: 0 0 4px; font-size: 0.85rem; }
+
 .power-track {
   position: relative;
-  width: 70px;
-  height: 220px;
-  margin: 16px auto;
+  width: 60px;
+  height: 180px;
   border-radius: 8px;
   border: 2px solid var(--line);
   background: var(--bg-panel-2);
@@ -510,9 +596,9 @@ ul.clean li:last-child { border-bottom: none; }
   border-radius: 7px;
   background: var(--bg-panel-2);
   border: 1px solid var(--line);
-  margin: 16px auto;
-  max-width: 320px;
+  transition: opacity 0.2s ease;
 }
+.direction-track.idle { opacity: 0.4; }
 .direction-center-mark {
   position: absolute;
   left: 50%;
@@ -536,7 +622,8 @@ ul.clean li:last-child { border-bottom: none; }
 .fg-stop-btn {
   display: block;
   margin: 10px auto 0;
-  width: 220px;
+  width: 100%;
+  max-width: 220px;
   user-select: none;
 }
 .fg-result { font-size: 1.25rem; font-weight: 800; text-align: center; margin: 10px 0 18px; }

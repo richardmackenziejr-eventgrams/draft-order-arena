@@ -15,25 +15,29 @@
   <p class="lead" id="status-line">Loading…</p>
 
   <div class="panel" id="kick-panel" style="display:none">
+    <div class="fg-scene" id="fg-scene"></div>
+
     <p class="fg-kick-info" id="kick-info"></p>
     <p class="fg-wind" id="wind-line"></p>
 
-    <div id="power-step">
-      <p class="muted" style="text-align:center">Click when the marker's in the green!</p>
-      <div class="power-track" id="power-track">
-        <div class="power-sweet" id="power-sweet"></div>
-        <div class="power-marker" id="power-marker"></div>
+    <div class="fg-meters" id="fg-meters">
+      <div class="fg-power-block">
+        <p class="fg-meter-label">Power</p>
+        <div class="power-track" id="power-track">
+          <div class="power-sweet" id="power-sweet"></div>
+          <div class="power-marker" id="power-marker"></div>
+        </div>
+        <button id="power-stop-btn" class="fg-stop-btn">Click to lock power!</button>
       </div>
-      <button id="power-stop-btn" class="fg-stop-btn">Click to lock power!</button>
-    </div>
 
-    <div id="direction-step" style="display:none">
-      <p class="muted" style="text-align:center">Now time your direction…</p>
-      <div class="direction-track" id="direction-track">
-        <div class="direction-center-mark"></div>
-        <div class="direction-marker" id="direction-marker"></div>
+      <div class="fg-direction-block" id="direction-block">
+        <p class="fg-meter-label">Direction</p>
+        <div class="direction-track" id="direction-track">
+          <div class="direction-center-mark"></div>
+          <div class="direction-marker" id="direction-marker"></div>
+        </div>
+        <button id="direction-stop-btn" class="fg-stop-btn" disabled>Click to kick!</button>
       </div>
-      <button id="direction-stop-btn" class="fg-stop-btn">Click to kick!</button>
     </div>
 
     <div id="result-step" style="display:none">

@@ -55,16 +55,29 @@ function paintPowerZone() {
   sweet.style.height = `${powerSweetHalf * 2 * 100}%`;
 }
 
+// The direction meter sits idle (dimmed, disabled, marker parked dead
+// center) until power gets locked in — it only "wakes up" then.
+function setDirectionIdle() {
+  document.getElementById('direction-track').classList.add('idle');
+  document.getElementById('direction-stop-btn').disabled = true;
+  document.getElementById('direction-marker').style.left = '50%';
+}
+
+function setDirectionActive(startedAt) {
+  document.getElementById('direction-track').classList.remove('idle');
+  document.getElementById('direction-stop-btn').disabled = false;
+  animateDirection(startedAt);
+}
+
 function windLine(k) {
   if (k.windDir === 'calm') return 'Wind: calm';
   const arrow = k.windDir === 'left' ? '←' : '→';
   return `Wind: ${k.windMph} mph ${arrow}`;
 }
 
-function showPhase(phase) {
-  document.getElementById('power-step').style.display = phase === 'power' ? 'block' : 'none';
-  document.getElementById('direction-step').style.display = phase === 'direction' ? 'block' : 'none';
-  document.getElementById('result-step').style.display = phase === 'result' ? 'block' : 'none';
+function showSection(section) {
+  document.getElementById('fg-meters').style.display = section === 'meters' ? 'grid' : 'none';
+  document.getElementById('result-step').style.display = section === 'result' ? 'block' : 'none';
 }
 
 function renderKick(gi) {
@@ -86,16 +99,20 @@ function renderKick(gi) {
     return;
   }
 
+  showSection('meters');
   paintPowerZone();
 
   if (k.phase === 'direction') {
-    showPhase('direction');
-    animateDirection(k.directionStartedAt);
-    return;
+    // Power's already locked — freeze its marker right where it landed
+    // instead of animating, and hand control over to the direction meter.
+    document.getElementById('power-marker').style.bottom = `${(k.powerPos || 0) * 100}%`;
+    document.getElementById('power-stop-btn').disabled = true;
+    setDirectionActive(k.directionStartedAt);
+  } else {
+    document.getElementById('power-stop-btn').disabled = false;
+    animatePower(k.powerStartedAt);
+    setDirectionIdle();
   }
-
-  showPhase('power');
-  animatePower(k.powerStartedAt);
 }
 
 document.getElementById('power-stop-btn').addEventListener('click', async () => {
@@ -141,7 +158,7 @@ function showResult(outcome, distance) {
   const el = document.getElementById('result-text');
   el.textContent = outcomeText(outcome, distance);
   el.className = `fg-result ${outcome.made ? 'made' : 'missed'}`;
-  showPhase('result');
+  showSection('result');
 }
 
 document.getElementById('next-kick-btn').addEventListener('click', async () => {
@@ -172,7 +189,53 @@ function showDone(message) {
   document.getElementById('done-message').textContent = message;
 }
 
+// --- Pre-snap scene: a static illustration of the play about to happen ---
+// (kicker/holder up front, the offensive line crouched with their backs to
+// us, the defensive line barely visible peeking over them, goalposts off in
+// the distance). Built once — it doesn't change between kicks.
+// Simple squat silhouette (short, wide body + head) reads as "kneeling" at
+// the small scale this actually renders at — fine anatomical detail like a
+// bent knee or reaching arms just turns to mush by then.
+function kneelingHolderSvg() {
+  return `
+    <svg viewBox="0 0 24 32" width="20" height="27" xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="12" cy="29.5" rx="7.5" ry="2.4" fill="rgba(0,0,0,0.3)" />
+      <rect x="5.5" y="15" width="13" height="14" rx="5.5" fill="currentColor" />
+      <circle cx="12" cy="9.5" r="5.2" fill="currentColor" stroke="rgba(0,0,0,0.35)" stroke-width="0.5" />
+    </svg>
+  `;
+}
+
+function buildScene() {
+  const el = document.getElementById('fg-scene');
+  const offense = '#2a4a78';
+  const defense = '#6e2733';
+
+  const oLineXs = [12, 30, 50, 70, 88];
+  const oLineHtml = oLineXs.map((x) => `
+    <div class="fg-oline-player" style="left:${x}%; background:${offense}">
+      <div class="fg-oline-helmet" style="background:${offense}"></div>
+    </div>
+  `).join('');
+
+  const dLineXs = [28, 39, 50, 61, 72];
+  const dLineHtml = dLineXs.map((x) => `
+    <div class="fg-dline-helmet" style="left:${x}%; background:${defense}"></div>
+  `).join('');
+
+  el.innerHTML = `
+    <div class="fg-yardline" style="top:38%"></div>
+    <div class="fg-yardline" style="top:58%"></div>
+    <div class="fg-goalpost" style="color:#f4c542">${goalpostSvg()}</div>
+    ${dLineHtml}
+    ${oLineHtml}
+    <div class="fg-holder" style="color:${offense}">${kneelingHolderSvg()}</div>
+    <div class="fg-kicker" style="color:${offense}">${runnerFigureSvg()}</div>
+  `;
+}
+
 async function init() {
+  buildScene();
   if (!memberId) {
     document.getElementById('status-line').textContent = 'This is a spectator link — field goals are kicked individually by each member.';
     return;
