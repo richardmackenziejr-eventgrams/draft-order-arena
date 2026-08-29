@@ -441,6 +441,35 @@ function setRefereeFinalPose(made) {
   document.querySelectorAll('.fg-ref-arm-r').forEach((el) => { el.style.transform = `rotate(${rightDeg}deg)`; });
 }
 
+// If the tab gets backgrounded while a meter is actively running (switching
+// apps/tabs, a notification, the screen locking), the animation pauses —
+// same as any browser tab — but real elapsed time doesn't. Rather than let
+// a click after coming back silently score off however far the clock
+// drifted while nobody was watching, ask the server for a fresh start on
+// whichever meter was running the moment we're looking again.
+let needsResync = false;
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'hidden') {
+    if (powerAnimId || directionAnimId) needsResync = true;
+    return;
+  }
+  if (!needsResync || !memberId) return;
+  needsResync = false;
+  try {
+    const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/resync`, { memberId });
+    if (gi.status === 'completed') {
+      showDone(gi.yourScore != null ? `Contest finished. You went ${gi.yourMakes}/${gi.kicksPerPlayer} for ${gi.yourScore} point${gi.yourScore === 1 ? '' : 's'}.` : 'Contest finished.');
+    } else if (gi.hasCompleted) {
+      showDone(`You finished ${gi.yourMakes}/${gi.kicksPerPlayer} for ${gi.yourScore} point${gi.yourScore === 1 ? '' : 's'}! Waiting on the rest of the league…`);
+    } else {
+      renderKick(gi);
+    }
+  } catch {
+    // Best-effort — worst case the meter's just slightly stale until the
+    // next click naturally corrects it anyway.
+  }
+});
+
 async function init() {
   buildScene();
   if (!memberId) {

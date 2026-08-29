@@ -129,6 +129,30 @@ module.exports = function gamesRouter(io) {
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
+  // Restarts whichever meter is currently running — the client calls this
+  // when it notices its tab was backgrounded mid-meter (the animation
+  // pauses while backgrounded like any browser tab, but real elapsed time
+  // doesn't), so the player gets a fresh, honest shot instead of the score
+  // silently reflecting however far the clock drifted while nobody was
+  // looking.
+  router.post('/game-instances/:id/field-goal/resync', async (req, res) => {
+    const { memberId } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'fieldGoal') return res.status(404).json({ error: 'Field goal game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This field goal contest is already finished.' });
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
+
+    const result = fieldGoal.resyncClock(gi.state, memberId);
+    if (result && result.error) return res.status(400).json({ error: result.error });
+
+    await store.save(db);
+    res.json({ gameInstance: viewForMember(gi, memberId) });
+  });
+
   // Scores the current kick (idempotent — a retried request won't re-score
   // it) but does NOT advance; /field-goal/next does that, once the result
   // has been shown.
