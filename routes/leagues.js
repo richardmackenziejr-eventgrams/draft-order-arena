@@ -114,6 +114,33 @@ router.post('/leagues/:id/competitions', async (req, res) => {
   res.status(201).json({ competition: db.competitions[competitionId] });
 });
 
+// Lets the commissioner try Football Trivia solo, before any real members
+// have joined — a throwaway instance with no competition/league attached, so
+// it never shows up in "Competitions" and never affects a real draft order.
+// Temporary/testing use only.
+router.post('/leagues/:id/test-trivia', async (req, res) => {
+  const db = await store.load();
+  const league = db.leagues[req.params.id];
+  if (!league) return res.status(404).json({ error: 'League not found.' });
+
+  const mod = getModule('trivia');
+  const init = mod.initInstance();
+  const giId = store.makeId('gi');
+  db.gameInstances[giId] = {
+    id: giId,
+    competitionId: null,
+    gameType: 'trivia',
+    mode: 'async',
+    config: init.config,
+    status: init.status,
+    state: init.state,
+    results: [],
+    isTest: true,
+  };
+  await store.save(db);
+  res.status(201).json({ instanceId: giId });
+});
+
 router.post('/competitions/:id/start', async (req, res) => {
   const db = await store.load();
   const competition = db.competitions[req.params.id];

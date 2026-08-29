@@ -39,8 +39,12 @@ module.exports = function gamesRouter(io) {
     const gi = db.gameInstances[req.params.id];
     if (!gi || gi.gameType !== 'trivia') return res.status(404).json({ error: 'Trivia game not found.' });
     if (gi.status === 'completed') return res.status(400).json({ error: 'This trivia contest is already finished.' });
-    const league = db.leagues[db.competitions[gi.competitionId].leagueId];
-    if (!league.members.some((m) => m.id === memberId)) return res.status(403).json({ error: 'Not a member of this league.' });
+    // Solo test instances (see /leagues/:id/test-trivia) have no real
+    // competition/league behind them — nothing to check membership against.
+    if (!gi.isTest) {
+      const league = db.leagues[db.competitions[gi.competitionId].leagueId];
+      if (!league.members.some((m) => m.id === memberId)) return res.status(403).json({ error: 'Not a member of this league.' });
+    }
 
     const outcome = trivia.submitAnswer(gi.state, memberId, choiceIndex == null ? null : Number(choiceIndex));
     if (outcome && outcome.error) return res.status(400).json({ error: outcome.error });
@@ -57,8 +61,12 @@ module.exports = function gamesRouter(io) {
     const gi = db.gameInstances[req.params.id];
     if (!gi || gi.gameType !== 'trivia') return res.status(404).json({ error: 'Trivia game not found.' });
     if (gi.status === 'completed') return res.status(400).json({ error: 'This trivia contest is already finished.' });
-    const league = db.leagues[db.competitions[gi.competitionId].leagueId];
-    if (!league.members.some((m) => m.id === memberId)) return res.status(403).json({ error: 'Not a member of this league.' });
+
+    let league = null;
+    if (!gi.isTest) {
+      league = db.leagues[db.competitions[gi.competitionId].leagueId];
+      if (!league.members.some((m) => m.id === memberId)) return res.status(403).json({ error: 'Not a member of this league.' });
+    }
 
     const player = trivia.advanceToNext(gi.state, memberId);
     if (player && player.error) return res.status(400).json({ error: player.error });
@@ -67,11 +75,20 @@ module.exports = function gamesRouter(io) {
     // else would ever set presentedAt for it.
     trivia.presentCurrentQuestion(gi.state, memberId);
 
-    const memberIds = league.members.map((m) => m.id);
-    if (trivia.isComplete(gi.state, memberIds)) {
-      gi.results = trivia.computeResults(gi.state);
-      gi.status = 'completed';
-      checkAndFinalizeCompetition(db, gi.competitionId);
+    // A solo test instance completes as soon as its one "player" finishes —
+    // there's no real league to wait on, and nothing to finalize.
+    if (gi.isTest) {
+      if (player.completed) {
+        gi.results = trivia.computeResults(gi.state);
+        gi.status = 'completed';
+      }
+    } else {
+      const memberIds = league.members.map((m) => m.id);
+      if (trivia.isComplete(gi.state, memberIds)) {
+        gi.results = trivia.computeResults(gi.state);
+        gi.status = 'completed';
+        checkAndFinalizeCompetition(db, gi.competitionId);
+      }
     }
     await store.save(db);
     res.json({ gameInstance: viewForMember(gi, memberId) });

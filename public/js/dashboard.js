@@ -267,6 +267,18 @@ document.getElementById('comp-form').addEventListener('submit', async (e) => {
   }
 });
 
+document.getElementById('test-trivia-btn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const { instanceId } = await api('POST', `/api/leagues/${leagueId}/test-trivia`, {});
+    window.location.href = `/play-trivia.html?instance=${instanceId}&league=${leagueId}&member=solo-test`;
+  } catch (err) {
+    alert(err.message);
+    btn.disabled = false;
+  }
+});
+
 (async () => {
   await loadCatalogOnce();
   await refresh();
