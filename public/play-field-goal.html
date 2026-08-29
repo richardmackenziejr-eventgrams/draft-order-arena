@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Field Goal Kick — Draft Order Arena</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header class="site">
+  <a class="logo" href="/">Draft Order <span>Arena</span></a>
+</header>
+<main>
+  <h1>Field Goal Kick</h1>
+  <p class="lead" id="status-line">Loading…</p>
+
+  <div class="panel" id="kick-panel" style="display:none">
+    <p class="fg-kick-info" id="kick-info"></p>
+
+    <div id="aim-step">
+      <p class="fg-wind" id="wind-line"></p>
+      <div class="aim-track" id="aim-track">
+        <div class="aim-center-mark"></div>
+        <div class="aim-marker" id="aim-marker"></div>
+      </div>
+      <div class="aim-controls">
+        <button type="button" id="aim-left" class="secondary">‹</button>
+        <div class="aim-readout" id="aim-value">0</div>
+        <button type="button" id="aim-right" class="secondary">›</button>
+      </div>
+      <button id="lock-aim-btn">Set aim &amp; get ready →</button>
+    </div>
+
+    <div id="power-step" style="display:none">
+      <p class="fg-wind" id="your-aim-line"></p>
+      <div class="kick-meter-track" id="meter-track">
+        <div class="kick-meter-marker" id="meter-marker"></div>
+      </div>
+      <button id="hold-btn" class="fg-hold-btn">HOLD to charge</button>
+      <p class="muted" style="text-align:center">Release when the marker's in the green — too late and you'll shank it.</p>
+    </div>
+
+    <div id="result-step" style="display:none">
+      <p class="fg-result" id="result-text"></p>
+      <button id="next-kick-btn" style="display:block; margin:0 auto">Next Kick →</button>
+    </div>
+  </div>
+
+  <div class="panel" id="done-panel" style="display:none">
+    <p id="done-message"></p>
+  </div>
+
+  <p><a class="btn secondary" id="back-link" href="/">Back</a></p>
+</main>
+<footer class="site">Draft Order Arena — prototype</footer>
+<script src="/js/common.js"></script>
+<script src="/js/play-field-goal.js"></script>
+</body>
+</html>

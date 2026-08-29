@@ -167,11 +167,15 @@ function gameStatusLine(gi) {
     const n = (gi.completedBy || []).length;
     return gi.status === 'completed' ? 'Trivia complete' : `${n} finished so far`;
   }
+  if (gi.gameType === 'fieldGoal') {
+    const n = (gi.completedBy || []).length;
+    return gi.status === 'completed' ? 'All kicks in' : `${n} finished so far`;
+  }
   return gi.status;
 }
 
 function gameLink(gi) {
-  const pageByType = { lottery: 'play-lottery.html', trivia: 'play-trivia.html' };
+  const pageByType = { lottery: 'play-lottery.html', trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html' };
   const page = pageByType[gi.gameType];
   return `/${page}?instance=${gi.id}&league=${leagueId}`;
 }
@@ -233,7 +237,7 @@ async function refresh() {
     renderGameChoices(league.members);
   }
   document.getElementById('comp-hint').textContent = league.members.length < 2
-    ? 'Need at least 2 members to create a trivia competition — the lottery doesn\'t need anyone to have joined, just type in team names below.'
+    ? 'Need at least 2 members to create a trivia or field goal competition — the lottery doesn\'t need anyone to have joined, just type in team names below.'
     : '';
 
   await renderCompetitions(competitions);
@@ -269,6 +273,18 @@ document.getElementById('test-trivia-btn').addEventListener('click', async (e) =
   try {
     const { instanceId } = await api('POST', `/api/leagues/${leagueId}/test-trivia`, {});
     window.location.href = `/play-trivia.html?instance=${instanceId}&league=${leagueId}&member=solo-test`;
+  } catch (err) {
+    alert(err.message);
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('test-field-goal-btn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const { instanceId } = await api('POST', `/api/leagues/${leagueId}/test-field-goal`, {});
+    window.location.href = `/play-field-goal.html?instance=${instanceId}&league=${leagueId}&member=solo-test`;
   } catch (err) {
     alert(err.message);
     btn.disabled = false;

@@ -3,6 +3,17 @@ const store = require('../lib/store');
 const { getModule } = require('../lib/gameEngine');
 const { checkAndFinalizeCompetition } = require('../lib/competition');
 const trivia = require('../lib/gameEngine/trivia');
+const fieldGoal = require('../lib/gameEngine/fieldGoal');
+
+// Shared by any async game with a solo test-drive mode (see /leagues/:id/test-*
+// in routes/leagues.js): test instances have no real competition/league behind
+// them, so there's no membership to check.
+function checkMembership(db, gi, memberId) {
+  if (gi.isTest) return { ok: true, league: null };
+  const league = db.leagues[db.competitions[gi.competitionId].leagueId];
+  if (!league.members.some((m) => m.id === memberId)) return { ok: false, error: 'Not a member of this league.' };
+  return { ok: true, league };
+}
 
 // Routes need `io` to broadcast the live lottery reveal, so this module is a
 // factory: server.js calls games(io) to get the mounted router.
@@ -22,6 +33,13 @@ module.exports = function gamesRouter(io) {
       trivia.presentCurrentQuestion(gi.state, memberId);
       await store.save(db);
     }
+    // A field goal player's record (their kick sequence position) needs to
+    // exist before there's a "current kick" to show — first view is what
+    // creates it, same idea as trivia above.
+    if (gi.gameType === 'fieldGoal' && memberId && gi.status !== 'completed') {
+      fieldGoal.getOrCreatePlayer(gi.state, memberId);
+      await store.save(db);
+    }
 
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
@@ -38,12 +56,8 @@ module.exports = function gamesRouter(io) {
     const gi = db.gameInstances[req.params.id];
     if (!gi || gi.gameType !== 'trivia') return res.status(404).json({ error: 'Trivia game not found.' });
     if (gi.status === 'completed') return res.status(400).json({ error: 'This trivia contest is already finished.' });
-    // Solo test instances (see /leagues/:id/test-trivia) have no real
-    // competition/league behind them — nothing to check membership against.
-    if (!gi.isTest) {
-      const league = db.leagues[db.competitions[gi.competitionId].leagueId];
-      if (!league.members.some((m) => m.id === memberId)) return res.status(403).json({ error: 'Not a member of this league.' });
-    }
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
 
     const outcome = trivia.submitAnswer(gi.state, memberId, choiceIndex == null ? null : Number(choiceIndex));
     if (outcome && outcome.error) return res.status(400).json({ error: outcome.error });
@@ -60,12 +74,8 @@ module.exports = function gamesRouter(io) {
     const gi = db.gameInstances[req.params.id];
     if (!gi || gi.gameType !== 'trivia') return res.status(404).json({ error: 'Trivia game not found.' });
     if (gi.status === 'completed') return res.status(400).json({ error: 'This trivia contest is already finished.' });
-
-    let league = null;
-    if (!gi.isTest) {
-      league = db.leagues[db.competitions[gi.competitionId].leagueId];
-      if (!league.members.some((m) => m.id === memberId)) return res.status(403).json({ error: 'Not a member of this league.' });
-    }
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
 
     const player = trivia.advanceToNext(gi.state, memberId);
     if (player && player.error) return res.status(400).json({ error: player.error });
@@ -82,9 +92,105 @@ module.exports = function gamesRouter(io) {
         gi.status = 'completed';
       }
     } else {
-      const memberIds = league.members.map((m) => m.id);
+      const memberIds = membership.league.members.map((m) => m.id);
       if (trivia.isComplete(gi.state, memberIds)) {
         gi.results = trivia.computeResults(gi.state);
+        gi.status = 'completed';
+        checkAndFinalizeCompetition(db, gi.competitionId);
+      }
+    }
+    await store.save(db);
+    res.json({ gameInstance: viewForMember(gi, memberId) });
+  });
+
+  // Field Goal Kick — a kick attempt is: set your aim, hold to charge power,
+  // release. Split across four endpoints so the client can show each phase
+  // (aim chosen, meter charging, result) distinctly and gate advancing to
+  // the next kick behind a "Next Kick" button, same pattern as trivia.
+  router.post('/game-instances/:id/field-goal/aim', async (req, res) => {
+    const { memberId, aim } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'fieldGoal') return res.status(404).json({ error: 'Field goal game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This field goal contest is already finished.' });
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
+
+    const result = fieldGoal.setAim(gi.state, memberId, aim);
+    if (result && result.error) return res.status(400).json({ error: result.error });
+
+    await store.save(db);
+    res.json({ gameInstance: viewForMember(gi, memberId) });
+  });
+
+  // Starts the server-authoritative power-meter clock — mirrors trivia's
+  // presentCurrentQuestion in spirit: the client fires this the instant the
+  // "hold to kick" gesture begins, but scoring always trusts this timestamp
+  // over anything the client reports.
+  router.post('/game-instances/:id/field-goal/hold-start', async (req, res) => {
+    const { memberId } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'fieldGoal') return res.status(404).json({ error: 'Field goal game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This field goal contest is already finished.' });
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
+
+    const result = fieldGoal.startHold(gi.state, memberId);
+    if (result && result.error) return res.status(400).json({ error: result.error });
+
+    await store.save(db);
+    res.json({ gameInstance: viewForMember(gi, memberId) });
+  });
+
+  // Scores the current kick from the server's own elapsed-hold timing
+  // (idempotent — a retried request won't re-score it) but does NOT advance;
+  // /field-goal/next does that, once the result has been shown.
+  router.post('/game-instances/:id/field-goal/release', async (req, res) => {
+    const { memberId } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'fieldGoal') return res.status(404).json({ error: 'Field goal game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This field goal contest is already finished.' });
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
+
+    const outcome = fieldGoal.release(gi.state, memberId);
+    if (outcome && outcome.error) return res.status(400).json({ error: outcome.error });
+
+    await store.save(db);
+    res.json({ outcome, gameInstance: viewForMember(gi, memberId) });
+  });
+
+  router.post('/game-instances/:id/field-goal/next', async (req, res) => {
+    const { memberId } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'fieldGoal') return res.status(404).json({ error: 'Field goal game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This field goal contest is already finished.' });
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
+
+    const player = fieldGoal.advanceToNext(gi.state, memberId);
+    if (player && player.error) return res.status(400).json({ error: player.error });
+
+    if (gi.isTest) {
+      if (player.completed) {
+        gi.results = fieldGoal.computeResults(gi.state);
+        gi.status = 'completed';
+      }
+    } else {
+      const memberIds = membership.league.members.map((m) => m.id);
+      if (fieldGoal.isComplete(gi.state, memberIds)) {
+        gi.results = fieldGoal.computeResults(gi.state);
         gi.status = 'completed';
         checkAndFinalizeCompetition(db, gi.competitionId);
       }
@@ -186,6 +292,29 @@ function viewForMember(gi, memberId) {
       // The question the player should see right now (with the answer key
       // stripped, unless they've already answered it), or null once done.
       currentQuestion: player ? mod.currentQuestionView(player) : null,
+      completedBy,
+      results: gi.status === 'completed' ? gi.results : [],
+    };
+  }
+
+  if (gi.gameType === 'fieldGoal') {
+    const players = gi.state.players || {};
+    const player = memberId ? players[memberId] : null;
+    const completedBy = Object.entries(players).filter(([, p]) => p.completed).map(([mid]) => mid);
+    return {
+      ...base,
+      kicksPerPlayer: mod.KICKS_PER_PLAYER,
+      meterDurationMs: mod.METER_DURATION_MS,
+      sweetSpotStart: mod.SWEET_SPOT_START,
+      sweetSpotEnd: mod.SWEET_SPOT_END,
+      aimMin: mod.AIM_MIN,
+      aimMax: mod.AIM_MAX,
+      hasCompleted: player ? player.completed : false,
+      yourScore: player ? player.totalPoints : null,
+      yourMakes: player ? player.totalMakes : null,
+      // The kick the player should see right now (aim/ready/result phase), or
+      // null once they've taken all their kicks.
+      currentKick: player ? mod.currentKickView(gi.state, player) : null,
       completedBy,
       results: gi.status === 'completed' ? gi.results : [],
     };

@@ -103,7 +103,11 @@ document.getElementById('next-btn').addEventListener('click', async () => {
   btn.disabled = true;
   try {
     const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/trivia/next`, { memberId });
-    if (gi.hasCompleted) {
+    if (gi.status === 'completed') {
+      // Whole contest just finished on this move (e.g. a solo test instance,
+      // or the last real player to finish) — nothing left to wait on.
+      showDone(`Contest finished. You scored ${gi.yourScore} point${gi.yourScore === 1 ? '' : 's'}.`);
+    } else if (gi.hasCompleted) {
       showDone(`You finished with ${gi.yourScore} point${gi.yourScore === 1 ? '' : 's'}! Waiting on the rest of the league…`);
     } else {
       renderQuestion(gi);

@@ -1,4 +1,4 @@
-const ICONS = { trivia: '🧠' };
+const ICONS = { trivia: '🧠', kicking: '🥅' };
 
 function modePill(mode) {
   const label = mode === 'live' ? 'Live' : 'Async';
