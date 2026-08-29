@@ -33,7 +33,7 @@ function startCountdown(seconds, onExpire) {
   countdownInterval = setInterval(() => {
     remaining -= 1;
     num.textContent = Math.max(remaining, 0);
-    if (remaining <= 1) num.classList.add('urgent');
+    if (remaining <= 3) num.classList.add('urgent');
     if (remaining <= 0) { clearInterval(countdownInterval); countdownInterval = null; }
   }, 1000);
   timeoutTimer = setTimeout(onExpire, seconds * 1000 + 80); // small buffer past the server's own clock
@@ -63,7 +63,7 @@ function renderQuestion(gi) {
   choicesEl.querySelectorAll('.choice-btn').forEach((btn) => {
     btn.addEventListener('click', () => submitChoice(Number(btn.dataset.choice)));
   });
-  startCountdown(gi.countdownSeconds || 5, () => submitChoice(null));
+  startCountdown(gi.countdownSeconds || 10, () => submitChoice(null));
 }
 
 async function submitChoice(choiceIndex) {

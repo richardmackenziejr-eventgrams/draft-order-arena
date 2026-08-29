@@ -16,7 +16,7 @@ module.exports = function gamesRouter(io) {
     if (!gi) return res.status(404).json({ error: 'Game instance not found.' });
     const memberId = req.query.memberId;
 
-    // Viewing a trivia question is what starts its 5-second clock — record
+    // Viewing a trivia question is what starts its 10-second clock — record
     // that here (server-authoritative, not trusted from the client) before
     // building the response, and persist it since it's real game state.
     if (gi.gameType === 'trivia' && memberId && gi.status !== 'completed') {
