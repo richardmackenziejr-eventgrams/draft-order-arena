@@ -16,28 +16,24 @@
 
   <div class="panel" id="kick-panel" style="display:none">
     <p class="fg-kick-info" id="kick-info"></p>
+    <p class="fg-wind" id="wind-line"></p>
 
-    <div id="aim-step">
-      <p class="fg-wind" id="wind-line"></p>
-      <div class="aim-track" id="aim-track">
-        <div class="aim-center-mark"></div>
-        <div class="aim-marker" id="aim-marker"></div>
+    <div id="power-step">
+      <p class="muted" style="text-align:center">Click when the marker's in the green!</p>
+      <div class="power-track" id="power-track">
+        <div class="power-sweet" id="power-sweet"></div>
+        <div class="power-marker" id="power-marker"></div>
       </div>
-      <div class="aim-controls">
-        <button type="button" id="aim-left" class="secondary">‹</button>
-        <div class="aim-readout" id="aim-value">0</div>
-        <button type="button" id="aim-right" class="secondary">›</button>
-      </div>
-      <button id="lock-aim-btn">Set aim &amp; get ready →</button>
+      <button id="power-stop-btn" class="fg-stop-btn">Click to lock power!</button>
     </div>
 
-    <div id="power-step" style="display:none">
-      <p class="fg-wind" id="your-aim-line"></p>
-      <div class="kick-meter-track" id="meter-track">
-        <div class="kick-meter-marker" id="meter-marker"></div>
+    <div id="direction-step" style="display:none">
+      <p class="muted" style="text-align:center">Now time your direction…</p>
+      <div class="direction-track" id="direction-track">
+        <div class="direction-center-mark"></div>
+        <div class="direction-marker" id="direction-marker"></div>
       </div>
-      <button id="hold-btn" class="fg-hold-btn">HOLD to charge</button>
-      <p class="muted" style="text-align:center">Release when the marker's in the green — too late and you'll shank it.</p>
+      <button id="direction-stop-btn" class="fg-stop-btn">Click to kick!</button>
     </div>
 
     <div id="result-step" style="display:none">

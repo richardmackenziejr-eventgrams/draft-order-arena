@@ -3,18 +3,57 @@ const leagueId = qs('league');
 const memberId = qs('member');
 document.getElementById('back-link').href = leagueId ? `/member-home.html?league=${leagueId}` : '/';
 
-let aimValue = 0;
-let AIM_MIN = -10;
-let AIM_MAX = 10;
-let meterDurationMs = 1600;
-let sweetSpotStart = 0.68;
-let sweetSpotEnd = 0.88;
+let powerPeriodMs = 1300;
+let directionPeriodMs = 1000;
+let powerSweetHalf = 0.12;
 let zonesPainted = false;
 
-let holdInFlight = false; // hold-start request in flight
-let holdConfirmed = false; // server has started the meter clock
-let pendingRelease = false; // release happened before the server confirmed the hold started
-let released = false;
+let powerAnimId = null;
+let directionAnimId = null;
+
+// Same deterministic triangle wave the server scores with (0 -> 1 -> 0 over
+// one period) — used here purely to draw the marker; the server always
+// recomputes this itself from its own elapsed time when a click lands.
+function trianglePosition(elapsedMs, periodMs) {
+  const cycle = ((elapsedMs % periodMs) + periodMs) % periodMs;
+  const t = cycle / periodMs;
+  return t < 0.5 ? t * 2 : 2 - t * 2;
+}
+
+function stopAnimations() {
+  if (powerAnimId) cancelAnimationFrame(powerAnimId);
+  if (directionAnimId) cancelAnimationFrame(directionAnimId);
+  powerAnimId = null;
+  directionAnimId = null;
+}
+
+function animatePower(startedAt) {
+  const marker = document.getElementById('power-marker');
+  function frame() {
+    const pos = trianglePosition(Date.now() - startedAt, powerPeriodMs);
+    marker.style.bottom = `${pos * 100}%`;
+    powerAnimId = requestAnimationFrame(frame);
+  }
+  frame();
+}
+
+function animateDirection(startedAt) {
+  const marker = document.getElementById('direction-marker');
+  function frame() {
+    const pos = trianglePosition(Date.now() - startedAt, directionPeriodMs);
+    marker.style.left = `${pos * 100}%`;
+    directionAnimId = requestAnimationFrame(frame);
+  }
+  frame();
+}
+
+function paintPowerZone() {
+  if (zonesPainted) return;
+  zonesPainted = true;
+  const sweet = document.getElementById('power-sweet');
+  sweet.style.bottom = `${(0.5 - powerSweetHalf) * 100}%`;
+  sweet.style.height = `${powerSweetHalf * 2 * 100}%`;
+}
 
 function windLine(k) {
   if (k.windDir === 'calm') return 'Wind: calm';
@@ -22,58 +61,17 @@ function windLine(k) {
   return `Wind: ${k.windMph} mph ${arrow}`;
 }
 
-function aimReadout(v) {
-  if (v === 0) return '0';
-  return v > 0 ? `${v} →` : `${Math.abs(v)} ←`;
-}
-
-function renderAimMarker() {
-  const pct = ((aimValue - AIM_MIN) / (AIM_MAX - AIM_MIN)) * 100;
-  document.getElementById('aim-marker').style.left = `${pct}%`;
-  document.getElementById('aim-value').textContent = aimReadout(aimValue);
-}
-
 function showPhase(phase) {
-  document.getElementById('aim-step').style.display = phase === 'aim' ? 'block' : 'none';
   document.getElementById('power-step').style.display = phase === 'power' ? 'block' : 'none';
+  document.getElementById('direction-step').style.display = phase === 'direction' ? 'block' : 'none';
   document.getElementById('result-step').style.display = phase === 'result' ? 'block' : 'none';
-}
-
-function paintMeterZones() {
-  if (zonesPainted) return;
-  zonesPainted = true;
-  const track = document.getElementById('meter-track');
-  const a = sweetSpotStart * 100;
-  const b = sweetSpotEnd * 100;
-  track.style.background = `linear-gradient(to top,
-    var(--bg-panel-2) 0%, var(--bg-panel-2) ${a}%,
-    var(--accent) ${a}%, var(--accent) ${b}%,
-    var(--danger) ${b}%, var(--danger) 100%)`;
-}
-
-function resetMeterVisual() {
-  paintMeterZones();
-  const marker = document.getElementById('meter-marker');
-  marker.style.transition = 'none';
-  marker.style.bottom = '0%';
-  void marker.offsetWidth; // force reflow so a later transition doesn't get skipped
-}
-
-function startMeterAnimation() {
-  const marker = document.getElementById('meter-marker');
-  requestAnimationFrame(() => {
-    marker.style.transition = `bottom ${meterDurationMs}ms linear`;
-    marker.style.bottom = '100%';
-  });
 }
 
 function renderKick(gi) {
   const k = gi.currentKick;
-  meterDurationMs = gi.meterDurationMs || meterDurationMs;
-  AIM_MIN = gi.aimMin != null ? gi.aimMin : AIM_MIN;
-  AIM_MAX = gi.aimMax != null ? gi.aimMax : AIM_MAX;
-  sweetSpotStart = gi.sweetSpotStart != null ? gi.sweetSpotStart : sweetSpotStart;
-  sweetSpotEnd = gi.sweetSpotEnd != null ? gi.sweetSpotEnd : sweetSpotEnd;
+  powerPeriodMs = gi.powerPeriodMs || powerPeriodMs;
+  directionPeriodMs = gi.directionPeriodMs || directionPeriodMs;
+  powerSweetHalf = gi.powerSweetHalf != null ? gi.powerSweetHalf : powerSweetHalf;
 
   document.getElementById('kick-panel').style.display = 'block';
   document.getElementById('done-panel').style.display = 'none';
@@ -81,43 +79,32 @@ function renderKick(gi) {
   document.getElementById('kick-info').textContent = `${k.distance} yard Field Goal`;
   document.getElementById('wind-line').textContent = windLine(k);
 
+  stopAnimations();
+
   if (k.phase === 'result') {
     showResult(k.attempt, k.distance);
     return;
   }
 
-  if (k.phase === 'ready') {
-    aimValue = k.aim;
-    renderAimMarker();
-    document.getElementById('your-aim-line').textContent = `Your aim: ${aimReadout(aimValue)}`;
-    holdInFlight = false;
-    holdConfirmed = false;
-    pendingRelease = false;
-    released = false;
-    resetMeterVisual();
-    showPhase('power');
+  paintPowerZone();
+
+  if (k.phase === 'direction') {
+    showPhase('direction');
+    animateDirection(k.directionStartedAt);
     return;
   }
 
-  aimValue = 0;
-  renderAimMarker();
-  showPhase('aim');
+  showPhase('power');
+  animatePower(k.powerStartedAt);
 }
 
-document.getElementById('aim-left').addEventListener('click', () => {
-  aimValue = Math.max(AIM_MIN, aimValue - 1);
-  renderAimMarker();
-});
-document.getElementById('aim-right').addEventListener('click', () => {
-  aimValue = Math.min(AIM_MAX, aimValue + 1);
-  renderAimMarker();
-});
-
-document.getElementById('lock-aim-btn').addEventListener('click', async () => {
-  const btn = document.getElementById('lock-aim-btn');
+document.getElementById('power-stop-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('power-stop-btn');
+  if (btn.disabled) return;
   btn.disabled = true;
+  stopAnimations();
   try {
-    const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/aim`, { memberId, aim: aimValue });
+    const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/power-stop`, { memberId });
     renderKick(gi);
   } catch (err) {
     alert(err.message);
@@ -126,57 +113,31 @@ document.getElementById('lock-aim-btn').addEventListener('click', async () => {
   }
 });
 
-async function onHoldStart() {
-  if (holdInFlight || holdConfirmed || released) return;
-  holdInFlight = true;
+document.getElementById('direction-stop-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('direction-stop-btn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  stopAnimations();
   try {
-    await api('POST', `/api/game-instances/${instanceId}/field-goal/hold-start`, { memberId });
-  } catch (err) {
-    holdInFlight = false;
-    alert(err.message);
-    return;
-  }
-  holdInFlight = false;
-  if (released) return; // released while the hold-start request was in flight
-  holdConfirmed = true;
-  startMeterAnimation();
-  if (pendingRelease) onHoldRelease();
-}
-
-async function onHoldRelease() {
-  if (released) return;
-  if (!holdConfirmed) {
-    // They let go before the server confirmed the hold started — score it
-    // the instant that confirmation lands instead of losing the input.
-    pendingRelease = true;
-    return;
-  }
-  released = true;
-  try {
-    const { outcome, gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/release`, { memberId });
+    const { outcome, gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/direction-stop`, { memberId });
     showResult(outcome, gi.currentKick ? gi.currentKick.distance : outcome.distance);
   } catch (err) {
     alert(err.message);
+  } finally {
+    btn.disabled = false;
   }
-}
-
-const holdBtn = document.getElementById('hold-btn');
-holdBtn.addEventListener('mousedown', onHoldStart);
-holdBtn.addEventListener('touchstart', (e) => { e.preventDefault(); onHoldStart(); });
-holdBtn.addEventListener('mouseup', onHoldRelease);
-holdBtn.addEventListener('mouseleave', onHoldRelease);
-holdBtn.addEventListener('touchend', (e) => { e.preventDefault(); onHoldRelease(); });
+});
 
 function outcomeText(outcome, distance) {
   if (outcome.outcome === 'made') return `IT'S GOOD! ${distance} yards — +${outcome.points} point${outcome.points === 1 ? '' : 's'}`;
-  if (outcome.outcome === 'shank') return `SHANKED IT ${outcome.detail === 'left' ? 'LEFT' : 'RIGHT'}! You held the meter too long.`;
-  if (outcome.outcome === 'short') return "NO GOOD — didn't have the distance. Charge the meter longer next time.";
-  if (outcome.outcome === 'wide-left') return 'WIDE LEFT — your aim overcorrected.';
-  if (outcome.outcome === 'wide-right') return "WIDE RIGHT — didn't counter the wind enough.";
+  if (outcome.outcome === 'short') return "NO GOOD — didn't have the distance. Time the power meter's green zone better.";
+  if (outcome.outcome === 'wide-left') return 'WIDE LEFT!';
+  if (outcome.outcome === 'wide-right') return 'WIDE RIGHT!';
   return outcome.outcome;
 }
 
 function showResult(outcome, distance) {
+  stopAnimations();
   const el = document.getElementById('result-text');
   el.textContent = outcomeText(outcome, distance);
   el.className = `fg-result ${outcome.made ? 'made' : 'missed'}`;
@@ -205,6 +166,7 @@ document.getElementById('next-kick-btn').addEventListener('click', async () => {
 });
 
 function showDone(message) {
+  stopAnimations();
   document.getElementById('kick-panel').style.display = 'none';
   document.getElementById('done-panel').style.display = 'block';
   document.getElementById('done-message').textContent = message;
@@ -216,11 +178,9 @@ async function init() {
     return;
   }
   const { gameInstance: gi } = await api('GET', `/api/game-instances/${instanceId}?memberId=${memberId}`);
-  meterDurationMs = gi.meterDurationMs || meterDurationMs;
-  AIM_MIN = gi.aimMin != null ? gi.aimMin : AIM_MIN;
-  AIM_MAX = gi.aimMax != null ? gi.aimMax : AIM_MAX;
-  sweetSpotStart = gi.sweetSpotStart != null ? gi.sweetSpotStart : sweetSpotStart;
-  sweetSpotEnd = gi.sweetSpotEnd != null ? gi.sweetSpotEnd : sweetSpotEnd;
+  powerPeriodMs = gi.powerPeriodMs || powerPeriodMs;
+  directionPeriodMs = gi.directionPeriodMs || directionPeriodMs;
+  powerSweetHalf = gi.powerSweetHalf != null ? gi.powerSweetHalf : powerSweetHalf;
 
   if (gi.status === 'completed') {
     showDone(gi.yourScore != null ? `Contest finished. You went ${gi.yourMakes}/${gi.kicksPerPlayer} for ${gi.yourScore} point${gi.yourScore === 1 ? '' : 's'}.` : 'Contest finished.');

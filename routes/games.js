@@ -33,11 +33,10 @@ module.exports = function gamesRouter(io) {
       trivia.presentCurrentQuestion(gi.state, memberId);
       await store.save(db);
     }
-    // A field goal player's record (their kick sequence position) needs to
-    // exist before there's a "current kick" to show — first view is what
-    // creates it, same idea as trivia above.
+    // Viewing a field goal kick is what starts its power meter — same idea
+    // as trivia above.
     if (gi.gameType === 'fieldGoal' && memberId && gi.status !== 'completed') {
-      fieldGoal.getOrCreatePlayer(gi.state, memberId);
+      fieldGoal.presentCurrentKick(gi.state, memberId);
       await store.save(db);
     }
 
@@ -103,33 +102,13 @@ module.exports = function gamesRouter(io) {
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
-  // Field Goal Kick — a kick attempt is: set your aim, hold to charge power,
-  // release. Split across four endpoints so the client can show each phase
-  // (aim chosen, meter charging, result) distinctly and gate advancing to
-  // the next kick behind a "Next Kick" button, same pattern as trivia.
-  router.post('/game-instances/:id/field-goal/aim', async (req, res) => {
-    const { memberId, aim } = req.body || {};
-    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
-
-    const db = await store.load();
-    const gi = db.gameInstances[req.params.id];
-    if (!gi || gi.gameType !== 'fieldGoal') return res.status(404).json({ error: 'Field goal game not found.' });
-    if (gi.status === 'completed') return res.status(400).json({ error: 'This field goal contest is already finished.' });
-    const membership = checkMembership(db, gi, memberId);
-    if (!membership.ok) return res.status(403).json({ error: membership.error });
-
-    const result = fieldGoal.setAim(gi.state, memberId, aim);
-    if (result && result.error) return res.status(400).json({ error: result.error });
-
-    await store.save(db);
-    res.json({ gameInstance: viewForMember(gi, memberId) });
-  });
-
-  // Starts the server-authoritative power-meter clock — mirrors trivia's
-  // presentCurrentQuestion in spirit: the client fires this the instant the
-  // "hold to kick" gesture begins, but scoring always trusts this timestamp
-  // over anything the client reports.
-  router.post('/game-instances/:id/field-goal/hold-start', async (req, res) => {
+  // Field Goal Kick — a classic two-click kicker: stop the (visibly
+  // sweet-spotted) power meter, which immediately arms the direction
+  // meter's clock, then stop that to resolve the whole kick. Split into
+  // two endpoints so the client can show the power->direction transition
+  // and, after direction, gate advancing behind a "Next Kick" button —
+  // same pattern as trivia's answer/next split.
+  router.post('/game-instances/:id/field-goal/power-stop', async (req, res) => {
     const { memberId } = req.body || {};
     if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
 
@@ -140,17 +119,17 @@ module.exports = function gamesRouter(io) {
     const membership = checkMembership(db, gi, memberId);
     if (!membership.ok) return res.status(403).json({ error: membership.error });
 
-    const result = fieldGoal.startHold(gi.state, memberId);
+    const result = fieldGoal.stopPower(gi.state, memberId);
     if (result && result.error) return res.status(400).json({ error: result.error });
 
     await store.save(db);
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
-  // Scores the current kick from the server's own elapsed-hold timing
+  // Scores the current kick from the server's own elapsed-time timing
   // (idempotent — a retried request won't re-score it) but does NOT advance;
   // /field-goal/next does that, once the result has been shown.
-  router.post('/game-instances/:id/field-goal/release', async (req, res) => {
+  router.post('/game-instances/:id/field-goal/direction-stop', async (req, res) => {
     const { memberId } = req.body || {};
     if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
 
@@ -161,7 +140,7 @@ module.exports = function gamesRouter(io) {
     const membership = checkMembership(db, gi, memberId);
     if (!membership.ok) return res.status(403).json({ error: membership.error });
 
-    const outcome = fieldGoal.release(gi.state, memberId);
+    const outcome = fieldGoal.stopDirection(gi.state, memberId);
     if (outcome && outcome.error) return res.status(400).json({ error: outcome.error });
 
     await store.save(db);
@@ -181,6 +160,10 @@ module.exports = function gamesRouter(io) {
 
     const player = fieldGoal.advanceToNext(gi.state, memberId);
     if (player && player.error) return res.status(400).json({ error: player.error });
+    // Start the new current kick's power meter now — the client renders it
+    // immediately from this response without a follow-up GET, so nothing
+    // else would ever set powerStartedAt for it.
+    fieldGoal.presentCurrentKick(gi.state, memberId);
 
     if (gi.isTest) {
       if (player.completed) {
@@ -304,16 +287,14 @@ function viewForMember(gi, memberId) {
     return {
       ...base,
       kicksPerPlayer: mod.KICKS_PER_PLAYER,
-      meterDurationMs: mod.METER_DURATION_MS,
-      sweetSpotStart: mod.SWEET_SPOT_START,
-      sweetSpotEnd: mod.SWEET_SPOT_END,
-      aimMin: mod.AIM_MIN,
-      aimMax: mod.AIM_MAX,
+      powerPeriodMs: mod.POWER_PERIOD_MS,
+      directionPeriodMs: mod.DIRECTION_PERIOD_MS,
+      powerSweetHalf: mod.POWER_SWEET_HALF,
       hasCompleted: player ? player.completed : false,
       yourScore: player ? player.totalPoints : null,
       yourMakes: player ? player.totalMakes : null,
-      // The kick the player should see right now (aim/ready/result phase), or
-      // null once they've taken all their kicks.
+      // The kick the player should see right now (power/direction/result
+      // phase), or null once they've taken all their kicks.
       currentKick: player ? mod.currentKickView(gi.state, player) : null,
       completedBy,
       results: gi.status === 'completed' ? gi.results : [],

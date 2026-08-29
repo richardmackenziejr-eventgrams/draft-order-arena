@@ -472,20 +472,48 @@ ul.clean li:last-child { border-bottom: none; }
 .trivia-feedback.correct { color: var(--accent); }
 .trivia-feedback.incorrect { color: var(--danger); }
 
-/* --- Field Goal Kick: aim slider + hold-and-release power meter --- */
+/* --- Field Goal Kick: two-click retro kicker (oscillating power + direction) --- */
 .fg-kick-info { text-align: center; font-weight: 800; font-size: 1.3rem; margin: 0 0 4px; }
 .fg-wind { text-align: center; color: var(--text-dim); margin: 0 0 12px; }
 
-.aim-track {
+.power-track {
+  position: relative;
+  width: 70px;
+  height: 220px;
+  margin: 16px auto;
+  border-radius: 8px;
+  border: 2px solid var(--line);
+  background: var(--bg-panel-2);
+}
+.power-sweet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(74, 222, 128, 0.35);
+  border-top: 1px solid var(--accent);
+  border-bottom: 1px solid var(--accent);
+}
+.power-marker {
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  bottom: 0%;
+  height: 4px;
+  background: #fff;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.85);
+  transform: translateY(50%);
+}
+
+.direction-track {
   position: relative;
   height: 14px;
   border-radius: 7px;
   background: var(--bg-panel-2);
   border: 1px solid var(--line);
-  margin: 10px auto;
+  margin: 16px auto;
   max-width: 320px;
 }
-.aim-center-mark {
+.direction-center-mark {
   position: absolute;
   left: 50%;
   top: -5px;
@@ -493,41 +521,21 @@ ul.clean li:last-child { border-bottom: none; }
   width: 2px;
   background: var(--line);
 }
-.aim-marker {
+.direction-marker {
   position: absolute;
-  top: -7px;
-  width: 18px;
-  height: 28px;
-  border-radius: 4px;
-  background: var(--accent);
-  transform: translateX(-50%);
-  transition: left 0.12s ease;
-}
-.aim-controls { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 14px 0; }
-.aim-controls button { margin-top: 0; width: 48px; }
-.aim-readout { font-weight: 800; font-size: 1.2rem; min-width: 60px; text-align: center; }
-
-.kick-meter-track {
-  position: relative;
-  width: 70px;
-  height: 220px;
-  margin: 16px auto;
-  border-radius: 8px;
-  border: 2px solid var(--line);
-  overflow: hidden;
-}
-.kick-meter-marker {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0%;
-  height: 4px;
+  top: -8px;
+  bottom: -8px;
+  width: 4px;
+  border-radius: 2px;
   background: #fff;
   box-shadow: 0 0 6px rgba(255, 255, 255, 0.85);
+  left: 0%;
+  transform: translateX(-50%);
 }
-.fg-hold-btn {
+
+.fg-stop-btn {
   display: block;
-  margin: 0 auto 10px;
+  margin: 10px auto 0;
   width: 220px;
   user-select: none;
 }
