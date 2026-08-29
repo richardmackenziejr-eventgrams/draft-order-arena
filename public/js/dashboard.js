@@ -3,6 +3,8 @@ if (!leagueId) document.body.innerHTML = '<main><p class="error">No league id in
 
 let catalog = [];
 let lastMemberIds = [];
+let currentMembers = [];
+const MAX_LOTTERY_TEAMS = 12;
 
 async function loadCatalogOnce() {
   if (catalog.length) return catalog;
@@ -30,8 +32,16 @@ function modeOptions(supportedModes) {
   return supportedModes.map((m) => `<option value="${m}">${m === 'live' ? 'Live (real-time, everyone at once)' : 'Async (self-paced)'}</option>`).join('');
 }
 
+// The lottery doesn't need anyone to actually join — it's a one-shot draw, not
+// something people play. So instead of pulling from league.members, the commissioner
+// just types up to 12 team names (and last year's finish) directly here. Rows for
+// members who *have* already joined are pre-filled as a convenience, but any name
+// typed in — matched or not — becomes (or reuses) a real league member the moment
+// the competition is created, so results/aggregation don't need special-casing.
 function renderGameChoices(members) {
   const container = document.getElementById('game-choices');
+  const defaultTeamCount = Math.min(MAX_LOTTERY_TEAMS, Math.max(members.length, 8));
+
   container.innerHTML = catalog.map((g) => {
     const oddsInputs = g.id === 'lottery'
       ? `<div class="lottery-odds" data-for="${g.id}" style="display:none; margin-top:10px">
@@ -39,13 +49,15 @@ function renderGameChoices(members) {
             <input type="checkbox" data-randomize-game="${g.id}" style="width:auto" />
             <span>Make it completely random (ignore standings)</span>
           </label>
-          <div data-standings-for="${g.id}">
-            <label>Last year's finish for each team (1 = champion, higher = worse — worse finish automatically gets better odds at pick #1)</label>
-            <div class="row">
-              ${members.map((m, i) => `
-                <div>
-                  <label style="margin:6px 0 2px">${escapeHtml(m.name)}</label>
-                  <input type="number" min="1" step="1" value="${i + 1}" data-odds-member="${m.id}" data-odds-game="${g.id}" />
+          <label for="team-count">Number of teams (2–${MAX_LOTTERY_TEAMS} — typically 8, 10, or 12)</label>
+          <input type="number" id="team-count" min="2" max="${MAX_LOTTERY_TEAMS}" value="${defaultTeamCount}" style="max-width:100px" />
+          <div data-standings-for="${g.id}" style="margin-top:10px">
+            <label style="margin-top:0">Team name and last year's finish (1 = champion, higher = worse — worse finish automatically gets better odds at pick #1). Teams that have already joined are filled in — add the rest yourself, no need to wait on anyone.</label>
+            <div class="row" id="lottery-team-rows">
+              ${Array.from({ length: MAX_LOTTERY_TEAMS }).map((_, i) => `
+                <div data-team-row="${i}" style="${i < defaultTeamCount ? '' : 'display:none'}">
+                  <input type="text" placeholder="Team ${i + 1} name" value="${escapeHtml((members[i] && members[i].name) || '')}" data-team-name-idx="${i}" />
+                  <input type="number" min="1" step="1" value="${i + 1}" data-team-finish-idx="${i}" style="margin-top:6px" />
                 </div>`).join('')}
             </div>
           </div>
@@ -79,26 +91,62 @@ function renderGameChoices(members) {
       if (standings) standings.style.display = chk.checked ? 'none' : 'block';
     });
   });
+
+  const teamCountInput = container.querySelector('#team-count');
+  if (teamCountInput) {
+    teamCountInput.addEventListener('input', () => {
+      const count = Math.min(MAX_LOTTERY_TEAMS, Math.max(2, Number(teamCountInput.value) || 2));
+      container.querySelectorAll('[data-team-row]').forEach((row) => {
+        row.style.display = Number(row.dataset.teamRow) < count ? '' : 'none';
+      });
+    });
+  }
 }
 
-function buildGamesPayload() {
+// Finds (by exact case-insensitive name) or creates a league member for a
+// commissioner-typed team name — this is what lets the lottery run without
+// anyone having joined: typing the name here *is* how they get added.
+async function ensureMember(name) {
+  const existing = currentMembers.find((m) => m.name.toLowerCase() === name.toLowerCase());
+  if (existing) return existing.id;
+  const { member } = await api('POST', `/api/leagues/${leagueId}/members`, { name });
+  currentMembers.push(member);
+  return member.id;
+}
+
+async function buildGamesPayload() {
   const games = [];
-  document.querySelectorAll('[data-game-checkbox]:checked').forEach((chk) => {
+  for (const chk of document.querySelectorAll('[data-game-checkbox]:checked')) {
     const gameType = chk.dataset.gameCheckbox;
     const mode = document.querySelector(`[data-game-mode="${gameType}"]`).value;
     let config = {};
     if (gameType === 'lottery') {
       const randomize = document.querySelector(`[data-randomize-game="${gameType}"]`).checked;
+      const teamCount = Math.min(MAX_LOTTERY_TEAMS, Math.max(2, Number(document.getElementById('team-count').value) || 2));
+      // Validate before creating anything — a rejected submit shouldn't leave
+      // half-created members sitting in the league.
+      const entries = [];
+      for (let i = 0; i < teamCount; i++) {
+        const name = document.querySelector(`[data-team-name-idx="${i}"]`).value.trim();
+        if (!name) continue;
+        const finish = Number(document.querySelector(`[data-team-finish-idx="${i}"]`).value) || 1;
+        entries.push({ name, finish });
+      }
+      if (entries.length < 2) {
+        throw new Error('Enter at least 2 team names for the lottery.');
+      }
+
       const odds = {};
-      document.querySelectorAll(`[data-odds-game="${gameType}"]`).forEach((inp) => {
+      for (const entry of entries) {
+        const memberId = await ensureMember(entry.name);
         // Weight = finish position directly: last place (highest number) naturally
         // gets the most weight, i.e. the best odds at pick #1 — no extra math needed.
-        odds[inp.dataset.oddsMember] = randomize ? 1 : (Number(inp.value) || 1);
-      });
+        odds[memberId] = randomize ? 1 : entry.finish;
+      }
       config = { odds, randomized: randomize };
     }
     games.push({ gameType, mode, config });
-  });
+  }
   return games;
 }
 
@@ -181,6 +229,7 @@ async function renderCompetitions(summaries) {
 async function refresh() {
   const { league, competitions } = await api('GET', `/api/leagues/${leagueId}`);
   renderLeagueInfo(league);
+  currentMembers = league.members;
 
   const memberIds = league.members.map((m) => m.id).join(',');
   if (memberIds !== lastMemberIds) {
@@ -188,7 +237,7 @@ async function refresh() {
     renderGameChoices(league.members);
   }
   document.getElementById('comp-hint').textContent = league.members.length < 2
-    ? 'Need at least 2 members to start a competition.'
+    ? 'Need at least 2 members to create a bracket or trivia competition — the lottery doesn\'t need anyone to have joined, just type in team names below.'
     : '';
 
   await renderCompetitions(competitions);
@@ -199,9 +248,11 @@ document.getElementById('comp-form').addEventListener('submit', async (e) => {
   const errEl = document.getElementById('comp-err');
   clearError(errEl);
   const name = document.getElementById('comp-name').value.trim();
-  const games = buildGamesPayload();
-  if (!games.length) return showError(errEl, new Error('Pick at least one game.'));
+  const submitBtn = document.querySelector('#comp-form button[type="submit"]');
   try {
+    submitBtn.disabled = true;
+    const games = await buildGamesPayload();
+    if (!games.length) throw new Error('Pick at least one game.');
     await api('POST', `/api/leagues/${leagueId}/competitions`, { name, games });
     document.getElementById('comp-form').reset();
     document.querySelectorAll('.game-choice').forEach((c) => c.classList.remove('checked'));
@@ -211,6 +262,8 @@ document.getElementById('comp-form').addEventListener('submit', async (e) => {
     await refresh();
   } catch (err) {
     showError(errEl, err);
+  } finally {
+    submitBtn.disabled = false;
   }
 });
 
