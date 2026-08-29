@@ -13,6 +13,10 @@ let asyncGoAt = null;
 
 function nameFor(id) {
   if (!id) return 'BYE';
+  // Reserved ids used only by the dashboard's solo test-drive instances
+  // (see /leagues/:id/test-reaction) — never real member ids.
+  if (id === 'solo-test') return 'You';
+  if (id === 'reaction-test-cpu') return 'Test CPU';
   const m = members.find((x) => x.id === id);
   return m ? m.name : id;
 }

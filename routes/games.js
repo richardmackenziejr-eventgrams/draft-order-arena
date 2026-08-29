@@ -110,7 +110,9 @@ module.exports = function gamesRouter(io) {
     if (reactionBracket.isComplete(gi.state.bracket)) {
       gi.results = reactionBracket.computeResults(gi.state.bracket);
       gi.status = 'completed';
-      checkAndFinalizeCompetition(db, gi.competitionId);
+      // Solo test instances (see /leagues/:id/test-reaction) have no real
+      // competition attached — nothing to finalize.
+      if (!gi.isTest) checkAndFinalizeCompetition(db, gi.competitionId);
     }
     await store.save(db);
     res.json({ outcome, gameInstance: viewForMember(gi, memberId) });
