@@ -6,9 +6,10 @@ let members = [];
 let totalPicks = 0;
 let revealed = []; // index = pick-1, value = memberId or null
 
-// The racing lane occupies the left LANE_PCT of the field; the rest is the end zone.
-const LANE_PCT = 88;
+// Every runner races the same course to the same spot — a little past the
+// goal line, inside the end zone (which starts at 88%) — regardless of pick.
 const LANE_MARGIN = 2;
+const FINISH_PCT = 94;
 
 function nameFor(memberId) {
   const m = members.find((x) => x.id === memberId);
@@ -44,17 +45,9 @@ function showLatest(rank, memberId) {
   el.innerHTML = `<div class="pick-num">Pick #${rank}</div><div class="pick-name">${escapeHtml(nameFor(memberId))}</div>`;
 }
 
-// A team's final resting spot on the field encodes their draft slot directly:
-// pick #1 sprints the full length into the end zone, the last pick barely
-// leaves the goal line. Reveals arrive worst-to-first, so the field fills in
-// with progressively longer runs, saving the full-field sprint for #1.
-function revealPick(rank, memberId) {
-  const runner = document.getElementById(`runner-${memberId}`);
-  if (!runner) return;
-  runner.classList.remove('idle-jitter');
-  const progress = (totalPicks - rank + 1) / totalPicks;
-  const targetPct = LANE_MARGIN + progress * (LANE_PCT - LANE_MARGIN);
-  runner.style.left = `${targetPct}%`;
+// Bookkeeping once a runner has actually crossed the line — same regardless
+// of whether they got there by running it out or by snapping into place.
+function finishRunner(rank, memberId, runner) {
   if (!runner.querySelector('.pick-flag')) {
     const flag = document.createElement('div');
     flag.className = 'pick-flag';
@@ -66,6 +59,49 @@ function revealPick(rank, memberId) {
   revealed[rank - 1] = memberId;
   showLatest(rank, memberId);
   renderOrderList();
+}
+
+// Every team actually runs the full course and crosses the finish line —
+// nobody stops short. The pick number is just which order they got there in
+// (reveals arrive worst-to-first, so the #1 pick's sprint is the finale).
+// Motion is a string of small, slightly uneven hops rather than one smooth
+// glide, so it reads as running rather than sliding.
+function runToFinish(rank, memberId) {
+  const runner = document.getElementById(`runner-${memberId}`);
+  if (!runner) return;
+  runner.classList.remove('idle-jitter');
+  runner.classList.add('running');
+
+  let pos = parseFloat(runner.style.left) || LANE_MARGIN;
+  const steps = 8 + Math.floor(Math.random() * 3); // 8-10 hops
+  let stepsLeft = steps;
+
+  const hop = () => {
+    stepsLeft--;
+    if (stepsLeft <= 0) {
+      runner.style.left = `${FINISH_PCT}%`;
+      runner.classList.remove('running');
+      finishRunner(rank, memberId, runner);
+      return;
+    }
+    const remainingDistance = FINISH_PCT - pos;
+    const avgStep = remainingDistance / (stepsLeft + 1);
+    const variance = avgStep * 0.4;
+    pos = Math.min(FINISH_PCT, pos + avgStep + (Math.random() * 2 - 1) * variance);
+    runner.style.left = `${pos}%`;
+    setTimeout(hop, 110 + Math.random() * 70);
+  };
+  setTimeout(hop, 20 + Math.random() * 80);
+}
+
+// Late joiners catching up on picks that were already revealed before they
+// connected — no need to replay the run, just place them at the line.
+function snapToFinish(rank, memberId) {
+  const runner = document.getElementById(`runner-${memberId}`);
+  if (!runner) return;
+  runner.classList.remove('idle-jitter');
+  runner.style.left = `${FINISH_PCT}%`;
+  finishRunner(rank, memberId, runner);
 }
 
 async function init() {
@@ -80,12 +116,12 @@ async function init() {
 
   if (gi.status === 'completed') {
     document.getElementById('status-line').textContent = 'Draw complete!';
-    gi.results.forEach((r) => revealPick(r.rank, r.memberId));
+    gi.results.forEach((r) => runToFinish(r.rank, r.memberId));
     return;
   }
 
   // Late joiner during a live reveal — snap straight to whatever's already known.
-  (gi.revealedPicks || []).forEach(({ pick, memberId }) => revealPick(pick, memberId));
+  (gi.revealedPicks || []).forEach(({ pick, memberId }) => snapToFinish(pick, memberId));
 
   if (gi.mode === 'live' && gi.status === 'ready' && isCommish(leagueId)) {
     document.getElementById('run-panel').style.display = 'block';
@@ -106,7 +142,7 @@ async function init() {
     document.getElementById('status-line').textContent = 'The race is on…';
     document.getElementById('run-panel').style.display = 'none';
   });
-  socket.on('lottery:reveal', ({ pick, memberId }) => revealPick(pick, memberId));
+  socket.on('lottery:reveal', ({ pick, memberId }) => runToFinish(pick, memberId));
   socket.on('lottery:complete', () => {
     document.getElementById('status-line').textContent = 'Draw complete!';
   });
