@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Trivia Contest — Draft Order Arena</title>
+<title>Football Trivia — Draft Order Arena</title>
 <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -11,11 +11,18 @@
   <a class="logo" href="/">Draft Order <span>Arena</span></a>
 </header>
 <main>
-  <h1>Fantasy Football Trivia</h1>
+  <h1>Football Trivia</h1>
   <p class="lead" id="status-line">Loading…</p>
 
   <div class="panel" id="quiz-panel" style="display:none">
-    <form id="quiz-form"></form>
+    <div class="trivia-timer-wrap">
+      <div class="trivia-timer-bar" id="timer-bar"></div>
+    </div>
+    <div class="trivia-timer-num" id="timer-num">5</div>
+    <h2 id="question-text" style="margin-top:6px"></h2>
+    <div id="choices"></div>
+    <p id="feedback" class="trivia-feedback" style="display:none"></p>
+    <button id="next-btn" style="display:none">Next question →</button>
   </div>
 
   <div class="panel" id="done-panel" style="display:none">

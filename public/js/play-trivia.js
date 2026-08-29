@@ -3,41 +3,120 @@ const leagueId = qs('league');
 const memberId = qs('member');
 document.getElementById('back-link').href = leagueId ? `/member-home.html?league=${leagueId}` : '/';
 
-let startedAt = Date.now();
+let countdownInterval = null;
+let timeoutTimer = null;
+let answered = false;
 
-function renderQuiz(gi) {
-  document.getElementById('quiz-panel').style.display = 'block';
-  const form = document.getElementById('quiz-form');
-  form.innerHTML = gi.questions.map((q, qi) => `
-    <div style="margin-bottom:20px">
-      <label style="font-size:1rem;color:var(--text)">${qi + 1}. ${escapeHtml(q.text)}</label>
-      ${q.choices.map((choice, ci) => `
-        <label style="display:flex;align-items:center;gap:8px;font-weight:400;font-size:0.95rem;margin:4px 0">
-          <input type="radio" name="${q.id}" value="${ci}" required style="width:auto" />
-          ${escapeHtml(choice)}
-        </label>`).join('')}
-    </div>`).join('') + '<button type="submit">Submit answers</button><p class="error" id="err" style="display:none"></p>';
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const errEl = document.getElementById('err');
-    clearError(errEl);
-    const answers = {};
-    gi.questions.forEach((q) => {
-      const checked = form.querySelector(`input[name="${q.id}"]:checked`);
-      answers[q.id] = checked ? Number(checked.value) : -1;
-    });
-    const elapsedMs = Date.now() - startedAt;
-    try {
-      const { outcome } = await api('POST', `/api/game-instances/${instanceId}/trivia/submit`, { memberId, answers, elapsedMs });
-      showDone(`You scored ${outcome.score}/${outcome.total}. Waiting on the rest of the league…`);
-    } catch (err) {
-      showError(errEl, err);
-    }
-  });
+function clearTimers() {
+  if (countdownInterval) clearInterval(countdownInterval);
+  if (timeoutTimer) clearTimeout(timeoutTimer);
+  countdownInterval = null;
+  timeoutTimer = null;
 }
 
+// A shrinking bar (CSS transition, so it's smooth) plus a ticking whole-number
+// readout — purely visual, the server is what actually times the answer.
+function startCountdown(seconds, onExpire) {
+  const bar = document.getElementById('timer-bar');
+  const num = document.getElementById('timer-num');
+  bar.style.transition = 'none';
+  bar.style.width = '100%';
+  void bar.offsetWidth; // force reflow so the transition below starts from 100%, not skips it
+  requestAnimationFrame(() => {
+    bar.style.transition = `width ${seconds}s linear`;
+    bar.style.width = '0%';
+  });
+
+  let remaining = seconds;
+  num.textContent = remaining;
+  num.className = 'trivia-timer-num';
+  countdownInterval = setInterval(() => {
+    remaining -= 1;
+    num.textContent = Math.max(remaining, 0);
+    if (remaining <= 1) num.classList.add('urgent');
+    if (remaining <= 0) { clearInterval(countdownInterval); countdownInterval = null; }
+  }, 1000);
+  timeoutTimer = setTimeout(onExpire, seconds * 1000 + 80); // small buffer past the server's own clock
+}
+
+function renderQuestion(gi) {
+  answered = false;
+  const q = gi.currentQuestion;
+  document.getElementById('quiz-panel').style.display = 'block';
+  document.getElementById('done-panel').style.display = 'none';
+  document.getElementById('status-line').textContent = `Question ${q.index + 1} of ${q.total}`;
+  document.getElementById('question-text').textContent = q.text;
+  document.getElementById('feedback').style.display = 'none';
+  document.getElementById('next-btn').style.display = 'none';
+
+  const choicesEl = document.getElementById('choices');
+  choicesEl.innerHTML = q.choices.map((choice, i) =>
+    `<button class="choice-btn secondary" data-choice="${i}">${escapeHtml(choice)}</button>`).join('');
+
+  if (q.answered) {
+    // Already answered (e.g. a page refresh landed here) — show the outcome
+    // as-is, no countdown, just wait for them to hit Next.
+    showOutcome(q.answered);
+    return;
+  }
+
+  choicesEl.querySelectorAll('.choice-btn').forEach((btn) => {
+    btn.addEventListener('click', () => submitChoice(Number(btn.dataset.choice)));
+  });
+  startCountdown(gi.countdownSeconds || 5, () => submitChoice(null));
+}
+
+async function submitChoice(choiceIndex) {
+  if (answered) return; // clicking is answering — first click (or the timeout) wins, no submit button
+  answered = true;
+  clearTimers();
+  document.querySelectorAll('.choice-btn').forEach((b) => { b.disabled = true; });
+  try {
+    const { outcome } = await api('POST', `/api/game-instances/${instanceId}/trivia/answer`, { memberId, choiceIndex });
+    showOutcome(outcome);
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function showOutcome(outcome) {
+  clearTimers();
+  document.querySelectorAll('.choice-btn').forEach((btn, i) => {
+    btn.disabled = true;
+    if (i === outcome.correctIndex) btn.classList.add('choice-correct');
+    else if (i === outcome.choiceIndex) btn.classList.add('choice-wrong');
+  });
+  const feedback = document.getElementById('feedback');
+  feedback.style.display = 'block';
+  if (outcome.correct) {
+    feedback.textContent = `Correct! +${outcome.points} point${outcome.points === 1 ? '' : 's'}`;
+    feedback.className = 'trivia-feedback correct';
+  } else {
+    feedback.textContent = outcome.choiceIndex == null ? "Time's up — 0 points." : 'Not quite — 0 points.';
+    feedback.className = 'trivia-feedback incorrect';
+  }
+  document.getElementById('next-btn').style.display = 'inline-block';
+}
+
+document.getElementById('next-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('next-btn');
+  btn.disabled = true;
+  try {
+    const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/trivia/next`, { memberId });
+    if (gi.hasCompleted) {
+      showDone(`You finished with ${gi.yourScore} point${gi.yourScore === 1 ? '' : 's'}! Waiting on the rest of the league…`);
+    } else {
+      renderQuestion(gi);
+    }
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 function showDone(message) {
+  clearTimers();
   document.getElementById('quiz-panel').style.display = 'none';
   document.getElementById('done-panel').style.display = 'block';
   document.getElementById('done-message').textContent = message;
@@ -49,25 +128,24 @@ async function init() {
     return;
   }
   const { gameInstance: gi } = await api('GET', `/api/game-instances/${instanceId}?memberId=${memberId}`);
-  document.getElementById('status-line').textContent = `${gi.questionCount} questions — answer at your own pace.`;
 
   if (gi.status === 'completed') {
-    showDone(gi.yourScore != null ? `Contest finished. You scored ${gi.yourScore}/${gi.questionCount}.` : 'Contest finished.');
+    showDone(gi.yourScore != null ? `Contest finished. You scored ${gi.yourScore} point${gi.yourScore === 1 ? '' : 's'}.` : 'Contest finished.');
     return;
   }
-  if (gi.hasSubmitted) {
-    showDone(`You scored ${gi.yourScore}/${gi.questionCount}. Waiting on the rest of the league…`);
+  if (gi.hasCompleted) {
+    showDone(`You finished with ${gi.yourScore} point${gi.yourScore === 1 ? '' : 's'}! Waiting on the rest of the league…`);
     poll();
     return;
   }
-  renderQuiz(gi);
+  renderQuestion(gi);
 }
 
-async function poll() {
+function poll() {
   setInterval(async () => {
     const { gameInstance: gi } = await api('GET', `/api/game-instances/${instanceId}?memberId=${memberId}`);
     if (gi.status === 'completed') {
-      showDone(gi.yourScore != null ? `Contest finished. You scored ${gi.yourScore}/${gi.questionCount}.` : 'Contest finished.');
+      showDone(gi.yourScore != null ? `Contest finished. You scored ${gi.yourScore} point${gi.yourScore === 1 ? '' : 's'}.` : 'Contest finished.');
     }
   }, 4000);
 }

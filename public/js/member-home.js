@@ -17,7 +17,7 @@ function actionLabel(gi) {
   if (gi.status === 'completed') return 'View result';
   if (gi.gameType === 'lottery') return 'Watch the draw';
   if (gi.gameType === 'reactionBracket') return 'Play my match';
-  if (gi.gameType === 'trivia') return gi.hasSubmitted ? 'View / waiting' : 'Take the quiz';
+  if (gi.gameType === 'trivia') return gi.hasCompleted ? 'View / waiting' : 'Take the quiz';
   return 'Open';
 }
 

@@ -15,11 +15,24 @@ module.exports = function gamesRouter(io) {
     const gi = db.gameInstances[req.params.id];
     if (!gi) return res.status(404).json({ error: 'Game instance not found.' });
     const memberId = req.query.memberId;
+
+    // Viewing a trivia question is what starts its 5-second clock — record
+    // that here (server-authoritative, not trusted from the client) before
+    // building the response, and persist it since it's real game state.
+    if (gi.gameType === 'trivia' && memberId && gi.status !== 'completed') {
+      trivia.presentCurrentQuestion(gi.state, memberId);
+      await store.save(db);
+    }
+
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
-  router.post('/game-instances/:id/trivia/submit', async (req, res) => {
-    const { memberId, answers, elapsedMs } = req.body || {};
+  // Scores the player's current question (idempotent — a retried request
+  // won't double-score) but does NOT advance them; /trivia/next does that.
+  // Keeping "answer" and "advance" separate lets the client show the
+  // right/wrong outcome and a Next button before moving on.
+  router.post('/game-instances/:id/trivia/answer', async (req, res) => {
+    const { memberId, choiceIndex } = req.body || {};
     if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
 
     const db = await store.load();
@@ -29,7 +42,30 @@ module.exports = function gamesRouter(io) {
     const league = db.leagues[db.competitions[gi.competitionId].leagueId];
     if (!league.members.some((m) => m.id === memberId)) return res.status(403).json({ error: 'Not a member of this league.' });
 
-    const outcome = trivia.submit(gi.state, memberId, answers || {}, elapsedMs);
+    const outcome = trivia.submitAnswer(gi.state, memberId, choiceIndex == null ? null : Number(choiceIndex));
+    if (outcome && outcome.error) return res.status(400).json({ error: outcome.error });
+
+    await store.save(db);
+    res.json({ outcome, gameInstance: viewForMember(gi, memberId) });
+  });
+
+  router.post('/game-instances/:id/trivia/next', async (req, res) => {
+    const { memberId } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'trivia') return res.status(404).json({ error: 'Trivia game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This trivia contest is already finished.' });
+    const league = db.leagues[db.competitions[gi.competitionId].leagueId];
+    if (!league.members.some((m) => m.id === memberId)) return res.status(403).json({ error: 'Not a member of this league.' });
+
+    const player = trivia.advanceToNext(gi.state, memberId);
+    if (player && player.error) return res.status(400).json({ error: player.error });
+    // Start the new current question's clock now — the client renders it
+    // immediately from this response without a follow-up GET, so nothing
+    // else would ever set presentedAt for it.
+    trivia.presentCurrentQuestion(gi.state, memberId);
 
     const memberIds = league.members.map((m) => m.id);
     if (trivia.isComplete(gi.state, memberIds)) {
@@ -38,7 +74,7 @@ module.exports = function gamesRouter(io) {
       checkAndFinalizeCompetition(db, gi.competitionId);
     }
     await store.save(db);
-    res.json({ outcome, gameInstance: viewForMember(gi, memberId) });
+    res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
   router.post('/game-instances/:id/reaction/attempt', async (req, res) => {
@@ -149,14 +185,19 @@ function viewForMember(gi, memberId) {
   }
 
   if (gi.gameType === 'trivia') {
-    const submission = memberId ? gi.state.submissions[memberId] : null;
+    const players = gi.state.players || {};
+    const player = memberId ? players[memberId] : null;
+    const completedBy = Object.entries(players).filter(([, p]) => p.completed).map(([mid]) => mid);
     return {
       ...base,
-      questions: mod.publicQuestions(),
-      questionCount: mod.QUESTIONS.length,
-      hasSubmitted: !!submission,
-      yourScore: submission ? submission.score : null,
-      submittedBy: Object.keys(gi.state.submissions || {}),
+      questionsPerPlayer: mod.QUESTIONS_PER_PLAYER,
+      countdownSeconds: mod.COUNTDOWN_SECONDS,
+      hasCompleted: player ? player.completed : false,
+      yourScore: player ? player.totalPoints : null,
+      // The question the player should see right now (with the answer key
+      // stripped, unless they've already answered it), or null once done.
+      currentQuestion: player ? mod.currentQuestionView(player) : null,
+      completedBy,
       results: gi.status === 'completed' ? gi.results : [],
     };
   }

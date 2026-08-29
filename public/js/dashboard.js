@@ -168,8 +168,8 @@ function gameStatusLine(gi) {
     return `Bracket in progress (${gi.mode})`;
   }
   if (gi.gameType === 'trivia') {
-    const n = (gi.submittedBy || []).length;
-    return gi.status === 'completed' ? 'Trivia complete' : `${n} submitted so far`;
+    const n = (gi.completedBy || []).length;
+    return gi.status === 'completed' ? 'Trivia complete' : `${n} finished so far`;
   }
   return gi.status;
 }

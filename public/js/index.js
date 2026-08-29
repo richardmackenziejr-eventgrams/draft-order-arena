@@ -1,8 +1,17 @@
-const ICONS = { lottery: '🏈', bracket: '⚡', trivia: '🧠' };
+const ICONS = { bracket: '⚡', trivia: '🧠' };
 
 function modePill(mode) {
   const label = mode === 'live' ? 'Live' : 'Async';
   return `<span class="pill ${mode === 'live' ? 'active' : ''}">${label}</span>`;
+}
+
+// The 40 Yard Dash gets an actual runner from the race (in blue) as its
+// icon instead of an emoji; the other games keep a plain emoji.
+function iconFor(category) {
+  if (category === 'lottery') {
+    return `<div style="color:#3a86ff; width:28px; height:36px; display:inline-block">${runnerFigureSvg()}</div>`;
+  }
+  return `<div style="font-size:1.8rem">${ICONS[category] || '🎮'}</div>`;
 }
 
 async function loadGames() {
@@ -11,7 +20,7 @@ async function loadGames() {
     const { games } = await api('GET', '/api/game-catalog');
     container.innerHTML = games.map((g) => `
       <div class="panel">
-        <div style="font-size:1.8rem">${ICONS[g.category] || '🎮'}</div>
+        ${iconFor(g.category)}
         <h3 style="margin:8px 0 4px">${escapeHtml(g.name)}</h3>
         <p class="muted">${escapeHtml(g.description || '')}</p>
         <div style="display:flex; gap:6px; flex-wrap:wrap">${g.supportedModes.map(modePill).join('')}</div>
