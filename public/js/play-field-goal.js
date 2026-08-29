@@ -105,14 +105,26 @@ function outcomeText(outcome, distance) {
 
 // Both meters freeze right where they were clicked and stay visible behind
 // the result card, instead of disappearing — a nice "here's what actually
-// happened" recap alongside the call.
-function freezeAndShowResult(k) {
+// happened" recap alongside the call. When `animate` is true (a kick just
+// resolved live), the ball flies to its outcome and both referees throw
+// their signal before the result card appears; when false (restoring an
+// already-resolved kick, e.g. a page refresh), everything just jumps
+// straight to its final state — no need to replay the show twice.
+async function freezeAndShowResult(k, animate) {
   stopAnimations();
   document.getElementById('power-marker').style.bottom = `${(k.powerPos || 0) * 100}%`;
   document.getElementById('direction-marker').style.left = `${(k.attempt.directionPos || 0) * 100}%`;
   document.getElementById('direction-track').classList.remove('idle');
   document.getElementById('power-stop-btn').disabled = true;
   document.getElementById('direction-stop-btn').disabled = true;
+
+  if (animate) {
+    await animateBallFlight(k.attempt.outcome);
+    await animateReferees(k.attempt.made);
+  } else {
+    showBallAtFinalSpot(k.attempt.outcome);
+    setRefereeFinalPose(k.attempt.made);
+  }
 
   const el = document.getElementById('result-text');
   el.textContent = outcomeText(k.attempt, k.distance);
@@ -133,10 +145,12 @@ function renderKick(gi) {
   renderWindOverlay(k);
 
   stopAnimations();
+  resetBall();
+  resetReferees();
   paintPowerZone();
 
   if (k.phase === 'result') {
-    freezeAndShowResult(k);
+    freezeAndShowResult(k, false); // already resolved — restore instantly, don't replay
     return;
   }
 
@@ -186,7 +200,7 @@ document.getElementById('direction-stop-btn').addEventListener('click', async ()
   document.getElementById('direction-marker').style.left = `${trianglePosition(elapsedMs, directionPeriodMs) * 100}%`;
   try {
     const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/direction-stop`, { memberId, elapsedMs });
-    freezeAndShowResult(gi.currentKick); // disables both buttons — the kick's resolved
+    await freezeAndShowResult(gi.currentKick, true); // ball flight + ref signal, then the result card
   } catch (err) {
     alert(err.message);
     btn.disabled = false;
@@ -223,14 +237,65 @@ function showDone(message) {
 }
 
 // --- Pre-snap scene: a static illustration of the kick about to happen ---
-// (just the kicker and the ball on a tee, distant goalposts behind). Built
-// once — it doesn't change between kicks.
+// (just the kicker and the ball on a tee, distant goalposts behind, a
+// referee on each side of the goal line). Built once — it doesn't change
+// between kicks; the ball and referee arms animate in place afterward.
 function ballOnTeeSvg() {
   return `
     <svg viewBox="0 0 16 22" width="16" height="22" xmlns="http://www.w3.org/2000/svg">
       <rect x="6.7" y="13" width="2.6" height="9" rx="1.2" fill="#d9d9dc" />
       <ellipse cx="8" cy="10.5" rx="6.2" ry="3.8" fill="#8a4b26" transform="rotate(-14 8 10.5)" />
       <path d="M3.3 9.6 L12.7 11.4" stroke="#f2e6d6" stroke-width="0.8" transform="rotate(-14 8 10.5)" />
+    </svg>
+  `;
+}
+
+// Just the ball, no tee — what flies through the air after a kick.
+function flyingBallSvg() {
+  return `
+    <svg viewBox="0 0 16 12" width="16" height="12" xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="8" cy="6" rx="7.2" ry="4.6" fill="#8a4b26" />
+      <path d="M2 5.3 L14 6.7" stroke="#f2e6d6" stroke-width="0.9" />
+    </svg>
+  `;
+}
+
+// A referee dedicated to this scene (as opposed to the shared
+// refereeFigureSvg() the 40 Yard Dash uses) because its arms need to be
+// independently animatable between idle/good/no-good poses — reusing the
+// shared one and changing its arm structure would've altered that other
+// game's already-shipped look. Idle pose (both arms hanging) is the
+// default; .fg-ref-arm-l/.fg-ref-arm-r get rotated via animateReferees().
+function signalRefSvg() {
+  return `
+    <svg viewBox="0 0 24 34" width="34" height="48" xmlns="http://www.w3.org/2000/svg">
+      <g class="fg-ref-leg-l">
+        <rect x="8" y="23" width="4" height="9" rx="1.6" fill="#1c1c1c" />
+        <ellipse cx="10" cy="32.3" rx="2.6" ry="1.4" fill="#050505" />
+      </g>
+      <g class="fg-ref-leg-r">
+        <rect x="12" y="23" width="4" height="9" rx="1.6" fill="#1c1c1c" />
+        <ellipse cx="14" cy="32.3" rx="2.6" ry="1.4" fill="#050505" />
+      </g>
+      <clipPath id="fgRefStripes">
+        <path d="M6.5 9 Q6.5 7.2 8.3 7.2 L15.7 7.2 Q17.5 7.2 17.5 9 L16.9 23 Q12 24.4 7.1 23 Z" />
+      </clipPath>
+      <g clip-path="url(#fgRefStripes)">
+        <rect x="6.5" y="7.2" width="2.2" height="17" fill="#f4f4f4" />
+        <rect x="8.7" y="7.2" width="2.2" height="17" fill="#151515" />
+        <rect x="10.9" y="7.2" width="2.2" height="17" fill="#f4f4f4" />
+        <rect x="13.1" y="7.2" width="2.2" height="17" fill="#151515" />
+        <rect x="15.3" y="7.2" width="2.2" height="17" fill="#f4f4f4" />
+        <rect x="17.5" y="7.2" width="2.2" height="17" fill="#151515" />
+      </g>
+      <g class="fg-ref-arm-l" style="transform-box: fill-box; transform-origin: top center;">
+        <rect x="2.6" y="9.5" width="4" height="9.5" rx="2" fill="#151515" />
+      </g>
+      <g class="fg-ref-arm-r" style="transform-box: fill-box; transform-origin: top center;">
+        <rect x="17.4" y="9.5" width="4" height="9.5" rx="2" fill="#151515" />
+      </g>
+      <circle cx="12" cy="4.8" r="4.8" fill="#e8b98a" />
+      <path d="M7.3 3.1 Q12 -0.8 16.7 3.1 L16.5 4.3 Q12 2.3 7.5 4.3 Z" fill="#151515" />
     </svg>
   `;
 }
@@ -243,11 +308,87 @@ function buildScene() {
     <div class="fg-yardline fg-goal-line" style="top:33%"></div>
     <div class="fg-yardline" style="top:58%"></div>
     <div class="fg-goalpost" style="color:#f4c542">${goalpostSvg()}</div>
-    <div class="fg-referee fg-referee-left">${refereeFigureSvg()}</div>
-    <div class="fg-referee fg-referee-right">${refereeFigureSvg()}</div>
+    <div class="fg-referee fg-referee-left">${signalRefSvg()}</div>
+    <div class="fg-referee fg-referee-right">${signalRefSvg()}</div>
     <div class="fg-tee">${ballOnTeeSvg()}</div>
+    <div class="fg-ball" id="fg-ball" style="display:none">${flyingBallSvg()}</div>
     <div class="fg-kicker" style="color:${offense}">${runnerFigureSvg()}</div>
   `;
+}
+
+// The ball's flight path per outcome, as [left%, top%, scale] keyframes —
+// tee position, an arc peak, then where it ends up. Shared between the
+// animated flight and the "just show me the final spot" restore path.
+const BALL_PATHS = {
+  made: [[50, 80, 1], [50, 35, 0.7], [50, 12, 0.4]],
+  'wide-left': [[50, 80, 1], [38, 35, 0.7], [24, 18, 0.45]],
+  'wide-right': [[50, 80, 1], [62, 35, 0.7], [76, 18, 0.45]],
+  short: [[50, 80, 1], [50, 58, 0.85], [50, 46, 0.75]],
+};
+
+function ballPathFor(outcome) {
+  return BALL_PATHS[outcome] || BALL_PATHS.short;
+}
+
+function resetBall() {
+  const ball = document.getElementById('fg-ball');
+  ball.getAnimations().forEach((a) => a.cancel());
+  ball.style.display = 'none';
+}
+
+function resetReferees() {
+  document.querySelectorAll('.fg-ref-arm-l, .fg-ref-arm-r').forEach((el) => {
+    el.getAnimations().forEach((a) => a.cancel());
+    el.style.transform = '';
+  });
+}
+
+// Kicks off, arcs toward the target, and settles — resolves once it lands.
+function animateBallFlight(outcome) {
+  const ball = document.getElementById('fg-ball');
+  ball.style.display = 'block';
+  const keyframes = ballPathFor(outcome).map(([left, top, scale]) => ({
+    left: `${left}%`, top: `${top}%`, transform: `translate(-50%, -50%) scale(${scale})`,
+  }));
+  return ball.animate(keyframes, { duration: 900, easing: 'ease-out', fill: 'forwards' }).finished;
+}
+
+function showBallAtFinalSpot(outcome) {
+  const ball = document.getElementById('fg-ball');
+  const pts = ballPathFor(outcome);
+  const [left, top, scale] = pts[pts.length - 1];
+  ball.style.display = 'block';
+  ball.style.left = `${left}%`;
+  ball.style.top = `${top}%`;
+  ball.style.transform = `translate(-50%, -50%) scale(${scale})`;
+}
+
+// Good: both arms sweep straight up. No good: arms cross in front, then
+// swing straight out to the sides — both referees signal in sync. Resolves
+// once the signal is thrown.
+function animateReferees(made) {
+  const leftKeyframes = made
+    ? [{ transform: 'rotate(0deg)' }, { transform: 'rotate(180deg)' }]
+    : [{ transform: 'rotate(0deg)' }, { transform: 'rotate(-110deg)' }, { transform: 'rotate(90deg)' }];
+  const rightKeyframes = made
+    ? [{ transform: 'rotate(0deg)' }, { transform: 'rotate(180deg)' }]
+    : [{ transform: 'rotate(0deg)' }, { transform: 'rotate(110deg)' }, { transform: 'rotate(-90deg)' }];
+  const duration = made ? 400 : 600;
+  const anims = [];
+  document.querySelectorAll('.fg-ref-arm-l').forEach((el) => {
+    anims.push(el.animate(leftKeyframes, { duration, easing: 'ease-in-out', fill: 'forwards' }).finished);
+  });
+  document.querySelectorAll('.fg-ref-arm-r').forEach((el) => {
+    anims.push(el.animate(rightKeyframes, { duration, easing: 'ease-in-out', fill: 'forwards' }).finished);
+  });
+  return Promise.all(anims);
+}
+
+function setRefereeFinalPose(made) {
+  const leftDeg = made ? 180 : 90;
+  const rightDeg = made ? 180 : -90;
+  document.querySelectorAll('.fg-ref-arm-l').forEach((el) => { el.style.transform = `rotate(${leftDeg}deg)`; });
+  document.querySelectorAll('.fg-ref-arm-r').forEach((el) => { el.style.transform = `rotate(${rightDeg}deg)`; });
 }
 
 async function init() {

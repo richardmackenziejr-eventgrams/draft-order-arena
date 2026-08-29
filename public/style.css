@@ -572,6 +572,16 @@ ul.clean li:last-child { border-bottom: none; }
   transform: translate(-50%, -50%);
 }
 .fg-tee svg { width: 100%; height: auto; display: block; }
+
+.fg-ball {
+  position: absolute;
+  left: 50%;
+  top: 80%;
+  width: 4.5%;
+  transform: translate(-50%, -50%);
+}
+.fg-ball svg { width: 100%; height: auto; display: block; }
+
 .fg-kicker {
   position: absolute;
   left: 38%;
