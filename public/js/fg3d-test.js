@@ -605,10 +605,15 @@ let powerMeterCenter = new THREE.Vector3();
 // the kicker's own resting spot (-1.7) so it doesn't clip through him
 // during the approach.
 function rebuildPowerMeter(distanceYards) {
-  // Raised well above head height (rather than beside the kicker at his own
-  // height) so his closer-to-camera body doesn't occlude it from the kick
-  // cam's viewing angle.
-  powerMeterCenter = new THREE.Vector3(ball.position.x - 1.9, ball.position.y + 2.9, ball.position.z);
+  // Beside the kicker (his own x, minus an offset) at his own depth — not
+  // the ball's depth, which sits far enough behind him that reaching this
+  // far left of the ball puts the bar outside the kick cam's frame
+  // entirely. Sitting at his depth instead means the visible x-range at
+  // that distance from the camera is exactly what already comfortably
+  // fits him on screen, so a similar offset from his x still fits too, and
+  // it doesn't need to be raised above his head to dodge occlusion since
+  // it's beside him, not behind him.
+  powerMeterCenter = new THREE.Vector3(kicker.position.x - 1.0, ball.position.y + 1.3, kicker.position.z);
   powerTrack.position.copy(powerMeterCenter);
 
   if (powerSweetMesh) { scene.remove(powerSweetMesh); powerSweetMesh.geometry.dispose(); powerSweetMesh.material.dispose(); }
@@ -637,10 +642,10 @@ let directionTrack = null;
 
 function rebuildDirectionMeter() {
   if (directionTrack) { scene.remove(directionTrack); directionTrack.geometry.dispose(); directionTrack.material.dispose(); }
-  // Raised against clear sky rather than sitting at crowd height, where a
-  // thin white track was hard to pick out against the busy stand texture.
-  const y = ball.position.y + 2.6;
-  const z = ball.position.z - 1.2;
+  // Low and centered directly under the ball, rather than up near the
+  // goalpost/crossbar height.
+  const y = ball.position.y + 0.4;
+  const z = ball.position.z + 0.3;
   const left = new THREE.Vector3(ball.position.x - 1.3, y, z);
   const peak = new THREE.Vector3(ball.position.x, y + 0.35, z);
   const right = new THREE.Vector3(ball.position.x + 1.3, y, z);
