@@ -714,6 +714,7 @@ let directionStartedAt = Date.now();
 let currentPowerT = 0.5;
 let currentDirectionT = 0.5;
 let lockedPowerT = 0.5;
+let lockedPowerDeviation = 0; // |lockedPowerT - 0.5| — set in lockPower(), read in lockDirection()'s near-miss check
 let hadPowerResult = false;
 
 const actionBtn = document.getElementById('fg3d-action-btn');
@@ -743,11 +744,24 @@ function startPowerPhase() {
   if (distanceSlider) distanceSlider.disabled = false;
 }
 
+// A power click just outside the green isn't automatically a dead "short"
+// anymore — if the direction lock is precise enough (see lockDirection()),
+// a near-miss leg gets saved. This is that margin: how far past the sweet
+// spot's own edge still counts as "just barely outside" rather than a
+// clean miss.
+const NEAR_MISS_POWER_MARGIN = 0.03;
+
 function lockPower() {
   const distanceYards = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
   lockedPowerT = currentPowerT;
-  hadPowerResult = Math.abs(lockedPowerT - 0.5) <= powerSweetHalfFor(distanceYards);
-  const color = hadPowerResult ? 0x4ade80 : 0xef4444;
+  lockedPowerDeviation = Math.abs(lockedPowerT - 0.5);
+  const sweetHalf = powerSweetHalfFor(distanceYards);
+  hadPowerResult = lockedPowerDeviation <= sweetHalf;
+  // Three-tier feedback: clean hit (green), just outside — still save-able
+  // with a precise-enough direction lock, see lockDirection() — (yellow,
+  // a caution rather than a flat miss), or a clean miss (red).
+  const isNearMiss = !hadPowerResult && lockedPowerDeviation <= sweetHalf + NEAR_MISS_POWER_MARGIN;
+  const color = hadPowerResult ? 0x4ade80 : isNearMiss ? 0xf5c542 : 0xef4444;
   powerMarkerMat.color.set(color);
   powerMarkerMat.emissive.set(color);
 
@@ -762,9 +776,19 @@ function lockDirection() {
   const distanceYards = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
   const offset = currentDirectionT - 0.5;
   const tolerance = accuracyToleranceFor(distanceYards);
+  const sweetHalf = powerSweetHalfFor(distanceYards);
+
+  // Power was just outside the green, but a dead-center direction lock
+  // (within the *inner half* of the normal tolerance — noticeably more
+  // precise than "just good enough") saves it anyway: precise aim making
+  // up for a slightly-off leg.
+  const nearMissSave = !hadPowerResult
+    && lockedPowerDeviation <= sweetHalf + NEAR_MISS_POWER_MARGIN
+    && Math.abs(offset) <= tolerance / 2;
+  const enoughPower = hadPowerResult || nearMissSave;
 
   let outcome;
-  if (!hadPowerResult) outcome = 'short';
+  if (!enoughPower) outcome = 'short';
   else if (Math.abs(offset) > tolerance) outcome = offset > 0 ? 'wide-right' : 'wide-left';
   else outcome = 'made';
 
