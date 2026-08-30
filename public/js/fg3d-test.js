@@ -625,8 +625,10 @@ function animateRefereeSignal(made) {
 }
 
 function resetPose() {
+  cameraLocked = false;
+  controls.enabled = true;
   const d = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
-  updateDistance(d); // resets ball/tee's z, but not x/y — the flight/approach leaves those wherever they ended
+  updateDistance(d); // resets ball/tee's z, but not x/y — the flight/approach leaves those wherever they ended (also resets the camera/controls.target back to the kick cam)
   kicker.position.x = KICKER_SIDE_OFFSET;
   kicker.position.y = 0;
   kicker.rotation.y = 0;
@@ -644,6 +646,13 @@ function resetPose() {
   });
 }
 
+// Where the camera ends up once it follows the ball in flight — behind the
+// goalpost looking back toward the kicker, so both uprights and both
+// referees are in frame together when the result actually happens, instead
+// of it playing out somewhere off past the edge of the kick-cam's view.
+const END_CAM_POS = new THREE.Vector3(0, 3, GOAL_LINE_Z - 10);
+const END_CAM_TARGET = new THREE.Vector3(0, 3, GOAL_LINE_Z);
+
 const kickBtn = document.getElementById('fg3d-kick-btn');
 const outcomeSelect = document.getElementById('fg3d-outcome');
 
@@ -651,6 +660,7 @@ async function performKick() {
   const outcome = outcomeSelect ? outcomeSelect.value : 'made';
   const distanceYards = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
   [kickBtn, outcomeSelect, distanceSlider].forEach((el) => { if (el) el.disabled = true; });
+  controls.enabled = false; // hands-off for the whole sequence; resetPose() gives it back
 
   const ballStartZ = ball.position.z;
   const startPos = kicker.position.clone();
@@ -688,11 +698,21 @@ async function performKick() {
     if (!contactFired && u >= 0.55) {
       contactFired = true;
       tee.visible = false;
+      cameraLocked = true; // hand the camera fully to this animation until resetPose() gives it back
+      const camStartPos = camera.position.clone();
+      const camStartTarget = new THREE.Vector3(0, 2, GOAL_LINE_Z + 10); // matches updateDistance()'s kick-cam target
       const flight = ballFlightFor(outcome, new THREE.Vector3(ball.position.x, ball.position.y, ballStartZ), distanceYards);
       const ballFlight = tween(flight.duration, (fu) => {
         const p = bezier2(flight.p0, flight.p1, flight.p2, fu);
         ball.position.copy(p);
         ball.rotation.z += 0.5; // spiral spin, purely cosmetic
+
+        // Camera eases from the kick cam to the end-zone view over the same
+        // span as the ball's flight, so it arrives right as the ball does.
+        const ct = easeOutQuad(fu);
+        camera.position.lerpVectors(camStartPos, END_CAM_POS, ct);
+        const lookTarget = new THREE.Vector3().lerpVectors(camStartTarget, END_CAM_TARGET, ct);
+        camera.lookAt(lookTarget);
       });
       const refSignal = wait(flight.duration * 0.6).then(() => animateRefereeSignal(outcome === 'made'));
       flightAndFollowUp = Promise.all([ballFlight, refSignal]);
@@ -722,9 +742,14 @@ window.addEventListener('resize', resize);
 resize();
 
 // ---- Render loop -------------------------------------------------------------
+// While a kick animation is driving the camera directly (following the ball
+// in flight — see performKick()), OrbitControls' own per-frame update() must
+// be skipped: it recomputes camera.position from its stored target/spherical
+// state every call, which would fight any manual position/lookAt changes.
+let cameraLocked = false;
 function animate() {
   requestAnimationFrame(animate);
-  controls.update();
+  if (!cameraLocked) controls.update();
   renderer.render(scene, camera);
 }
 animate();
