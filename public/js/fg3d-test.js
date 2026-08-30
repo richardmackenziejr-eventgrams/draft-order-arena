@@ -516,10 +516,178 @@ if (distanceSlider) {
     const d = Number(distanceSlider.value);
     if (distanceLabel) distanceLabel.textContent = `${d} yd Field Goal`;
     updateDistance(d);
+    // Only live-follow the slider while the power meter is still running —
+    // once direction/flight has started, the ball's spot (and the arc/arrow
+    // built around it) needs to hold still.
+    if (kickPhase === 'power') {
+      rebuildPowerArc(d);
+      rebuildDirectionArrow();
+    }
   });
 }
 if (distanceLabel) distanceLabel.textContent = `${DEFAULT_DISTANCE} yd Field Goal`;
 updateDistance(DEFAULT_DISTANCE);
+
+// ---- Power & direction meters (interactive) ---------------------------------
+// The same two-click mechanic as the 2D game (a deterministic triangle wave,
+// sampled at the instant you click) — reimplemented here as 3D overlays
+// instead of flat side-panel bars: a curved "kicking arc" (after the classic
+// Madden power gauge) for power, and a sweeping arrow for direction, both
+// sitting right over the scene instead of beside it. Client-only for this
+// prototype, same as everything else here — no server round-trip.
+const POWER_PERIOD_MS = 1000;
+const DIRECTION_PERIOD_MS = 1000;
+const POWER_SWEET_HALF_LONG = 0.05;   // 50+ yards
+const POWER_SWEET_HALF_MID = 0.09;    // 40-49 yards
+const POWER_SWEET_HALF_SHORT = 0.14;  // under 40 yards
+const LONG_DISTANCE_THRESHOLD = 50;
+const MID_DISTANCE_THRESHOLD = 40;
+const WIDE_TOLERANCE = 0.22;   // direction tolerance at the closest distance
+const NARROW_TOLERANCE = 0.05; // direction tolerance at the farthest distance
+const MAX_DIRECTION_ANGLE = 0.55; // radians the arrow sweeps to either side of straight downfield
+
+function trianglePosition(elapsedMs, periodMs) {
+  const cycle = ((elapsedMs % periodMs) + periodMs) % periodMs;
+  const t = cycle / periodMs;
+  return t < 0.5 ? t * 2 : 2 - t * 2;
+}
+function powerSweetHalfFor(distance) {
+  if (distance >= LONG_DISTANCE_THRESHOLD) return POWER_SWEET_HALF_LONG;
+  if (distance >= MID_DISTANCE_THRESHOLD) return POWER_SWEET_HALF_MID;
+  return POWER_SWEET_HALF_SHORT;
+}
+function accuracyToleranceFor(distance) {
+  const t = Math.max(0, Math.min(1, (distance - MIN_DISTANCE) / (MAX_DISTANCE - MIN_DISTANCE)));
+  return WIDE_TOLERANCE - t * (WIDE_TOLERANCE - NARROW_TOLERANCE);
+}
+
+// A tube mesh following a sub-range [tStart, tEnd] of a curve — gives the
+// arc real 3D thickness (a plain Line reads as a flat, thin scribble)
+// instead of an actual rounded gauge like Madden's kicking arc.
+function tubeFromCurve(curve, tStart, tEnd, radius, color, opacity) {
+  const steps = 24;
+  const points = [];
+  for (let i = 0; i <= steps; i++) {
+    points.push(curve.getPointAt(tStart + (tEnd - tStart) * (i / steps)));
+  }
+  const subCurve = new THREE.CatmullRomCurve3(points);
+  const geo = new THREE.TubeGeometry(subCurve, steps, radius, 8, false);
+  const mat = new THREE.MeshStandardMaterial({
+    color, emissive: color, emissiveIntensity: 0.35,
+    transparent: opacity < 1, opacity, roughness: 0.4,
+  });
+  return new THREE.Mesh(geo, mat);
+}
+
+let powerArcCurve = null;
+let powerArcBase = null;
+let powerArcSweet = null;
+const powerArcMarker = new THREE.Mesh(
+  new THREE.SphereGeometry(0.11, 14, 12),
+  new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.5 })
+);
+scene.add(powerArcMarker);
+
+// Rebuilds the arc (and its highlighted sweet-spot sub-segment, sized to
+// this kick's distance) around the ball's current position — called at the
+// start of every attempt, and live while the slider moves during the power
+// phase.
+function rebuildPowerArc(distanceYards) {
+  if (powerArcBase) { scene.remove(powerArcBase); powerArcBase.geometry.dispose(); powerArcBase.material.dispose(); }
+  if (powerArcSweet) { scene.remove(powerArcSweet); powerArcSweet.geometry.dispose(); powerArcSweet.material.dispose(); }
+
+  const start = ball.position.clone();
+  const peak = new THREE.Vector3(ball.position.x, ball.position.y + 5.4, ball.position.z - 9);
+  const end = new THREE.Vector3(ball.position.x, ball.position.y + 0.3, ball.position.z - 17);
+  powerArcCurve = new THREE.QuadraticBezierCurve3(start, peak, end);
+
+  powerArcBase = tubeFromCurve(powerArcCurve, 0, 1, 0.035, 0xffffff, 0.55);
+  scene.add(powerArcBase);
+
+  const sweetHalf = powerSweetHalfFor(distanceYards);
+  powerArcSweet = tubeFromCurve(powerArcCurve, 0.5 - sweetHalf, 0.5 + sweetHalf, 0.05, 0x4ade80, 1);
+  scene.add(powerArcSweet);
+}
+
+let directionArrow = null;
+function rebuildDirectionArrow() {
+  if (directionArrow) scene.remove(directionArrow);
+  const origin = new THREE.Vector3(ball.position.x, ball.position.y + 1.7, ball.position.z - 1.2);
+  directionArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), origin, 1.7, 0xffcc33, 0.5, 0.28);
+  scene.add(directionArrow);
+}
+
+let kickPhase = 'power'; // 'power' | 'direction' | 'flight'
+let powerStartedAt = Date.now();
+let directionStartedAt = Date.now();
+let currentPowerT = 0.5;
+let currentDirectionT = 0.5;
+let lockedPowerT = 0.5;
+let hadPowerResult = false;
+
+const actionBtn = document.getElementById('fg3d-action-btn');
+const resultEl = document.getElementById('fg3d-result');
+
+function outcomeText(outcome) {
+  switch (outcome) {
+    case 'made': return 'MADE!';
+    case 'short': return 'NO GOOD — SHORT';
+    case 'wide-left': return 'NO GOOD — WIDE LEFT';
+    case 'wide-right': return 'NO GOOD — WIDE RIGHT';
+    default: return '';
+  }
+}
+
+function startPowerPhase() {
+  kickPhase = 'power';
+  powerStartedAt = Date.now();
+  if (resultEl) resultEl.textContent = '';
+  rebuildPowerArc(Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE));
+  rebuildDirectionArrow();
+  powerArcMarker.visible = true;
+  powerArcMarker.material.color.set(0xffffff);
+  powerArcMarker.material.emissive.set(0xffffff);
+  directionArrow.visible = false;
+  if (actionBtn) { actionBtn.textContent = 'Lock Power!'; actionBtn.disabled = false; }
+  if (distanceSlider) distanceSlider.disabled = false;
+}
+
+function lockPower() {
+  const distanceYards = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
+  lockedPowerT = currentPowerT;
+  hadPowerResult = Math.abs(lockedPowerT - 0.5) <= powerSweetHalfFor(distanceYards);
+  const color = hadPowerResult ? 0x4ade80 : 0xef4444;
+  powerArcMarker.material.color.set(color);
+  powerArcMarker.material.emissive.set(color);
+
+  kickPhase = 'direction';
+  directionStartedAt = Date.now();
+  directionArrow.visible = true;
+  if (actionBtn) actionBtn.textContent = 'Lock Direction!';
+  if (distanceSlider) distanceSlider.disabled = true;
+}
+
+function lockDirection() {
+  const distanceYards = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
+  const offset = currentDirectionT - 0.5;
+  const tolerance = accuracyToleranceFor(distanceYards);
+
+  let outcome;
+  if (!hadPowerResult) outcome = 'short';
+  else if (Math.abs(offset) > tolerance) outcome = offset > 0 ? 'wide-right' : 'wide-left';
+  else outcome = 'made';
+
+  kickPhase = 'flight';
+  if (actionBtn) actionBtn.disabled = true;
+  performKick(outcome).then(() => startPowerPhase());
+}
+
+if (actionBtn) {
+  actionBtn.addEventListener('click', () => {
+    if (kickPhase === 'power') lockPower();
+    else if (kickPhase === 'direction') lockDirection();
+  });
+}
 
 // ---- Kick animation ---------------------------------------------------------
 // A small hand-rolled tween/easing kit (Three.js object properties aren't
@@ -656,13 +824,9 @@ function resetPose() {
 const END_CAM_POS = new THREE.Vector3(0, 3, GOAL_LINE_Z - 10);
 const END_CAM_TARGET = new THREE.Vector3(0, 3, GOAL_LINE_Z);
 
-const kickBtn = document.getElementById('fg3d-kick-btn');
-const outcomeSelect = document.getElementById('fg3d-outcome');
-
-async function performKick() {
-  const outcome = outcomeSelect ? outcomeSelect.value : 'made';
+async function performKick(outcome) {
   const distanceYards = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
-  [kickBtn, outcomeSelect, distanceSlider].forEach((el) => { if (el) el.disabled = true; });
+  if (distanceSlider) distanceSlider.disabled = true;
   controls.enabled = false; // hands-off for the whole sequence; resetPose() gives it back
 
   const ballStartZ = ball.position.z;
@@ -731,13 +895,13 @@ async function performKick() {
   });
 
   await flightAndFollowUp;
+  if (resultEl) {
+    resultEl.textContent = outcomeText(outcome);
+    resultEl.style.color = outcome === 'made' ? '#4ade80' : '#ef4444';
+  }
   await wait(700);
   resetPose();
-  [kickBtn, outcomeSelect, distanceSlider].forEach((el) => { if (el) el.disabled = false; });
-}
-
-if (kickBtn) {
-  kickBtn.addEventListener('click', () => { performKick(); });
+  if (distanceSlider) distanceSlider.disabled = false;
 }
 
 // ---- Resize handling --------------------------------------------------------
@@ -761,6 +925,19 @@ let cameraLocked = false;
 function animate() {
   requestAnimationFrame(animate);
   if (!cameraLocked) controls.update();
+
+  if (kickPhase === 'power' && powerArcCurve) {
+    const elapsed = Date.now() - powerStartedAt;
+    currentPowerT = trianglePosition(elapsed, POWER_PERIOD_MS);
+    powerArcMarker.position.copy(powerArcCurve.getPointAt(currentPowerT));
+  } else if (kickPhase === 'direction' && directionArrow) {
+    const elapsed = Date.now() - directionStartedAt;
+    currentDirectionT = trianglePosition(elapsed, DIRECTION_PERIOD_MS);
+    const angle = lerp(-MAX_DIRECTION_ANGLE, MAX_DIRECTION_ANGLE, currentDirectionT);
+    directionArrow.setDirection(new THREE.Vector3(Math.sin(angle), 0, -Math.cos(angle)).normalize());
+  }
+
   renderer.render(scene, camera);
 }
 animate();
+startPowerPhase();

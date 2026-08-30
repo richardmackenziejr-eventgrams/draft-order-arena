@@ -34,6 +34,7 @@
     gap: 12px;
     flex-wrap: wrap;
   }
+  #fg3d-result { font-weight: bold; font-size: 1.1em; margin: 0; }
 </style>
 </head>
 <body>
@@ -42,7 +43,7 @@
 </header>
 <main>
   <h1>Field Goal Kick — 3D Prototype</h1>
-  <p class="lead">A visual-only test of a Three.js version of the kicking scene — not wired up to real gameplay yet. Drag to look around.</p>
+  <p class="lead">A Three.js version of the kicking scene — click to lock the power arc, then the direction arrow, to actually attempt the kick. Drag to look around.</p>
   <div class="panel">
     <div id="fg3d-canvas-wrap"></div>
     <p class="fg3d-hint">Drag to orbit &middot; scroll to zoom</p>
@@ -51,14 +52,8 @@
       <label id="fg3d-distance-label" for="fg3d-distance">40 yd Field Goal</label>
     </div>
     <div class="fg3d-kick-row">
-      <label for="fg3d-outcome">Result:</label>
-      <select id="fg3d-outcome">
-        <option value="made">Made</option>
-        <option value="short">Short</option>
-        <option value="wide-left">Wide left</option>
-        <option value="wide-right">Wide right</option>
-      </select>
-      <button id="fg3d-kick-btn" class="btn">Kick!</button>
+      <button id="fg3d-action-btn" class="btn">Lock Power!</button>
+      <p id="fg3d-result"></p>
     </div>
   </div>
   <p><a class="btn secondary" href="/">Back</a></p>
