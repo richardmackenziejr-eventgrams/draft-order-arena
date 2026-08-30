@@ -149,19 +149,28 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a }) {
   helmet.castShadow = true;
   g.add(helmet);
 
+  // Legs hang from a hip pivot rather than being placed directly, so a kick
+  // animation can rotate the whole leg like a hinge instead of just
+  // translating a fixed capsule.
+  const HIP_Y = 0.98;
+  const legPivots = {};
   [-1, 1].forEach((side) => {
     const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 4, 8), jerseyMat);
     arm.position.set(side * 0.4, 1.35, 0);
     arm.castShadow = true;
     g.add(arm);
 
+    const legPivot = new THREE.Group();
+    legPivot.position.set(side * 0.16, HIP_Y, 0);
     const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.65, 4, 8), pantsMat);
-    leg.position.set(side * 0.16, 0.55, 0);
+    leg.position.y = -(HIP_Y - 0.55); // hang down to the original resting position
     leg.castShadow = true;
-    leg.name = side > 0 ? 'legRight' : 'legLeft';
-    g.add(leg);
+    legPivot.add(leg);
+    g.add(legPivot);
+    legPivots[side > 0 ? 'right' : 'left'] = legPivot;
   });
 
+  g.userData.legPivots = legPivots;
   return g;
 }
 
@@ -215,11 +224,19 @@ function buildReferee() {
   brim.position.set(0, 1.87, 0.11);
   g.add(brim);
 
+  // Arms hang from a shoulder pivot so a signal animation can swing the
+  // whole arm rather than just repositioning a fixed capsule.
+  const SHOULDER_Y = 1.62;
+  const armPivots = {};
   [-1, 1].forEach((side) => {
+    const armPivot = new THREE.Group();
+    armPivot.position.set(side * 0.4, SHOULDER_Y, 0);
     const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 4, 8), shirtMat);
-    arm.position.set(side * 0.4, 1.35, 0);
+    arm.position.y = -(SHOULDER_Y - 1.35); // hang down to the original resting position
     arm.castShadow = true;
-    g.add(arm);
+    armPivot.add(arm);
+    g.add(armPivot);
+    armPivots[side > 0 ? 'right' : 'left'] = armPivot;
 
     const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.65, 4, 8), pantsMat);
     leg.position.set(side * 0.16, 0.55, 0);
@@ -227,14 +244,16 @@ function buildReferee() {
     g.add(leg);
   });
 
+  g.userData.armPivots = armPivots;
   return g;
 }
 
-[-1, 1].forEach((side) => {
+const referees = [-1, 1].map((side) => {
   const ref = buildReferee();
   ref.position.set(side * (UPRIGHT_HALF_SPAN + 1.6), 0, GOAL_LINE_Z + 3);
   ref.rotation.y = Math.PI; // face back toward the kicker
   scene.add(ref);
+  return ref;
 });
 
 // ---- Ball on tee -----------------------------------------------------------
@@ -405,6 +424,184 @@ if (distanceSlider) {
 }
 if (distanceLabel) distanceLabel.textContent = `${DEFAULT_DISTANCE} yd Field Goal`;
 updateDistance(DEFAULT_DISTANCE);
+
+// ---- Kick animation ---------------------------------------------------------
+// A small hand-rolled tween/easing kit (Three.js object properties aren't
+// something the Web Animations API can drive, so this plays the same role
+// that WAAPI does for the 2D scene's CSS/SVG animations). Every animated
+// pose is written as a pure function of a normalized progress value `u` in
+// [0,1], so each phase is easy to reason about — and easy to sanity-check by
+// calling it directly with a specific `u` — independent of how it's driven
+// over real time.
+function lerp(a, b, t) { return a + (b - a) * t; }
+function easeInQuad(t) { return t * t; }
+function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
+
+// Quadratic Bezier through three 3D points, evaluated at t in [0,1].
+function bezier2(p0, p1, p2, t) {
+  const u = 1 - t;
+  return new THREE.Vector3(
+    u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+    u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y,
+    u * u * p0.z + 2 * u * t * p1.z + t * t * p2.z
+  );
+}
+
+// Runs onUpdate(u) once per frame for `duration` ms, u sweeping 0 -> 1.
+function tween(duration, onUpdate) {
+  return new Promise((resolve) => {
+    const start = performance.now();
+    function frame(now) {
+      const u = Math.min(1, (now - start) / duration);
+      onUpdate(u);
+      if (u < 1) requestAnimationFrame(frame);
+      else resolve();
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// The ball's flight path as a 3-point Bezier (start / apex / end), sized to
+// the kick's distance so the peak is always comfortably above the crossbar
+// (3.05) at the moment the ball actually crosses the goalpost's plane — see
+// the accompanying design notes: with the apex's z held at the midpoint of
+// start/end z, z(t) is exactly linear, so the fraction of the flight at
+// which the ball reaches the goalpost is easy to solve for and check against.
+function ballFlightFor(outcome, startPos, distanceYards) {
+  const goalpostZ = GOAL_LINE_Z - 2;
+  const peakHeight = 5 + distanceYards * 0.1;
+
+  if (outcome === 'short') {
+    const travel = (startPos.z - goalpostZ) * 0.45; // falls well short of the posts
+    const endZ = startPos.z - travel;
+    return {
+      p0: startPos.clone(),
+      p1: new THREE.Vector3(startPos.x * 0.5, peakHeight * 0.45, (startPos.z + endZ) / 2),
+      p2: new THREE.Vector3(startPos.x * 0.3, 0.15, endZ),
+      duration: 650 + distanceYards * 4,
+    };
+  }
+
+  const endZ = goalpostZ - 12; // carries on well past the posts before we reset
+  const endX = outcome === 'wide-left' ? -(UPRIGHT_HALF_SPAN + 2.2)
+    : outcome === 'wide-right' ? (UPRIGHT_HALF_SPAN + 2.2)
+    : 0; // made — straight through the middle
+  return {
+    p0: startPos.clone(),
+    p1: new THREE.Vector3(endX / 2, peakHeight, (startPos.z + endZ) / 2),
+    p2: new THREE.Vector3(endX, 1.2, endZ),
+    duration: 900 + distanceYards * 6,
+  };
+}
+
+// Referee signal poses: both arms straight up overhead for a made kick, or
+// a cross-then-spread-wide wave for a miss — echoing the 2D scene's
+// 2-keyframe "straight up" vs. 3-keyframe "cross then out" signals.
+function animateRefereeSignal(made) {
+  const promises = referees.map((ref) => {
+    const { left, right } = ref.userData.armPivots;
+    if (made) {
+      return tween(450, (u) => {
+        const t = easeOutQuad(u);
+        left.rotation.x = lerp(0, -Math.PI, t);
+        right.rotation.x = lerp(0, -Math.PI, t);
+      });
+    }
+    return tween(600, (u) => {
+      if (u < 0.5) {
+        const t = easeOutQuad(u / 0.5);
+        left.rotation.x = lerp(0, -1.3, t);
+        right.rotation.x = lerp(0, -1.3, t);
+        left.rotation.z = lerp(0, 0.35, t);
+        right.rotation.z = lerp(0, -0.35, t);
+      } else {
+        const t = easeOutQuad((u - 0.5) / 0.5);
+        left.rotation.z = lerp(0.35, -1.4, t);
+        right.rotation.z = lerp(-0.35, 1.4, t);
+      }
+    });
+  });
+  return Promise.all(promises);
+}
+
+function resetPose() {
+  const d = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
+  updateDistance(d);
+  kicker.position.y = 0;
+  kicker.userData.legPivots.left.rotation.x = 0;
+  kicker.userData.legPivots.right.rotation.x = 0;
+  tee.visible = true;
+  ball.visible = true;
+  ball.scale.set(1, 1, 1.5);
+  ball.rotation.set(Math.PI / 2, 0, 0);
+  referees.forEach((ref) => {
+    ref.userData.armPivots.left.rotation.set(0, 0, 0);
+    ref.userData.armPivots.right.rotation.set(0, 0, 0);
+  });
+}
+
+const kickBtn = document.getElementById('fg3d-kick-btn');
+const outcomeSelect = document.getElementById('fg3d-outcome');
+
+async function performKick() {
+  const outcome = outcomeSelect ? outcomeSelect.value : 'made';
+  const distanceYards = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
+  [kickBtn, outcomeSelect, distanceSlider].forEach((el) => { if (el) el.disabled = true; });
+
+  const ballStartZ = ball.position.z;
+  const startPos = kicker.position.clone();
+  const plantPos = { x: -0.28, z: ballStartZ + 0.1 };
+
+  // Phase 1: jog up to the ball, alternating a stride swing on each leg.
+  await tween(600, (u) => {
+    const t = easeInQuad(u); // accelerate into the approach, like a real run-up
+    kicker.position.x = lerp(startPos.x, plantPos.x, t);
+    kicker.position.z = lerp(startPos.z, plantPos.z, t);
+    kicker.position.y = Math.abs(Math.sin(u * Math.PI * 3)) * 0.05;
+    const stride = Math.sin(u * Math.PI * 6);
+    kicker.userData.legPivots.left.rotation.x = stride * 0.5;
+    kicker.userData.legPivots.right.rotation.x = -stride * 0.5;
+  });
+  kicker.position.y = 0;
+
+  // Phase 2: plant the left leg, cock the right leg back, then swing it
+  // through. Contact happens partway through the forward swing.
+  let contactFired = false;
+  let flightAndFollowUp = Promise.resolve();
+  await tween(260, (u) => {
+    kicker.userData.legPivots.left.rotation.x = -0.15;
+    const swing = u < 0.35
+      ? lerp(0, -0.7, easeOutQuad(u / 0.35))
+      : lerp(-0.7, 1.1, easeOutQuad((u - 0.35) / 0.65));
+    kicker.userData.legPivots.right.rotation.x = swing;
+
+    if (!contactFired && u >= 0.55) {
+      contactFired = true;
+      tee.visible = false;
+      const flight = ballFlightFor(outcome, new THREE.Vector3(ball.position.x, ball.position.y, ballStartZ), distanceYards);
+      const ballFlight = tween(flight.duration, (fu) => {
+        const p = bezier2(flight.p0, flight.p1, flight.p2, fu);
+        ball.position.copy(p);
+        ball.rotation.z += 0.5; // spiral spin, purely cosmetic
+      });
+      const refSignal = wait(flight.duration * 0.6).then(() => animateRefereeSignal(outcome === 'made'));
+      flightAndFollowUp = Promise.all([ballFlight, refSignal]);
+    }
+  });
+
+  await flightAndFollowUp;
+  await wait(700);
+  resetPose();
+  [kickBtn, outcomeSelect, distanceSlider].forEach((el) => { if (el) el.disabled = false; });
+}
+
+if (kickBtn) {
+  kickBtn.addEventListener('click', () => { performKick(); });
+}
 
 // ---- Resize handling --------------------------------------------------------
 function resize() {

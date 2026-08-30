@@ -26,6 +26,14 @@
   }
   .fg3d-distance-row input[type="range"] { flex: 1; }
   .fg3d-distance-row label { white-space: nowrap; min-width: 9em; }
+  .fg3d-kick-row {
+    max-width: 960px;
+    margin: 12px auto 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
 </style>
 </head>
 <body>
@@ -41,6 +49,16 @@
     <div class="fg3d-distance-row">
       <input type="range" id="fg3d-distance" min="25" max="55" value="40" />
       <label id="fg3d-distance-label" for="fg3d-distance">40 yd Field Goal</label>
+    </div>
+    <div class="fg3d-kick-row">
+      <label for="fg3d-outcome">Result:</label>
+      <select id="fg3d-outcome">
+        <option value="made">Made</option>
+        <option value="short">Short</option>
+        <option value="wide-left">Wide left</option>
+        <option value="wide-right">Wide right</option>
+      </select>
+      <button id="fg3d-kick-btn" class="btn">Kick!</button>
     </div>
   </div>
   <p><a class="btn secondary" href="/">Back</a></p>
