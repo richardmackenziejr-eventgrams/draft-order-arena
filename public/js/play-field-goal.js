@@ -850,7 +850,14 @@ let directionPeriodMs = 1000;
 let currentPowerStartedAt = null;
 let currentDirectionStartedAt = null;
 
-let kickPhase = 'power'; // 'power' | 'direction' | 'flight' | 'result'
+// 'power-locking'/'direction-locking' are transient: set the instant the
+// action button is clicked, for exactly as long as the power-stop/
+// direction-stop request is in flight, so the render loop's live-animation
+// branches below (which key off 'power'/'direction') stop touching the
+// marker/arrow — freezing it at the snapped position instead of it sliding
+// on for the whole round-trip and landing wherever real time moved on to
+// once the response came back.
+let kickPhase = 'power'; // 'power' | 'power-locking' | 'direction' | 'direction-locking' | 'flight' | 'result'
 let currentPowerT = 0.5;
 let currentDirectionT = 0.5;
 
@@ -988,18 +995,29 @@ actionBtn.addEventListener('click', async () => {
     // now, instead of leaving it wherever the last animation frame (up to
     // ~16ms stale) happened to land — the server will confirm this same
     // spot once it responds, so there's nothing left to visibly "jump" to
-    // afterward.
+    // afterward. Critically, this ALSO has to stop the render loop's power
+    // branch from touching the marker again on the very next frame (it
+    // recalculates position from real elapsed time every frame purely off
+    // `kickPhase === 'power'`) — otherwise the marker kept sliding for the
+    // whole round-trip to the server and only stopped once the response
+    // came back, landing wherever real time had moved on to by then rather
+    // than where it was actually clicked. Moving off 'power' immediately
+    // freezes it at the snapped position for the remainder of the request.
+    kickPhase = 'power-locking';
     updatePowerMarkerPosition(trianglePosition(elapsedMs, powerPeriodMs));
     try {
       const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/power-stop`, { memberId, elapsedMs });
       renderKick(gi); // sets the right phase/button state based on the server's response
     } catch (err) {
       alert(err.message);
+      kickPhase = 'power'; // let the meter resume live so a retry click measures real elapsed time again
       actionBtn.disabled = false;
     }
   } else if (kickPhase === 'direction') {
     const elapsedMs = currentDirectionStartedAt != null ? Date.now() - currentDirectionStartedAt : 0;
     actionBtn.disabled = true;
+    kickPhase = 'direction-locking'; // same freeze, for the same reason, on the direction arrow
+    updateDirectionArrowPosition(trianglePosition(elapsedMs, directionPeriodMs));
     try {
       const { outcome } = await api('POST', `/api/game-instances/${instanceId}/field-goal/direction-stop`, { memberId, elapsedMs });
       kickPhase = 'flight';
@@ -1012,6 +1030,7 @@ actionBtn.addEventListener('click', async () => {
       nextKickBtn.style.display = 'inline-block';
     } catch (err) {
       alert(err.message);
+      kickPhase = 'direction';
       actionBtn.disabled = false;
     }
   }
