@@ -185,10 +185,13 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a }) {
   return g;
 }
 
-// Kicker: blue jersey, to the left of the ball, facing downfield. Position
-// is set by updateDistance() below, once the kick-distance control exists.
+// Kicker: blue jersey, set up well back and to the left of the ball so his
+// run-up reads as a real diagonal approach rather than a near-straight line
+// (real kickers set up several steps back AND to the side). z is set by
+// updateDistance() below, once the kick-distance control exists.
+const KICKER_SIDE_OFFSET = -1.7;
 const kicker = buildFigure({ jersey: 0x2f5fbf, pants: 0xffffff });
-kicker.position.x = -1.1;
+kicker.position.x = KICKER_SIDE_OFFSET;
 scene.add(kicker);
 
 // Referees: proper NFL look — horizontal black/white striped shirt
@@ -398,10 +401,24 @@ scene.add(backStand);
 const MIN_DISTANCE = 25;
 const MAX_DISTANCE = 55;
 const DEFAULT_DISTANCE = 40;
-const UNITS_PER_YARD = 0.85;
+
+// Apparent size is roughly 1/distance, so equal *yardage* steps do NOT read
+// as equal *visual* steps — a straight linear mapping left most of the
+// perceptible "pulling back" concentrated in the 25-40yd stretch, so 40yd
+// already looked close to as far as it gets. This curve keeps every kick
+// under ~40yd clustered close to the goalpost (matching how close a 25-40yd
+// attempt should feel) and saves the dramatic pull-back for the last
+// stretch toward the 55yd max, so the farthest kick unambiguously reads as
+// the farthest view. The two endpoints are unchanged from the old linear
+// mapping (25yd == -28.75, 55yd == -3.25) — only the shape in between does.
+const DISTANCE_CURVE_POWER = 2.4;
+const BALL_Z_AT_MIN_DISTANCE = GOAL_LINE_Z + 2 + MIN_DISTANCE * 0.85;
+const BALL_Z_AT_MAX_DISTANCE = GOAL_LINE_Z + 2 + MAX_DISTANCE * 0.85;
 
 function kickerZFor(distanceYards) {
-  return GOAL_LINE_Z + 2 + distanceYards * UNITS_PER_YARD;
+  const t = (distanceYards - MIN_DISTANCE) / (MAX_DISTANCE - MIN_DISTANCE);
+  const curved = Math.pow(t, DISTANCE_CURVE_POWER);
+  return BALL_Z_AT_MIN_DISTANCE + (BALL_Z_AT_MAX_DISTANCE - BALL_Z_AT_MIN_DISTANCE) * curved;
 }
 
 // A real kicker sets up a couple of steps behind and to the side of the
@@ -419,7 +436,7 @@ function updateDistance(distanceYards) {
   kicker.position.z = kickerZ;
   tee.position.z = ballZ;
   ball.position.z = ballZ;
-  camera.position.set(-2, 3.2, kickerZ + 7);
+  camera.position.set(KICKER_SIDE_OFFSET - 0.9, 3.2, kickerZ + 7);
   controls.target.set(0, 2, GOAL_LINE_Z + 10);
   controls.update();
 }
@@ -544,8 +561,10 @@ function animateRefereeSignal(made) {
 
 function resetPose() {
   const d = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
-  updateDistance(d); // resets ball/tee's z, but not x/y — the flight leaves those wherever it ended
+  updateDistance(d); // resets ball/tee's z, but not x/y — the flight/approach leaves those wherever they ended
+  kicker.position.x = KICKER_SIDE_OFFSET;
   kicker.position.y = 0;
+  kicker.rotation.y = 0;
   kicker.userData.legPivots.left.rotation.x = 0;
   kicker.userData.legPivots.right.rotation.x = 0;
   tee.visible = true;
@@ -570,19 +589,25 @@ async function performKick() {
 
   const ballStartZ = ball.position.z;
   const startPos = kicker.position.clone();
-  const plantPos = { x: -0.28, z: ballStartZ + 0.1 };
+  const plantPos = { x: -0.22, z: ballStartZ + 0.1 };
 
-  // Phase 1: jog up to the ball, alternating a stride swing on each leg.
+  // Phase 1: jog up to the ball at a forward/right angle (not straight
+  // ahead) — both the path itself (a real diagonal, not just a small
+  // sideways drift) and the body's own facing angle, which straightens out
+  // to square up with the ball right as he arrives.
+  const approachAngle = -0.45; // angled toward the ball at the start of the run
   await tween(600, (u) => {
     const t = easeInQuad(u); // accelerate into the approach, like a real run-up
     kicker.position.x = lerp(startPos.x, plantPos.x, t);
     kicker.position.z = lerp(startPos.z, plantPos.z, t);
     kicker.position.y = Math.abs(Math.sin(u * Math.PI * 3)) * 0.05;
+    kicker.rotation.y = lerp(approachAngle, 0, easeOutQuad(u));
     const stride = Math.sin(u * Math.PI * 6);
     kicker.userData.legPivots.left.rotation.x = stride * 0.5;
     kicker.userData.legPivots.right.rotation.x = -stride * 0.5;
   });
   kicker.position.y = 0;
+  kicker.rotation.y = 0;
 
   // Phase 2: plant the left leg, cock the right leg back, then swing it
   // through. Contact happens partway through the forward swing.
