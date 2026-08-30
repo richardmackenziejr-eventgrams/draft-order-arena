@@ -142,11 +142,11 @@ function jerseyTextTexture(jerseyColor, number, name) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   if (name) {
-    ctx.font = 'bold 20px sans-serif';
-    ctx.fillText(name, w / 2, 24);
+    ctx.font = 'bold 26px sans-serif';
+    ctx.fillText(name, w / 2, 26);
   }
-  ctx.font = `bold ${name ? 76 : 92}px sans-serif`;
-  ctx.fillText(String(number), w / 2, name ? h / 2 + 18 : h / 2);
+  ctx.font = `bold ${name ? 92 : 105}px sans-serif`;
+  ctx.fillText(String(number), w / 2, name ? h / 2 + 20 : h / 2);
   const tex = new THREE.CanvasTexture(canvas);
   return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
 }
@@ -180,8 +180,12 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a, helmet = jersey, number =
   head.castShadow = true;
   g.add(head);
 
-  const helmetMesh = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.6), helmetMat);
-  helmetMesh.position.y = 1.8; // lower than the sphere's own radius would suggest, so it doesn't leave a gap of bare "neck" above the torso
+  // Slightly bigger than the head sphere it covers (0.22) so it fully
+  // encloses the crown with a little clearance, positioned so a small
+  // sliver of skin still shows at the neck above the torso rather than
+  // either a bald patch poking through the top or no neck at all.
+  const helmetMesh = new THREE.Mesh(new THREE.SphereGeometry(0.26, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.6), helmetMat);
+  helmetMesh.position.y = 1.86;
   helmetMesh.castShadow = true;
   g.add(helmetMesh);
 
