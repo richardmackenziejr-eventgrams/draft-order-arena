@@ -171,10 +171,12 @@ const kicker = buildFigure({ jersey: 0x2f5fbf, pants: 0xffffff });
 kicker.position.x = -1.1;
 scene.add(kicker);
 
-// Referees: black/white stripes, positioned just this side of the goalpost
-// (real refs hold the goal line regardless of kick distance, so these don't
-// move with the slider).
-function stripedJerseyMat() {
+// Referees: proper NFL look — horizontal black/white striped shirt
+// (including sleeves), solid black pants/knickers, and a white cap rather
+// than the kicker's football helmet. Positioned just this side of the
+// goalpost (real refs hold the goal line regardless of kick distance, so
+// these don't move with the slider).
+function stripedShirtMat() {
   const canvas = document.createElement('canvas');
   canvas.width = 32;
   canvas.height = 32;
@@ -187,13 +189,49 @@ function stripedJerseyMat() {
   return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
 }
 
-[-1, 1].forEach((side) => {
-  const ref = buildFigure({ jersey: 0x222222, pants: 0x222222 });
-  ref.traverse((child) => {
-    if (child.isMesh && child.geometry.type === 'BoxGeometry') {
-      child.material = stripedJerseyMat();
-    }
+function buildReferee() {
+  const g = new THREE.Group();
+  const shirtMat = stripedShirtMat();
+  const pantsMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xe8b98a, roughness: 0.6 });
+  const capMat = new THREE.MeshStandardMaterial({ color: 0xf7f7f7, roughness: 0.5 });
+
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.7, 0.35), shirtMat);
+  torso.position.y = 1.35;
+  torso.castShadow = true;
+  g.add(torso);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 16), skinMat);
+  head.position.y = 1.85;
+  head.castShadow = true;
+  g.add(head);
+
+  // A plain white cap — a dome plus a small brim — instead of a helmet.
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.5), capMat);
+  cap.position.y = 1.93;
+  cap.castShadow = true;
+  g.add(cap);
+  const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.03, 16), capMat);
+  brim.position.set(0, 1.87, 0.11);
+  g.add(brim);
+
+  [-1, 1].forEach((side) => {
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 4, 8), shirtMat);
+    arm.position.set(side * 0.4, 1.35, 0);
+    arm.castShadow = true;
+    g.add(arm);
+
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.65, 4, 8), pantsMat);
+    leg.position.set(side * 0.16, 0.55, 0);
+    leg.castShadow = true;
+    g.add(leg);
   });
+
+  return g;
+}
+
+[-1, 1].forEach((side) => {
+  const ref = buildReferee();
   ref.position.set(side * (UPRIGHT_HALF_SPAN + 1.6), 0, GOAL_LINE_Z + 3);
   ref.rotation.y = Math.PI; // face back toward the kicker
   scene.add(ref);
@@ -333,16 +371,22 @@ function kickerZFor(distanceYards) {
   return GOAL_LINE_Z + 2 + distanceYards * UNITS_PER_YARD;
 }
 
+// A real kicker sets up a couple of steps behind and to the side of the
+// ball, then approaches forward into it — not standing right at the same
+// depth as the ball, which reads as if he's in front of it instead.
+const KICKER_SETUP_OFFSET = 1.6;
+
 // Moves the kicker/ball back for longer kicks and pulls the camera back
 // along with them (like a broadcast "kick cam" riding behind the kicker),
 // while always framing toward the goalpost — so the goalpost reads as
 // farther away on a long kick instead of just leaving the kicker off-screen.
 function updateDistance(distanceYards) {
-  const z = kickerZFor(distanceYards);
-  kicker.position.z = z;
-  tee.position.z = z;
-  ball.position.z = z;
-  camera.position.set(-2, 3.2, z + 7);
+  const ballZ = kickerZFor(distanceYards);
+  const kickerZ = ballZ + KICKER_SETUP_OFFSET;
+  kicker.position.z = kickerZ;
+  tee.position.z = ballZ;
+  ball.position.z = ballZ;
+  camera.position.set(-2, 3.2, kickerZ + 7);
   controls.target.set(0, 2, GOAL_LINE_Z + 10);
   controls.update();
 }
