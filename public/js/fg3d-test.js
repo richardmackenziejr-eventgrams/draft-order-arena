@@ -673,10 +673,22 @@ scene.add(directionArrow);
 // Slides the arrow to position t along the curve (0 = left end, 1 = right
 // end) and banks it to match the curve's tangent there, like a real gauge
 // needle following a bowed track rather than just teleporting along it.
+// How far the arrow leans from straight-up at the two extremes (t=0/t=1) —
+// a direct, hand-tuned mapping rather than the curve's actual geometric
+// tangent/normal, whose slope on this shallow a bow only works out to
+// about +-15 degrees: too subtle to clearly read as "pointing left" vs
+// "pointing right." This exaggerates the same idea for a clearer needle.
+const DIRECTION_ARROW_MAX_TILT = 0.65; // radians, ~37 degrees
+
 function updateDirectionArrowPosition(t) {
   directionArrow.position.copy(directionCurve.getPointAt(t));
-  const tangent = directionCurve.getTangentAt(t);
-  directionArrow.rotation.z = Math.atan2(tangent.y, tangent.x);
+  // The curve runs left-to-right, so its own tangent always points
+  // rightward — using it directly made the arrow always point right no
+  // matter where it sat. What should show instead is the aim itself:
+  // straight up at center, leaning left/right toward whichever end it's
+  // nearer.
+  const tilt = (t - 0.5) * 2 * DIRECTION_ARROW_MAX_TILT;
+  directionArrow.rotation.z = Math.PI / 2 - tilt;
 }
 
 let kickPhase = 'power'; // 'power' | 'direction' | 'flight'
