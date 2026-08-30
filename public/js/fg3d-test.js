@@ -739,7 +739,7 @@ function clamp01(x) {
 // jersey numbers, just a plain readout instead of a 3D object with its own
 // shape.
 function windLabelTexture(mph, dir) {
-  const w = 200, h = 72;
+  const w = 260, h = 94;
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
@@ -749,33 +749,66 @@ function windLabelTexture(mph, dir) {
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = 'bold 34px sans-serif';
+  ctx.font = 'bold 44px sans-serif';
   ctx.fillText(dir === 'calm' ? 'CALM' : `${mph} MPH`, w / 2, h / 2);
   const tex = new THREE.CanvasTexture(canvas);
   return new THREE.MeshBasicMaterial({ map: tex, transparent: true });
 }
 
+// A chunky custom arrow (cylinder shaft + cone head) rather than
+// THREE.ArrowHelper — ArrowHelper's shaft is a hairline whose thickness
+// isn't really adjustable (a WebGL line-width limitation), which reads as
+// "thin" no matter how long it's made. Built pointing along local +X;
+// flipped 180 degrees to point left.
+function buildWindArrowMesh() {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.3 });
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.95, 12), mat);
+  shaft.rotation.z = Math.PI / 2;
+  shaft.position.x = -0.18;
+  g.add(shaft);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.5, 14), mat);
+  head.rotation.z = -Math.PI / 2;
+  head.position.x = 0.5;
+  g.add(head);
+  return g;
+}
+
 let windArrow = null;
 let windLabel = null;
 
-// Rebuilds the wind indicator (arrow + mph label) around the ball's current
-// position — upper-right of the scene, clear of the power bar (left) and
-// direction track (low, centered). Called once per new attempt, right after
-// rollWind(), and needs the ball already positioned for this kick's
-// distance, same as the other meters.
+// Rebuilds the wind indicator (arrow + mph label) high in the open sky
+// above the stadium, near the goalpost — a fixed spot regardless of kick
+// distance, unlike the other meters. Called once per new attempt, right
+// after rollWind() (and again if the distance slider moves, which is a
+// harmless no-op for this one specifically since its position doesn't
+// depend on distance — kept for consistency with the other meters' rebuild
+// calls).
 function rebuildWindIndicator() {
-  if (windArrow) { scene.remove(windArrow); windArrow = null; }
+  if (windArrow) { scene.remove(windArrow); }
   if (windLabel) { scene.remove(windLabel); windLabel.geometry.dispose(); windLabel.material.map.dispose(); windLabel.material.dispose(); }
 
-  const pos = new THREE.Vector3(ball.position.x + 1.9, ball.position.y + 2.7, ball.position.z);
+  // Positioned relative to the *camera's own* current position rather than
+  // a fixed world spot — the camera's z moves a lot across the kick
+  // distance range (from well behind the kicker on a short attempt to
+  // almost even with him on a long one), so a fixed world position either
+  // ended up behind the camera entirely at some distances or safely in
+  // front but too small at others. This offset (18 units ahead, 6 above
+  // camera height) was picked by directly checking its projected screen
+  // position at 25/40/55yd — comfortably inside the frame with margin at
+  // all three, instead of guessing from screenshots.
+  const pos = new THREE.Vector3(0, camera.position.y + 6, camera.position.z - 18);
   if (windDir !== 'calm') {
-    const dir = windDir === 'right' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(-1, 0, 0);
-    windArrow = new THREE.ArrowHelper(dir, pos, 0.8, 0xffffff, 0.28, 0.18);
+    windArrow = buildWindArrowMesh();
+    windArrow.position.copy(pos);
+    if (windDir === 'left') windArrow.rotation.z = Math.PI; // built pointing right by default
     scene.add(windArrow);
+  } else {
+    windArrow = null;
   }
 
-  windLabel = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.36), windLabelTexture(windMph, windDir));
-  windLabel.position.set(pos.x, pos.y - 0.5, pos.z);
+  windLabel = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.54), windLabelTexture(windMph, windDir));
+  windLabel.position.set(pos.x, pos.y - 0.75, pos.z);
   scene.add(windLabel);
 }
 
