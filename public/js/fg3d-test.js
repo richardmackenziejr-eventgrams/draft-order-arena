@@ -710,12 +710,20 @@ function updateDirectionArrowPosition(t) {
 }
 
 // ---- Wind ---------------------------------------------------------------
-// Same idea as the 2D game: a flat push on the actual landing spot, rolled
-// fresh for every attempt, independent of distance — reading the wind and
-// compensating your aim is the whole point, not something the distance
-// changes the difficulty of.
+// Same base idea as the 2D game: a push on the actual landing spot, rolled
+// fresh for every attempt. Unlike the 2D game, the push itself now also
+// scales up with distance — a ball in the air longer has more time for the
+// wind to act on it, so a long kick should get pushed farther off-line by
+// the same wind than a short one. This compounds with something that was
+// already true even without this: the direction tolerance itself
+// (accuracyToleranceFor) already narrows a lot with distance (0.22 at 25yd
+// down to 0.05 at 55yd), so the same absolute push already ate up a much
+// bigger fraction of the target on a long kick — this makes the raw push
+// bigger too, not just relatively more punishing.
 const MAX_WIND_MPH = 15;
-const WIND_MAX_SHIFT = 0.15; // how far max wind pushes the landing spot, in the same 0..1 space as direction offset
+const WIND_MAX_SHIFT = 0.15; // how far max wind pushes the landing spot at the *shortest* distance, in the same 0..1 space as direction offset
+const WIND_DISTANCE_SCALE_MIN = 0.7; // multiplier on the push at 25yd
+const WIND_DISTANCE_SCALE_MAX = 1.4; // multiplier on the push at 55yd
 
 let windMph = 0;
 let windDir = 'calm'; // 'calm' | 'left' | 'right'
@@ -725,10 +733,12 @@ function rollWind() {
   windDir = windMph === 0 ? 'calm' : (Math.random() < 0.5 ? 'left' : 'right');
 }
 
-function windDriftFor() {
+function windDriftFor(distanceYards) {
   if (windDir === 'calm') return 0;
   const sign = windDir === 'right' ? 1 : -1;
-  return sign * (windMph / MAX_WIND_MPH) * WIND_MAX_SHIFT;
+  const t = clamp01((distanceYards - MIN_DISTANCE) / (MAX_DISTANCE - MIN_DISTANCE));
+  const distanceScale = WIND_DISTANCE_SCALE_MIN + t * (WIND_DISTANCE_SCALE_MAX - WIND_DISTANCE_SCALE_MIN);
+  return sign * (windMph / MAX_WIND_MPH) * WIND_MAX_SHIFT * distanceScale;
 }
 
 function clamp01(x) {
@@ -840,10 +850,70 @@ function outcomeText(outcome) {
   }
 }
 
+// A "GOOD!" / "NO GOOD" popup card hanging in the goalpost's opening. Two
+// single-sided planes back to back rather than one DoubleSide plane — a
+// DoubleSide material shows the same texture on both faces unmirrored,
+// which reads backwards from whichever side the UVs weren't drawn for.
+// Needs to read correctly from both the kick cam (Short stays there,
+// looking at the front of the post) and the end-zone cam (everything
+// else, looking at the back of it after following the ball there).
+function resultPopupTexture(text, color) {
+  const w = 640, h = 260;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(8, 16, 12, 0.85)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 12;
+  ctx.strokeRect(6, 6, w - 12, h - 12);
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 110px sans-serif';
+  ctx.fillText(text, w / 2, h / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  return new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+}
+
+let resultPopup = null;
+
+function showResultPopup(outcome) {
+  hideResultPopup();
+  const made = outcome === 'made';
+  const text = made ? 'GOOD!' : 'NO GOOD';
+  const color = made ? '#4ade80' : '#ef4444';
+  const geo = new THREE.PlaneGeometry(4.6, 1.9);
+
+  const front = new THREE.Mesh(geo, resultPopupTexture(text, color));
+  front.position.set(0, 5, GOAL_LINE_Z - 2 + 0.02); // faces +z, toward the kick cam / kicker side
+
+  const back = new THREE.Mesh(geo, resultPopupTexture(text, color));
+  back.position.set(0, 5, GOAL_LINE_Z - 2 - 0.02);
+  back.rotation.y = Math.PI; // faces -z, toward the end-zone cam
+
+  resultPopup = new THREE.Group();
+  resultPopup.add(front, back);
+  scene.add(resultPopup);
+}
+
+function hideResultPopup() {
+  if (!resultPopup) return;
+  scene.remove(resultPopup);
+  resultPopup.children.forEach((mesh) => {
+    mesh.material.map.dispose();
+    mesh.material.dispose();
+  });
+  resultPopup.children[0].geometry.dispose(); // shared between both meshes
+  resultPopup = null;
+}
+
 function startPowerPhase() {
   kickPhase = 'power';
   powerStartedAt = Date.now();
   if (resultEl) resultEl.textContent = '';
+  hideResultPopup();
   rebuildPowerMeter(Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE));
   rebuildDirectionMeter();
   rollWind();
@@ -889,7 +959,7 @@ function lockDirection() {
   // Wind pushes the actual landing spot away from wherever you aimed — all
   // the accuracy checks below (near-miss save included) judge the ball's
   // real landing point, not just the raw click, same as the 2D game.
-  const offset = clamp01(currentDirectionT + windDriftFor()) - 0.5;
+  const offset = clamp01(currentDirectionT + windDriftFor(distanceYards)) - 0.5;
   const tolerance = accuracyToleranceFor(distanceYards);
   const sweetHalf = powerSweetHalfFor(distanceYards);
 
@@ -1137,7 +1207,8 @@ async function performKick(outcome) {
     resultEl.textContent = outcomeText(outcome);
     resultEl.style.color = outcome === 'made' ? '#4ade80' : '#ef4444';
   }
-  await wait(700);
+  showResultPopup(outcome);
+  await wait(2200); // hold on the result — resetting the scene right away didn't leave enough time to actually read it
   resetPose();
   if (distanceSlider) distanceSlider.disabled = false;
 }
