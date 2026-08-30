@@ -630,8 +630,13 @@ function rebuildPowerMeter(distanceYards) {
 
   if (powerSweetMesh) { scene.remove(powerSweetMesh); powerSweetMesh.geometry.dispose(); powerSweetMesh.material.dispose(); }
   const sweetHalf = powerSweetHalfFor(distanceYards);
+  // Full frame width (not just the track's own width) and a good deal
+  // deeper than the track — at the kick cam's angle, a green band sized to
+  // only match the track let a sliver of the track/frame edge show through
+  // on the right side. Spanning the whole frame and sitting further
+  // forward removes any angle that could catch that gap.
   powerSweetMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(POWER_BAR_WIDTH, sweetHalf * 2 * POWER_BAR_HEIGHT, POWER_BAR_DEPTH + 0.05),
+    new THREE.BoxGeometry(POWER_BAR_WIDTH + POWER_FRAME_MARGIN * 2, sweetHalf * 2 * POWER_BAR_HEIGHT, POWER_BAR_DEPTH + 0.16),
     new THREE.MeshStandardMaterial({ color: 0x4ade80, emissive: 0x2f7d54, emissiveIntensity: 0.4, roughness: 0.5 })
   );
   powerSweetMesh.position.copy(powerMeterCenter); // sweet spot sits at the bar's vertical center — position 0.5
