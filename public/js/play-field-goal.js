@@ -1263,16 +1263,32 @@ async function performKick(outcome, distanceYards) {
 }
 
 // ---- Resize handling --------------------------------------------------------
+// #fg3d-canvas-wrap's actual size (width: 100%, aspect-ratio: 16/9) comes
+// entirely from /style.css, not inline HTML, so its layout could in
+// principle not be settled yet the instant this module runs. A
+// ResizeObserver is a strictly more robust way to size the renderer than a
+// single synchronous call regardless: it fires once immediately with
+// whatever the current size is, and again automatically any time the
+// element's actual layout size changes for any reason (a stylesheet
+// finishing load, a font swap reflowing the page, the window resizing).
 function resize() {
   const w = wrap.clientWidth;
   const h = wrap.clientHeight;
+  if (!w || !h) return; // not laid out yet — the observer will fire again once it is
   renderer.setSize(w, h, false);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  // ResizeObserver's own initial callback fires asynchronously (not in this
+  // same script turn), so this may be the first time the renderer has ever
+  // been sized correctly — repaint immediately rather than leaving it to
+  // wait on animate()'s next requestAnimationFrame tick, which a
+  // backgrounded/occluded tab can defer indefinitely (see the note above
+  // animate() below).
+  renderFrame();
 }
 window.addEventListener('resize', resize);
-resize();
+new ResizeObserver(resize).observe(wrap);
 
 // ---- Render loop -------------------------------------------------------------
 // While a kick animation is driving the camera directly (following the ball
@@ -1280,8 +1296,7 @@ resize();
 // be skipped: it recomputes camera.position from its stored target/spherical
 // state every call, which would fight any manual position/lookAt changes.
 let cameraLocked = false;
-function animate() {
-  requestAnimationFrame(animate);
+function renderFrame() {
   if (!cameraLocked) controls.update();
 
   if (kickPhase === 'power' && currentPowerStartedAt != null) {
@@ -1296,6 +1311,26 @@ function animate() {
 
   renderer.render(scene, camera);
 }
+function animate() {
+  requestAnimationFrame(animate);
+  renderFrame();
+}
+// A page load can land in a browser tab/window that isn't yet considered
+// "visible" for compositing purposes (not focused, covered by another
+// window, etc.) — Chromium can defer requestAnimationFrame indefinitely for
+// a backgrounded tab, so relying on animate()'s first rAF callback alone
+// left the canvas showing nothing but its CSS background color (the sky
+// blue happened to match the scene's own background, which made this read
+// as "the 3D scene never rendered" rather than "it's just delayed") until
+// something — switching tabs, opening DevTools — finally woke it up. A
+// direct synchronous render right here guarantees a first frame regardless
+// of whether/when rAF gets around to firing, and a visibilitychange
+// listener repaints again the moment the tab actually becomes visible, in
+// case that first frame landed while still occluded.
+renderFrame();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') renderFrame();
+});
 animate();
 
 // ---- Server wiring: load / resync / poll -----------------------------------
