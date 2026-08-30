@@ -798,17 +798,23 @@ function rebuildWindIndicator() {
   // position at 25/40/55yd — comfortably inside the frame with margin at
   // all three, instead of guessing from screenshots.
   const pos = new THREE.Vector3(0, camera.position.y + 6, camera.position.z - 18);
+  // 3.5x — the first pass at this position (worked out from the NDC check
+  // above) read as too small once actually seen in context; scaling the
+  // whole mesh up keeps that same confirmed-in-frame center point while
+  // making it much more prominent.
+  const WIND_SCALE = 3.5;
   if (windDir !== 'calm') {
     windArrow = buildWindArrowMesh();
     windArrow.position.copy(pos);
+    windArrow.scale.setScalar(WIND_SCALE);
     if (windDir === 'left') windArrow.rotation.z = Math.PI; // built pointing right by default
     scene.add(windArrow);
   } else {
     windArrow = null;
   }
 
-  windLabel = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.54), windLabelTexture(windMph, windDir));
-  windLabel.position.set(pos.x, pos.y - 0.75, pos.z);
+  windLabel = new THREE.Mesh(new THREE.PlaneGeometry(1.5 * WIND_SCALE, 0.54 * WIND_SCALE), windLabelTexture(windMph, windDir));
+  windLabel.position.set(pos.x, pos.y - 1.9, pos.z);
   scene.add(windLabel);
 }
 
