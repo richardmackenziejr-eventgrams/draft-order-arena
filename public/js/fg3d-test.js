@@ -582,9 +582,20 @@ function tubeFromCurve(curve, tStart, tEnd, radius, color, opacity) {
 // (a track, a highlighted sweet-spot band, a sliding marker), just built as
 // real boxes with depth instead of a flat CSS bar, and floating in the 3D
 // scene next to the kicker instead of in a side panel.
-const POWER_BAR_HEIGHT = 1.8;
-const POWER_BAR_WIDTH = 0.32;
-const POWER_BAR_DEPTH = 0.12;
+const POWER_BAR_HEIGHT = 2.3;
+const POWER_BAR_WIDTH = 0.46;
+const POWER_BAR_DEPTH = 0.14;
+// A light frame sitting just behind the track, a bit larger in width/height
+// — since it's also a bit thinner in depth, the track (thicker, closer to
+// the camera) covers it everywhere except that overhanging border, reading
+// as an actual picture-frame edge around the meter. Light/bright so it
+// reads clearly against grass, not just another dark-on-green shape.
+const POWER_FRAME_MARGIN = 0.09;
+const powerFrame = new THREE.Mesh(
+  new THREE.BoxGeometry(POWER_BAR_WIDTH + POWER_FRAME_MARGIN * 2, POWER_BAR_HEIGHT + POWER_FRAME_MARGIN * 2, POWER_BAR_DEPTH * 0.6),
+  new THREE.MeshStandardMaterial({ color: 0xeceff1, roughness: 0.45, metalness: 0.2 })
+);
+scene.add(powerFrame);
 const powerTrack = new THREE.Mesh(
   new THREE.BoxGeometry(POWER_BAR_WIDTH, POWER_BAR_HEIGHT, POWER_BAR_DEPTH),
   new THREE.MeshStandardMaterial({ color: 0x14251c, transparent: true, opacity: 0.85, roughness: 0.7 })
@@ -592,7 +603,7 @@ const powerTrack = new THREE.Mesh(
 scene.add(powerTrack);
 const powerMarkerMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.5 });
 const powerMarker = new THREE.Mesh(
-  new THREE.BoxGeometry(POWER_BAR_WIDTH + 0.1, 0.09, POWER_BAR_DEPTH + 0.12),
+  new THREE.BoxGeometry(POWER_BAR_WIDTH + 0.14, 0.12, POWER_BAR_DEPTH + 0.14),
   powerMarkerMat
 );
 scene.add(powerMarker);
@@ -615,6 +626,7 @@ function rebuildPowerMeter(distanceYards) {
   // it's beside him, not behind him.
   powerMeterCenter = new THREE.Vector3(kicker.position.x - 1.0, ball.position.y + 1.3, kicker.position.z);
   powerTrack.position.copy(powerMeterCenter);
+  powerFrame.position.set(powerMeterCenter.x, powerMeterCenter.y, powerMeterCenter.z - 0.02);
 
   if (powerSweetMesh) { scene.remove(powerSweetMesh); powerSweetMesh.geometry.dispose(); powerSweetMesh.material.dispose(); }
   const sweetHalf = powerSweetHalfFor(distanceYards);
