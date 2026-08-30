@@ -190,6 +190,8 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a }) {
 // (real kickers set up several steps back AND to the side). z is set by
 // updateDistance() below, once the kick-distance control exists.
 const KICKER_SIDE_OFFSET = -1.7;
+// The "kick cam" sits to the right of the kicker (see updateDistance() below).
+const CAMERA_X = 0.6;
 const kicker = buildFigure({ jersey: 0x2f5fbf, pants: 0xffffff });
 kicker.position.x = KICKER_SIDE_OFFSET;
 scene.add(kicker);
@@ -436,7 +438,11 @@ function updateDistance(distanceYards) {
   kicker.position.z = kickerZ;
   tee.position.z = ballZ;
   ball.position.z = ballZ;
-  camera.position.set(KICKER_SIDE_OFFSET - 0.9, 3.2, kickerZ + 7);
+  // Sitting to the right of the kicker (rather than further left, past him)
+  // reads as the familiar broadcast "kick cam" angle — the kicker ends up
+  // left-of-frame with the ball and goalpost centered, instead of the
+  // kicker crowding the middle of the shot.
+  camera.position.set(CAMERA_X, 3.2, kickerZ + 7);
   controls.target.set(0, 2, GOAL_LINE_Z + 10);
   controls.update();
 }
