@@ -590,7 +590,10 @@ function ballFlightFor(outcome, startPos, distanceYards) {
     p0: startPos.clone(),
     p1: new THREE.Vector3(endX / 2, peakHeight, (startPos.z + endZ) / 2),
     p2: new THREE.Vector3(endX, 1.2, endZ),
-    duration: 900 + distanceYards * 6,
+    // Slowed ~60% vs. the original (900 + distance*6) — at full speed the
+    // ball crossed the goalpost's plane too fast to actually see whether it
+    // split the uprights or sailed past them, especially on the wide misses.
+    duration: (900 + distanceYards * 6) * 1.6,
   };
 }
 
@@ -698,7 +701,12 @@ async function performKick() {
     if (!contactFired && u >= 0.55) {
       contactFired = true;
       tee.visible = false;
-      cameraLocked = true; // hand the camera fully to this animation until resetPose() gives it back
+      // A short kick never reaches the goalpost, so following the ball
+      // there would just leave it stranded tiny and distant in the same
+      // frame as the posts — easier to just watch it from the kick cam,
+      // where it's actually close to the camera the whole time.
+      const followBall = outcome !== 'short';
+      if (followBall) cameraLocked = true; // hand the camera fully to this animation until resetPose() gives it back
       const camStartPos = camera.position.clone();
       const camStartTarget = new THREE.Vector3(0, 2, GOAL_LINE_Z + 10); // matches updateDistance()'s kick-cam target
       const flight = ballFlightFor(outcome, new THREE.Vector3(ball.position.x, ball.position.y, ballStartZ), distanceYards);
@@ -707,12 +715,15 @@ async function performKick() {
         ball.position.copy(p);
         ball.rotation.z += 0.5; // spiral spin, purely cosmetic
 
-        // Camera eases from the kick cam to the end-zone view over the same
-        // span as the ball's flight, so it arrives right as the ball does.
-        const ct = easeOutQuad(fu);
-        camera.position.lerpVectors(camStartPos, END_CAM_POS, ct);
-        const lookTarget = new THREE.Vector3().lerpVectors(camStartTarget, END_CAM_TARGET, ct);
-        camera.lookAt(lookTarget);
+        if (followBall) {
+          // Camera eases from the kick cam to the end-zone view over the
+          // same span as the ball's flight, so it arrives right as the
+          // ball does.
+          const ct = easeOutQuad(fu);
+          camera.position.lerpVectors(camStartPos, END_CAM_POS, ct);
+          const lookTarget = new THREE.Vector3().lerpVectors(camStartTarget, END_CAM_TARGET, ct);
+          camera.lookAt(lookTarget);
+        }
       });
       const refSignal = wait(flight.duration * 0.6).then(() => animateRefereeSignal(outcome === 'made'));
       flightAndFollowUp = Promise.all([ballFlight, refSignal]);
