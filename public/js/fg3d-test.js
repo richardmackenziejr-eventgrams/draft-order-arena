@@ -522,6 +522,7 @@ if (distanceSlider) {
     if (kickPhase === 'power') {
       rebuildPowerMeter(d);
       rebuildDirectionMeter();
+      rebuildWindIndicator(); // reposition only — the actual wind stays put for this attempt
     }
   });
 }
@@ -708,6 +709,76 @@ function updateDirectionArrowPosition(t) {
   directionArrow.rotation.z = Math.PI / 2 - tilt;
 }
 
+// ---- Wind ---------------------------------------------------------------
+// Same idea as the 2D game: a flat push on the actual landing spot, rolled
+// fresh for every attempt, independent of distance — reading the wind and
+// compensating your aim is the whole point, not something the distance
+// changes the difficulty of.
+const MAX_WIND_MPH = 15;
+const WIND_MAX_SHIFT = 0.15; // how far max wind pushes the landing spot, in the same 0..1 space as direction offset
+
+let windMph = 0;
+let windDir = 'calm'; // 'calm' | 'left' | 'right'
+
+function rollWind() {
+  windMph = Math.floor(Math.random() * (MAX_WIND_MPH + 1));
+  windDir = windMph === 0 ? 'calm' : (Math.random() < 0.5 ? 'left' : 'right');
+}
+
+function windDriftFor() {
+  if (windDir === 'calm') return 0;
+  const sign = windDir === 'right' ? 1 : -1;
+  return sign * (windMph / MAX_WIND_MPH) * WIND_MAX_SHIFT;
+}
+
+function clamp01(x) {
+  return Math.max(0, Math.min(1, x));
+}
+
+// A small canvas-texture label ("12 MPH" / "CALM") — same technique as the
+// jersey numbers, just a plain readout instead of a 3D object with its own
+// shape.
+function windLabelTexture(mph, dir) {
+  const w = 200, h = 72;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(10, 20, 15, 0.6)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 34px sans-serif';
+  ctx.fillText(dir === 'calm' ? 'CALM' : `${mph} MPH`, w / 2, h / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  return new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+}
+
+let windArrow = null;
+let windLabel = null;
+
+// Rebuilds the wind indicator (arrow + mph label) around the ball's current
+// position — upper-right of the scene, clear of the power bar (left) and
+// direction track (low, centered). Called once per new attempt, right after
+// rollWind(), and needs the ball already positioned for this kick's
+// distance, same as the other meters.
+function rebuildWindIndicator() {
+  if (windArrow) { scene.remove(windArrow); windArrow = null; }
+  if (windLabel) { scene.remove(windLabel); windLabel.geometry.dispose(); windLabel.material.map.dispose(); windLabel.material.dispose(); }
+
+  const pos = new THREE.Vector3(ball.position.x + 1.9, ball.position.y + 2.7, ball.position.z);
+  if (windDir !== 'calm') {
+    const dir = windDir === 'right' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(-1, 0, 0);
+    windArrow = new THREE.ArrowHelper(dir, pos, 0.8, 0xffffff, 0.28, 0.18);
+    scene.add(windArrow);
+  }
+
+  windLabel = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.36), windLabelTexture(windMph, windDir));
+  windLabel.position.set(pos.x, pos.y - 0.5, pos.z);
+  scene.add(windLabel);
+}
+
 let kickPhase = 'power'; // 'power' | 'direction' | 'flight'
 let powerStartedAt = Date.now();
 let directionStartedAt = Date.now();
@@ -736,6 +807,8 @@ function startPowerPhase() {
   if (resultEl) resultEl.textContent = '';
   rebuildPowerMeter(Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE));
   rebuildDirectionMeter();
+  rollWind();
+  rebuildWindIndicator();
   powerMarker.visible = true;
   powerMarkerMat.color.set(0xffffff);
   powerMarkerMat.emissive.set(0xffffff);
@@ -774,7 +847,10 @@ function lockPower() {
 
 function lockDirection() {
   const distanceYards = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
-  const offset = currentDirectionT - 0.5;
+  // Wind pushes the actual landing spot away from wherever you aimed — all
+  // the accuracy checks below (near-miss save included) judge the ball's
+  // real landing point, not just the raw click, same as the 2D game.
+  const offset = clamp01(currentDirectionT + windDriftFor()) - 0.5;
   const tolerance = accuracyToleranceFor(distanceYards);
   const sweetHalf = powerSweetHalfFor(distanceYards);
 
