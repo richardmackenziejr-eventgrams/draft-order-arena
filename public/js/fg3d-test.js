@@ -517,11 +517,11 @@ if (distanceSlider) {
     if (distanceLabel) distanceLabel.textContent = `${d} yd Field Goal`;
     updateDistance(d);
     // Only live-follow the slider while the power meter is still running —
-    // once direction/flight has started, the ball's spot (and the arc/arrow
+    // once direction/flight has started, the ball's spot (and the meters
     // built around it) needs to hold still.
     if (kickPhase === 'power') {
-      rebuildPowerArc(d);
-      rebuildDirectionArrow();
+      rebuildPowerMeter(d);
+      rebuildDirectionMeter();
     }
   });
 }
@@ -544,7 +544,6 @@ const LONG_DISTANCE_THRESHOLD = 50;
 const MID_DISTANCE_THRESHOLD = 40;
 const WIDE_TOLERANCE = 0.22;   // direction tolerance at the closest distance
 const NARROW_TOLERANCE = 0.05; // direction tolerance at the farthest distance
-const MAX_DIRECTION_ANGLE = 0.55; // radians the arrow sweeps to either side of straight downfield
 
 function trianglePosition(elapsedMs, periodMs) {
   const cycle = ((elapsedMs % periodMs) + periodMs) % periodMs;
@@ -579,42 +578,100 @@ function tubeFromCurve(curve, tStart, tEnd, radius, color, opacity) {
   return new THREE.Mesh(geo, mat);
 }
 
-let powerArcCurve = null;
-let powerArcBase = null;
-let powerArcSweet = null;
-const powerArcMarker = new THREE.Mesh(
-  new THREE.SphereGeometry(0.11, 14, 12),
-  new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.5 })
+// A 3D vertical power bar — same shape/idea as the 2D game's vertical meter
+// (a track, a highlighted sweet-spot band, a sliding marker), just built as
+// real boxes with depth instead of a flat CSS bar, and floating in the 3D
+// scene next to the kicker instead of in a side panel.
+const POWER_BAR_HEIGHT = 1.8;
+const POWER_BAR_WIDTH = 0.32;
+const POWER_BAR_DEPTH = 0.12;
+const powerTrack = new THREE.Mesh(
+  new THREE.BoxGeometry(POWER_BAR_WIDTH, POWER_BAR_HEIGHT, POWER_BAR_DEPTH),
+  new THREE.MeshStandardMaterial({ color: 0x14251c, transparent: true, opacity: 0.85, roughness: 0.7 })
 );
-scene.add(powerArcMarker);
+scene.add(powerTrack);
+const powerMarkerMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.5 });
+const powerMarker = new THREE.Mesh(
+  new THREE.BoxGeometry(POWER_BAR_WIDTH + 0.1, 0.09, POWER_BAR_DEPTH + 0.12),
+  powerMarkerMat
+);
+scene.add(powerMarker);
+let powerSweetMesh = null;
+let powerMeterCenter = new THREE.Vector3();
 
-// Rebuilds the arc (and its highlighted sweet-spot sub-segment, sized to
-// this kick's distance) around the ball's current position — called at the
-// start of every attempt, and live while the slider moves during the power
-// phase.
-function rebuildPowerArc(distanceYards) {
-  if (powerArcBase) { scene.remove(powerArcBase); powerArcBase.geometry.dispose(); powerArcBase.material.dispose(); }
-  if (powerArcSweet) { scene.remove(powerArcSweet); powerArcSweet.geometry.dispose(); powerArcSweet.material.dispose(); }
+// Repositions the bar beside the ball and resizes the green sweet-spot band
+// for this kick's distance — called at the start of every attempt, and live
+// while the slider moves during the power phase. Kept well to the left of
+// the kicker's own resting spot (-1.7) so it doesn't clip through him
+// during the approach.
+function rebuildPowerMeter(distanceYards) {
+  // Raised well above head height (rather than beside the kicker at his own
+  // height) so his closer-to-camera body doesn't occlude it from the kick
+  // cam's viewing angle.
+  powerMeterCenter = new THREE.Vector3(ball.position.x - 1.9, ball.position.y + 2.9, ball.position.z);
+  powerTrack.position.copy(powerMeterCenter);
 
-  const start = ball.position.clone();
-  const peak = new THREE.Vector3(ball.position.x, ball.position.y + 5.4, ball.position.z - 9);
-  const end = new THREE.Vector3(ball.position.x, ball.position.y + 0.3, ball.position.z - 17);
-  powerArcCurve = new THREE.QuadraticBezierCurve3(start, peak, end);
-
-  powerArcBase = tubeFromCurve(powerArcCurve, 0, 1, 0.035, 0xffffff, 0.55);
-  scene.add(powerArcBase);
-
+  if (powerSweetMesh) { scene.remove(powerSweetMesh); powerSweetMesh.geometry.dispose(); powerSweetMesh.material.dispose(); }
   const sweetHalf = powerSweetHalfFor(distanceYards);
-  powerArcSweet = tubeFromCurve(powerArcCurve, 0.5 - sweetHalf, 0.5 + sweetHalf, 0.05, 0x4ade80, 1);
-  scene.add(powerArcSweet);
+  powerSweetMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(POWER_BAR_WIDTH, sweetHalf * 2 * POWER_BAR_HEIGHT, POWER_BAR_DEPTH + 0.05),
+    new THREE.MeshStandardMaterial({ color: 0x4ade80, emissive: 0x2f7d54, emissiveIntensity: 0.4, roughness: 0.5 })
+  );
+  powerSweetMesh.position.copy(powerMeterCenter); // sweet spot sits at the bar's vertical center — position 0.5
+  scene.add(powerSweetMesh);
 }
 
-let directionArrow = null;
-function rebuildDirectionArrow() {
-  if (directionArrow) scene.remove(directionArrow);
-  const origin = new THREE.Vector3(ball.position.x, ball.position.y + 1.7, ball.position.z - 1.2);
-  directionArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), origin, 1.7, 0xffcc33, 0.5, 0.28);
-  scene.add(directionArrow);
+function updatePowerMarkerPosition(t) {
+  powerMarker.position.set(
+    powerMeterCenter.x,
+    powerMeterCenter.y + (t - 0.5) * POWER_BAR_HEIGHT,
+    powerMeterCenter.z + 0.09
+  );
+}
+
+// A curved horizontal "gauge" for direction — a shallow bow-shaped track
+// with an arrow gliding left-to-right along it (banking to match the
+// curve's own angle as it goes), instead of a straight bar with a marker.
+let directionCurve = null;
+let directionTrack = null;
+
+function rebuildDirectionMeter() {
+  if (directionTrack) { scene.remove(directionTrack); directionTrack.geometry.dispose(); directionTrack.material.dispose(); }
+  // Raised against clear sky rather than sitting at crowd height, where a
+  // thin white track was hard to pick out against the busy stand texture.
+  const y = ball.position.y + 2.6;
+  const z = ball.position.z - 1.2;
+  const left = new THREE.Vector3(ball.position.x - 1.3, y, z);
+  const peak = new THREE.Vector3(ball.position.x, y + 0.35, z);
+  const right = new THREE.Vector3(ball.position.x + 1.3, y, z);
+  directionCurve = new THREE.QuadraticBezierCurve3(left, peak, right);
+  directionTrack = tubeFromCurve(directionCurve, 0, 1, 0.035, 0xffffff, 0.6);
+  scene.add(directionTrack);
+}
+
+function buildDirectionArrowMesh() {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffcc33, emissive: 0xffcc33, emissiveIntensity: 0.35 });
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.34, 8), mat);
+  shaft.rotation.z = Math.PI / 2; // cylinders default along Y — lay it along local +X instead
+  shaft.position.x = -0.07;
+  g.add(shaft);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.22, 10), mat);
+  head.rotation.z = -Math.PI / 2; // cones default pointing +Y — point it along local +X too
+  head.position.x = 0.17;
+  g.add(head);
+  return g;
+}
+const directionArrow = buildDirectionArrowMesh();
+scene.add(directionArrow);
+
+// Slides the arrow to position t along the curve (0 = left end, 1 = right
+// end) and banks it to match the curve's tangent there, like a real gauge
+// needle following a bowed track rather than just teleporting along it.
+function updateDirectionArrowPosition(t) {
+  directionArrow.position.copy(directionCurve.getPointAt(t));
+  const tangent = directionCurve.getTangentAt(t);
+  directionArrow.rotation.z = Math.atan2(tangent.y, tangent.x);
 }
 
 let kickPhase = 'power'; // 'power' | 'direction' | 'flight'
@@ -642,11 +699,11 @@ function startPowerPhase() {
   kickPhase = 'power';
   powerStartedAt = Date.now();
   if (resultEl) resultEl.textContent = '';
-  rebuildPowerArc(Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE));
-  rebuildDirectionArrow();
-  powerArcMarker.visible = true;
-  powerArcMarker.material.color.set(0xffffff);
-  powerArcMarker.material.emissive.set(0xffffff);
+  rebuildPowerMeter(Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE));
+  rebuildDirectionMeter();
+  powerMarker.visible = true;
+  powerMarkerMat.color.set(0xffffff);
+  powerMarkerMat.emissive.set(0xffffff);
   directionArrow.visible = false;
   if (actionBtn) { actionBtn.textContent = 'Lock Power!'; actionBtn.disabled = false; }
   if (distanceSlider) distanceSlider.disabled = false;
@@ -657,8 +714,8 @@ function lockPower() {
   lockedPowerT = currentPowerT;
   hadPowerResult = Math.abs(lockedPowerT - 0.5) <= powerSweetHalfFor(distanceYards);
   const color = hadPowerResult ? 0x4ade80 : 0xef4444;
-  powerArcMarker.material.color.set(color);
-  powerArcMarker.material.emissive.set(color);
+  powerMarkerMat.color.set(color);
+  powerMarkerMat.emissive.set(color);
 
   kickPhase = 'direction';
   directionStartedAt = Date.now();
@@ -926,15 +983,14 @@ function animate() {
   requestAnimationFrame(animate);
   if (!cameraLocked) controls.update();
 
-  if (kickPhase === 'power' && powerArcCurve) {
+  if (kickPhase === 'power') {
     const elapsed = Date.now() - powerStartedAt;
     currentPowerT = trianglePosition(elapsed, POWER_PERIOD_MS);
-    powerArcMarker.position.copy(powerArcCurve.getPointAt(currentPowerT));
-  } else if (kickPhase === 'direction' && directionArrow) {
+    updatePowerMarkerPosition(currentPowerT);
+  } else if (kickPhase === 'direction' && directionCurve) {
     const elapsed = Date.now() - directionStartedAt;
     currentDirectionT = trianglePosition(elapsed, DIRECTION_PERIOD_MS);
-    const angle = lerp(-MAX_DIRECTION_ANGLE, MAX_DIRECTION_ANGLE, currentDirectionT);
-    directionArrow.setDirection(new THREE.Vector3(Math.sin(angle), 0, -Math.cos(angle)).normalize());
+    updateDirectionArrowPosition(currentDirectionT);
   }
 
   renderer.render(scene, camera);
