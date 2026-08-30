@@ -127,14 +127,50 @@ goalpost.add(crossbar);
 goalpost.position.set(0, 0, GOAL_LINE_Z - 2);
 scene.add(goalpost);
 
+// A jersey-colored canvas texture with an optional name arched above a big
+// number — used for the torso's box faces so the kicker reads as an actual
+// numbered/named player instead of a plain colored block.
+function jerseyTextTexture(jerseyColor, number, name) {
+  const w = 128, h = 160;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = `#${jerseyColor.toString(16).padStart(6, '0')}`;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if (name) {
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText(name, w / 2, 24);
+  }
+  ctx.font = `bold ${name ? 76 : 92}px sans-serif`;
+  ctx.fillText(String(number), w / 2, name ? h / 2 + 18 : h / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
+}
+
 // ---- Simple stylized humanoid (shared shape for kicker + referees) --------
-function buildFigure({ jersey, pants, skin = 0xe8b98a }) {
+function buildFigure({ jersey, pants, skin = 0xe8b98a, helmet = jersey, number = null, name = null }) {
   const g = new THREE.Group();
   const jerseyMat = new THREE.MeshStandardMaterial({ color: jersey, roughness: 0.7 });
   const pantsMat = new THREE.MeshStandardMaterial({ color: pants, roughness: 0.8 });
   const skinMat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.6 });
+  const helmetMat = new THREE.MeshStandardMaterial({ color: helmet, roughness: 0.3, metalness: 0.5 });
 
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.7, 0.35), jerseyMat);
+  // BoxGeometry's face order is [+x, -x, +y, -y, +z, -z]. The kicker faces
+  // -z (downfield), so his BACK — the side the "kick cam" actually looks
+  // at — is the +z face (index 4); his chest/front is -z (index 5).
+  let torsoMat = jerseyMat;
+  if (number != null) {
+    torsoMat = [
+      jerseyMat, jerseyMat, jerseyMat, jerseyMat,
+      jerseyTextTexture(jersey, number, name), // back: name + number
+      jerseyTextTexture(jersey, number, null), // front: number only
+    ];
+  }
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.7, 0.35), torsoMat);
   torso.position.y = 1.35;
   torso.castShadow = true;
   g.add(torso);
@@ -144,10 +180,10 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a }) {
   head.castShadow = true;
   g.add(head);
 
-  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.6), jerseyMat);
-  helmet.position.y = 1.9;
-  helmet.castShadow = true;
-  g.add(helmet);
+  const helmetMesh = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.6), helmetMat);
+  helmetMesh.position.y = 1.9;
+  helmetMesh.castShadow = true;
+  g.add(helmetMesh);
 
   // Legs hang from a hip pivot rather than being placed directly, so a kick
   // animation can rotate the whole leg like a hinge instead of just
@@ -156,7 +192,7 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a }) {
   const cleatMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.5 });
   const legPivots = {};
   [-1, 1].forEach((side) => {
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 4, 8), jerseyMat);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 4, 8), skinMat);
     arm.position.set(side * 0.4, 1.35, 0);
     arm.castShadow = true;
     g.add(arm);
@@ -192,7 +228,14 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a }) {
 const KICKER_SIDE_OFFSET = -1.7;
 // The "kick cam" sits to the right of the kicker (see updateDistance() below).
 const CAMERA_X = 0.6;
-const kicker = buildFigure({ jersey: 0x2f5fbf, pants: 0xffffff });
+const kicker = buildFigure({
+  jersey: 0x2f5fbf,
+  pants: 0xb9bcc2,   // silver
+  helmet: 0xb9bcc2,  // silver
+  skin: 0xf0d9a0,    // light, yellow-leaning skin tone for the bare arms
+  number: 1,
+  name: 'MACK',
+});
 kicker.position.x = KICKER_SIDE_OFFSET;
 scene.add(kicker);
 
