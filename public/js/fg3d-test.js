@@ -153,6 +153,7 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a }) {
   // animation can rotate the whole leg like a hinge instead of just
   // translating a fixed capsule.
   const HIP_Y = 0.98;
+  const cleatMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.5 });
   const legPivots = {};
   [-1, 1].forEach((side) => {
     const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 4, 8), jerseyMat);
@@ -162,10 +163,20 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a }) {
 
     const legPivot = new THREE.Group();
     legPivot.position.set(side * 0.16, HIP_Y, 0);
+    const legY = -(HIP_Y - 0.55); // hang down to the original resting position
     const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.65, 4, 8), pantsMat);
-    leg.position.y = -(HIP_Y - 0.55); // hang down to the original resting position
+    leg.position.y = legY;
     leg.castShadow = true;
     legPivot.add(leg);
+
+    // A cleat at the foot — the capsule's total height is 0.65 + 2*0.11,
+    // so its bottom sits 0.435 below the leg's own center.
+    const footY = legY - 0.435;
+    const cleat = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.07, 0.24), cleatMat);
+    cleat.position.set(0, footY - 0.02, -0.06); // toe pointed forward, downfield
+    cleat.castShadow = true;
+    legPivot.add(cleat);
+
     g.add(legPivot);
     legPivots[side > 0 ? 'right' : 'left'] = legPivot;
   });
@@ -186,13 +197,15 @@ scene.add(kicker);
 // goalpost (real refs hold the goal line regardless of kick distance, so
 // these don't move with the slider).
 function stripedShirtMat() {
+  // Real referee jerseys are vertical black/white stripes (not horizontal
+  // bands) — columns here so they read the same way on the torso.
   const canvas = document.createElement('canvas');
   canvas.width = 32;
   canvas.height = 32;
   const ctx = canvas.getContext('2d');
   for (let i = 0; i < 8; i++) {
     ctx.fillStyle = i % 2 === 0 ? '#111111' : '#f4f4f4';
-    ctx.fillRect(0, i * 4, 32, 4);
+    ctx.fillRect(i * 4, 0, 4, 32);
   }
   const tex = new THREE.CanvasTexture(canvas);
   return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
@@ -258,6 +271,7 @@ const referees = [-1, 1].map((side) => {
 
 // ---- Ball on tee -----------------------------------------------------------
 // z is set by updateDistance() below.
+const BALL_REST_Y = 0.24; // resting height on the tee — reused by resetPose() after a kick
 const tee = new THREE.Mesh(
   new THREE.ConeGeometry(0.06, 0.16, 10),
   new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 })
@@ -272,7 +286,7 @@ const ball = new THREE.Mesh(
 );
 ball.scale.set(1, 1, 1.5);
 ball.rotation.x = Math.PI / 2;
-ball.position.y = 0.24;
+ball.position.y = BALL_REST_Y;
 ball.castShadow = true;
 scene.add(ball);
 
@@ -530,12 +544,14 @@ function animateRefereeSignal(made) {
 
 function resetPose() {
   const d = Number(distanceSlider ? distanceSlider.value : DEFAULT_DISTANCE);
-  updateDistance(d);
+  updateDistance(d); // resets ball/tee's z, but not x/y — the flight leaves those wherever it ended
   kicker.position.y = 0;
   kicker.userData.legPivots.left.rotation.x = 0;
   kicker.userData.legPivots.right.rotation.x = 0;
   tee.visible = true;
   ball.visible = true;
+  ball.position.x = 0;
+  ball.position.y = BALL_REST_Y;
   ball.scale.set(1, 1, 1.5);
   ball.rotation.set(Math.PI / 2, 0, 0);
   referees.forEach((ref) => {
