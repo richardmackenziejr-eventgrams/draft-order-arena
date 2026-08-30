@@ -181,7 +181,7 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a, helmet = jersey, number =
   g.add(head);
 
   const helmetMesh = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.6), helmetMat);
-  helmetMesh.position.y = 1.9;
+  helmetMesh.position.y = 1.8; // lower than the sphere's own radius would suggest, so it doesn't leave a gap of bare "neck" above the torso
   helmetMesh.castShadow = true;
   g.add(helmetMesh);
 
@@ -191,9 +191,21 @@ function buildFigure({ jersey, pants, skin = 0xe8b98a, helmet = jersey, number =
   const HIP_Y = 0.98;
   const cleatMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.5 });
   const legPivots = {};
+  // Arm span, split into a jersey-colored sleeve (top quarter, at the
+  // shoulder) and bare skin for the rest — a plain single-tone arm read as
+  // a full sleeve down to the wrist.
+  const ARM_TOP = 1.715;
+  const ARM_BOTTOM = 0.985;
+  const SLEEVE_LEN = (ARM_TOP - ARM_BOTTOM) * 0.25;
+  const ARM_LEN = (ARM_TOP - ARM_BOTTOM) - SLEEVE_LEN;
   [-1, 1].forEach((side) => {
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 4, 8), skinMat);
-    arm.position.set(side * 0.4, 1.35, 0);
+    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.09, SLEEVE_LEN, 8), jerseyMat);
+    sleeve.position.set(side * 0.4, ARM_TOP - SLEEVE_LEN / 2, 0);
+    sleeve.castShadow = true;
+    g.add(sleeve);
+
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, ARM_LEN - 0.18, 4, 8), skinMat);
+    arm.position.set(side * 0.4, ARM_BOTTOM + ARM_LEN / 2, 0);
     arm.castShadow = true;
     g.add(arm);
 
