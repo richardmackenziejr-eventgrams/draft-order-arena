@@ -884,7 +884,13 @@ function showResultPopup(outcome) {
   const made = outcome === 'made';
   const text = made ? 'GOOD!' : 'NO GOOD';
   const color = made ? '#4ade80' : '#ef4444';
-  const geo = new THREE.PlaneGeometry(4.6, 1.9);
+  // Short is the one outcome that doesn't follow the ball to the end-zone
+  // cam — the camera stays back on the kick cam, roughly 4-5x farther from
+  // the goalpost than the end-zone cam ends up for every other outcome, so
+  // a card sized right for that close-up view reads as tiny from here.
+  // Scaled up to match, even though it now dwarfs the goalpost itself.
+  const scale = outcome === 'short' ? 4.5 : 1;
+  const geo = new THREE.PlaneGeometry(4.6 * scale, 1.9 * scale);
 
   const front = new THREE.Mesh(geo, resultPopupTexture(text, color));
   front.position.set(0, 5, GOAL_LINE_Z - 2 + 0.02); // faces +z, toward the kick cam / kicker side
