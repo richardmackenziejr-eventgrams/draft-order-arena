@@ -16,35 +16,13 @@
 
   <div class="panel" id="kick-panel" style="display:none">
     <p class="fg-kick-info" id="kick-info"></p>
-
-    <div class="fg-layout">
-      <div class="fg-power-block">
-        <p class="fg-meter-label">Power</p>
-        <div class="power-track" id="power-track">
-          <div class="power-sweet" id="power-sweet"></div>
-          <div class="power-marker" id="power-marker"></div>
-        </div>
-        <button id="power-stop-btn" class="fg-stop-btn">Click to lock power!</button>
-      </div>
-
-      <div class="fg-scene" id="fg-scene">
-        <div class="fg-scene-bg" id="fg-scene-bg"></div>
-        <div class="fg-wind-overlay" id="wind-overlay"></div>
-        <div class="fg-result-overlay" id="result-overlay" style="display:none">
-          <p class="fg-result" id="result-text"></p>
-          <button id="next-kick-btn" style="display:block; margin:8px auto 0">Next Kick →</button>
-        </div>
-      </div>
-
-      <div class="fg-direction-block" id="direction-block">
-        <p class="fg-meter-label">Direction</p>
-        <div class="direction-track" id="direction-track">
-          <div class="direction-center-mark"></div>
-          <div class="direction-marker" id="direction-marker"></div>
-        </div>
-        <button id="direction-stop-btn" class="fg-stop-btn" disabled>Click to kick!</button>
-      </div>
+    <div id="fg3d-canvas-wrap"></div>
+    <p class="fg3d-hint">Drag to orbit &middot; scroll to zoom</p>
+    <div class="fg3d-kick-row">
+      <button id="fg3d-action-btn" class="btn">Lock Power!</button>
+      <button id="next-kick-btn" class="btn" style="display:none">Next Kick &rarr;</button>
     </div>
+    <p id="fg3d-result"></p>
   </div>
 
   <div class="panel" id="done-panel" style="display:none">
@@ -55,6 +33,14 @@
 </main>
 <footer class="site">Draft Order Arena — prototype</footer>
 <script src="/js/common.js"></script>
-<script src="/js/play-field-goal.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three/build/three.module.js",
+    "three/addons/": "/vendor/three/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="/js/play-field-goal.js"></script>
 </body>
 </html>
