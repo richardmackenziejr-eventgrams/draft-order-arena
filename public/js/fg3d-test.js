@@ -1100,7 +1100,15 @@ async function performKick(outcome) {
       // frame as the posts — easier to just watch it from the kick cam,
       // where it's actually close to the camera the whole time.
       const followBall = outcome !== 'short';
-      if (followBall) cameraLocked = true; // hand the camera fully to this animation until resetPose() gives it back
+      if (followBall) {
+        cameraLocked = true; // hand the camera fully to this animation until resetPose() gives it back
+        // The wind indicator's position tracks the kick-cam, not wherever
+        // the camera ends up once it follows the ball to the end zone —
+        // left up, it'd hang somewhere nonsensical relative to the new
+        // view (or right behind the posts) for the rest of the kick.
+        if (windArrow) windArrow.visible = false;
+        if (windLabel) windLabel.visible = false;
+      }
       const camStartPos = camera.position.clone();
       const camStartTarget = new THREE.Vector3(0, 2, GOAL_LINE_Z + 10); // matches updateDistance()'s kick-cam target
       const flight = ballFlightFor(outcome, new THREE.Vector3(ball.position.x, ball.position.y, ballStartZ), distanceYards);
