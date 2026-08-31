@@ -887,10 +887,30 @@ function paintPowerMarker(pos, distanceYards) {
   updatePowerMarkerPosition(pos);
 }
 
+// The exact power position the client itself just locked in with (set right
+// before sending power-stop), so the post-response repaint below can reuse
+// it instead of the server's own recomputed `k.powerPos` — which, if the
+// player's system clock doesn't exactly match the server's, can come out
+// as a different value even though both are "correct" scoring-wise (each
+// self-consistent with its own clock). Since the client's own live
+// animation and its own click-snap always share the same clock, they never
+// disagree with each other — only a repaint sourced from the server's
+// independently-computed value could visibly disagree with what the
+// player actually saw and clicked, which is exactly what happened: the
+// marker correctly froze instantly, then visibly relocated once this
+// repaint ran with the server's value.
+let lastLockedPowerT = null;
+
 // Renders whichever kick the server says is current — called on load, after
 // every power-stop/next response, on resync, and (for the 'result' phase)
-// when restoring an already-resolved kick on page reload.
-function renderKick(gi) {
+// when restoring an already-resolved kick on page reload. Pass
+// `trustLocalPowerSnap: true` only right after this client's own
+// power-stop response, so the power marker keeps showing exactly what was
+// just clicked instead of being repainted from the server's echoed-back
+// value (see lastLockedPowerT above) — every other caller (initial load,
+// resync, next-kick) has no local snap to trust and needs the server's
+// value to correctly restore the marker.
+function renderKick(gi, { trustLocalPowerSnap = false } = {}) {
   const k = gi.currentKick;
   powerPeriodMs = gi.powerPeriodMs || powerPeriodMs;
   directionPeriodMs = gi.directionPeriodMs || directionPeriodMs;
@@ -922,13 +942,17 @@ function renderKick(gi) {
     // Power's already locked — freeze its marker right where it landed
     // instead of animating, and hand control over to the direction meter.
     kickPhase = 'direction';
-    paintPowerMarker(k.powerPos != null ? k.powerPos : 0.5, k.distance);
+    const powerPosToShow = (trustLocalPowerSnap && lastLockedPowerT != null)
+      ? lastLockedPowerT
+      : (k.powerPos != null ? k.powerPos : 0.5);
+    paintPowerMarker(powerPosToShow, k.distance);
     directionArrow.visible = true;
     currentDirectionStartedAt = k.directionStartedAt;
     actionBtn.textContent = 'Lock Direction!';
     actionBtn.disabled = false;
   } else {
     kickPhase = 'power';
+    lastLockedPowerT = null; // fresh kick — nothing locked yet to trust
     powerMarker.visible = true;
     powerMarkerMat.color.set(0xffffff);
     powerMarkerMat.emissive.set(0xffffff);
@@ -1004,10 +1028,15 @@ actionBtn.addEventListener('click', async () => {
     // than where it was actually clicked. Moving off 'power' immediately
     // freezes it at the snapped position for the remainder of the request.
     kickPhase = 'power-locking';
-    updatePowerMarkerPosition(trianglePosition(elapsedMs, powerPeriodMs));
+    lastLockedPowerT = trianglePosition(elapsedMs, powerPeriodMs);
+    paintPowerMarker(lastLockedPowerT, currentDistance); // color + position, from THIS client's own clock
     try {
       const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/power-stop`, { memberId, elapsedMs });
-      renderKick(gi); // sets the right phase/button state based on the server's response
+      // trustLocalPowerSnap: the marker above is already showing exactly
+      // what was clicked — don't let the repaint below override it with
+      // the server's independently-recomputed powerPos (see
+      // lastLockedPowerT's comment for why those can legitimately differ).
+      renderKick(gi, { trustLocalPowerSnap: true });
     } catch (err) {
       alert(err.message);
       kickPhase = 'power'; // let the meter resume live so a retry click measures real elapsed time again
