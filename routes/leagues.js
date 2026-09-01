@@ -166,6 +166,31 @@ router.post('/leagues/:id/test-field-goal', async (req, res) => {
   res.status(201).json({ instanceId: giId });
 });
 
+// Same idea as /leagues/:id/test-trivia, for Kickoff Return. Temporary/
+// testing use only.
+router.post('/leagues/:id/test-kickoff-return', async (req, res) => {
+  const db = await store.load();
+  const league = db.leagues[req.params.id];
+  if (!league) return res.status(404).json({ error: 'League not found.' });
+
+  const mod = getModule('kickoffReturn');
+  const init = mod.initInstance();
+  const giId = store.makeId('gi');
+  db.gameInstances[giId] = {
+    id: giId,
+    competitionId: null,
+    gameType: 'kickoffReturn',
+    mode: 'async',
+    config: init.config,
+    status: init.status,
+    state: init.state,
+    results: [],
+    isTest: true,
+  };
+  await store.save(db);
+  res.status(201).json({ instanceId: giId });
+});
+
 router.post('/competitions/:id/start', async (req, res) => {
   const db = await store.load();
   const competition = db.competitions[req.params.id];
@@ -224,7 +249,7 @@ function publicGameInstance(gi) {
       results: gi.status === 'completed' ? gi.results : [],
     };
   }
-  if (gi.gameType === 'trivia' || gi.gameType === 'fieldGoal') {
+  if (gi.gameType === 'trivia' || gi.gameType === 'fieldGoal' || gi.gameType === 'kickoffReturn') {
     const players = (gi.state && gi.state.players) || {};
     const completedBy = Object.entries(players).filter(([, p]) => p.completed).map(([mid]) => mid);
     return { ...base, completedBy, results: gi.status === 'completed' ? gi.results : [] };

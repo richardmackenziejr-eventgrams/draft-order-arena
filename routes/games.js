@@ -4,6 +4,7 @@ const { getModule } = require('../lib/gameEngine');
 const { checkAndFinalizeCompetition } = require('../lib/competition');
 const trivia = require('../lib/gameEngine/trivia');
 const fieldGoal = require('../lib/gameEngine/fieldGoal');
+const kickoffReturn = require('../lib/gameEngine/kickoffReturn');
 
 // Shared by any async game with a solo test-drive mode (see /leagues/:id/test-*
 // in routes/leagues.js): test instances have no real competition/league behind
@@ -37,6 +38,13 @@ module.exports = function gamesRouter(io) {
     // as trivia above.
     if (gi.gameType === 'fieldGoal' && memberId && gi.status !== 'completed') {
       fieldGoal.presentCurrentKick(gi.state, memberId);
+      await store.save(db);
+    }
+    // Viewing a kickoff return is what rolls its difficulty setup (defender
+    // count/speed) — same idea as trivia/field goal above, just no clock to
+    // arm since this game's timing is entirely client-side.
+    if (gi.gameType === 'kickoffReturn' && memberId && gi.status !== 'completed') {
+      kickoffReturn.presentCurrentReturn(gi.state, memberId);
       await store.save(db);
     }
 
@@ -209,6 +217,73 @@ module.exports = function gamesRouter(io) {
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
+  // Kickoff Return — real-time and entirely client-simulated (the runner,
+  // defenders, juke/spin, everything), so unlike Field Goal there's only
+  // ONE action to report per attempt rather than two sequential locked-in
+  // values: whatever the client's own dodge run ended up as. Split into
+  // submit/next the same way Trivia's answer/next is, so the client can
+  // show the tackle/touchdown outcome before a "Next Return" button
+  // advances.
+  //
+  // Scores the current return (idempotent — a retried request won't
+  // re-score it) but does NOT advance; /kickoff-return/next does that.
+  router.post('/game-instances/:id/kickoff-return/submit', async (req, res) => {
+    const { memberId, yardsGained, touchdown } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'kickoffReturn') return res.status(404).json({ error: 'Kickoff return game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This kickoff return contest is already finished.' });
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
+
+    // Trusted the same way every other async game here trusts its own
+    // client-measured input, but still normalized server-side so a
+    // touchdown can only ever mean exactly kickoffReturn.FIELD_YARDS —
+    // see submitReturn()'s own comment for why.
+    const outcome = kickoffReturn.submitReturn(gi.state, memberId, yardsGained, touchdown);
+    if (outcome && outcome.error) return res.status(400).json({ error: outcome.error });
+
+    await store.save(db);
+    res.json({ outcome, gameInstance: viewForMember(gi, memberId) });
+  });
+
+  router.post('/game-instances/:id/kickoff-return/next', async (req, res) => {
+    const { memberId } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'kickoffReturn') return res.status(404).json({ error: 'Kickoff return game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This kickoff return contest is already finished.' });
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
+
+    const player = kickoffReturn.advanceToNext(gi.state, memberId);
+    if (player && player.error) return res.status(400).json({ error: player.error });
+    // Roll the new current return's difficulty setup now — the client
+    // renders it immediately from this response without a follow-up GET,
+    // so nothing else would ever roll it.
+    kickoffReturn.presentCurrentReturn(gi.state, memberId);
+
+    if (gi.isTest) {
+      if (player.completed) {
+        gi.results = kickoffReturn.computeResults(gi.state);
+        gi.status = 'completed';
+      }
+    } else {
+      const memberIds = membership.league.members.map((m) => m.id);
+      if (kickoffReturn.isComplete(gi.state, memberIds)) {
+        gi.results = kickoffReturn.computeResults(gi.state);
+        gi.status = 'completed';
+        checkAndFinalizeCompetition(db, gi.competitionId);
+      }
+    }
+    await store.save(db);
+    res.json({ gameInstance: viewForMember(gi, memberId) });
+  });
+
   // Commissioner triggers the live, animated lottery reveal — picks are announced
   // one at a time (last pick to first) with a short delay between each, broadcast
   // over the game's Socket.IO room so every spectator sees the same sequence.
@@ -324,6 +399,25 @@ function viewForMember(gi, memberId) {
       // The kick the player should see right now (power/direction/result
       // phase), or null once they've taken all their kicks.
       currentKick: player ? mod.currentKickView(gi.state, player) : null,
+      completedBy,
+      results: gi.status === 'completed' ? gi.results : [],
+    };
+  }
+
+  if (gi.gameType === 'kickoffReturn') {
+    const players = gi.state.players || {};
+    const player = memberId ? players[memberId] : null;
+    const completedBy = Object.entries(players).filter(([, p]) => p.completed).map(([mid]) => mid);
+    return {
+      ...base,
+      returnsPerPlayer: mod.RETURNS_PER_PLAYER,
+      hasCompleted: player ? player.completed : false,
+      yourScore: player ? player.totalPoints : null,
+      yourTouchdowns: player ? player.touchdowns : null,
+      // The return the player should see right now (defender count/speed
+      // to simulate against, plus the resolved outcome once submitted), or
+      // null once they've taken all 5.
+      currentReturn: player ? mod.currentReturnView(gi.state, player) : null,
       completedBy,
       results: gi.status === 'completed' ? gi.results : [],
     };

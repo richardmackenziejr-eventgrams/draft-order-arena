@@ -171,11 +171,15 @@ function gameStatusLine(gi) {
     const n = (gi.completedBy || []).length;
     return gi.status === 'completed' ? 'All kicks in' : `${n} finished so far`;
   }
+  if (gi.gameType === 'kickoffReturn') {
+    const n = (gi.completedBy || []).length;
+    return gi.status === 'completed' ? 'All returns in' : `${n} finished so far`;
+  }
   return gi.status;
 }
 
 function gameLink(gi) {
-  const pageByType = { lottery: 'play-lottery.html', trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html' };
+  const pageByType = { lottery: 'play-lottery.html', trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html', kickoffReturn: 'play-kickoff-return.html' };
   const page = pageByType[gi.gameType];
   return `/${page}?instance=${gi.id}&league=${leagueId}`;
 }
@@ -285,6 +289,18 @@ document.getElementById('test-field-goal-btn').addEventListener('click', async (
   try {
     const { instanceId } = await api('POST', `/api/leagues/${leagueId}/test-field-goal`, {});
     window.location.href = `/play-field-goal.html?instance=${instanceId}&league=${leagueId}&member=solo-test`;
+  } catch (err) {
+    alert(err.message);
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('test-kickoff-return-btn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const { instanceId } = await api('POST', `/api/leagues/${leagueId}/test-kickoff-return`, {});
+    window.location.href = `/play-kickoff-return.html?instance=${instanceId}&league=${leagueId}&member=solo-test`;
   } catch (err) {
     alert(err.message);
     btn.disabled = false;
