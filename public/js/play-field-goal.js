@@ -688,9 +688,9 @@ function updateDirectionArrowPosition(t) {
 }
 
 // ---- Wind ---------------------------------------------------------------
-// Wind is server-assigned per kick (same for every league member, like
-// distance) — rolled once by lib/gameEngine/fieldGoal.js's generateKicks()
-// and just displayed here.
+// Wind is server-assigned per kick, just like distance — rolled by
+// lib/gameEngine/fieldGoal.js's rollKick() each time a player reaches a new
+// kick on their own difficulty ladder, and just displayed here.
 let windMph = 0;
 let windDir = 'calm'; // 'calm' | 'left' | 'right'
 
