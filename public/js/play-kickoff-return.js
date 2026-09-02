@@ -43,6 +43,17 @@ const PX_PER_YARD_X = (FIELD_RIGHT_PX - FIELD_LEFT_PX) / FIELD_WIDTH_YARDS;
 const PX_PER_YARD_Y = 14;
 const RUNNER_SCREEN_Y = CANVAS_HEIGHT * 0.68; // the runner is always drawn here; the world scrolls around it
 const GOALPOST_DEPTH_YARDS = 7; // how far behind the goal line the posts sit
+const START_FIELD_POSITION = 20; // worldY=0 is the player's own 20-yard line (matches kickoffReturn.js server-side)
+
+// worldY is always "yards gained from the return's start," but a real
+// field's painted numbers count up from EITHER goal line to midfield (50)
+// and back down — not a raw distance-traveled odometer. Convert once here
+// so the yard-line labels read like an actual broadcast field.
+function fieldPositionLabel(worldY) {
+  const fieldPos = START_FIELD_POSITION + worldY;
+  if (fieldPos >= 100) return 'GOAL';
+  return String(Math.round(fieldPos <= 50 ? fieldPos : 100 - fieldPos));
+}
 
 function worldToScreenX(worldX) {
   return CANVAS_WIDTH / 2 + worldX * PX_PER_YARD_X;
@@ -464,7 +475,7 @@ function drawField() {
       ctx.stroke();
     });
     if (isTenYard) {
-      const label = y === fieldYards ? 'GOAL' : String(Math.round(y));
+      const label = fieldPositionLabel(y);
       ctx.font = 'bold 16px sans-serif';
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(15,35,20,0.6)';
