@@ -221,6 +221,7 @@ function updateDefenders(dtSec) {
       defenders.push({
         worldX: entry.worldX,
         worldY: entry.worldY,
+        number: 20 + Math.floor(Math.random() * 79), // cosmetic only, for the jersey sprite
         state: 'approaching', // approaching -> windingUp -> lunging -> recovering
         committedSide: null,
         windupStartedAt: 0,
@@ -306,51 +307,189 @@ function updateDefenders(dtSec) {
 }
 
 // ---- Rendering ----------------------------------------------------------
+// A shared sprite drawn for both the runner and every defender — layered
+// shadow/legs/jersey/helmet instead of a flat blob, so the field reads as
+// actual players rather than colored rectangles. `legPhase` drives a small
+// running-stride wobble; `glowColor` (used only for a winding-up defender's
+// telegraph — see drawDefenders()) draws a pulsing ring with no directional
+// information in it, on purpose: it tells the player a hit is coming, never
+// which way to dodge.
+function drawPlayerSprite(x, y, opts) {
+  const { jersey, trim, pants, helmet, number, legPhase, glowColor, glowStrength } = opts;
+  ctx.save();
+  ctx.translate(x, y);
+
+  // Ground shadow.
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  ctx.beginPath();
+  ctx.ellipse(0, 3, 10, 3.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (glowColor) {
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 90);
+    ctx.strokeStyle = glowColor;
+    ctx.globalAlpha = (0.35 + 0.4 * pulse) * (glowStrength != null ? glowStrength : 1);
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(0, -9, 15 + pulse * 3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Legs — a simple alternating stride.
+  const stride = Math.sin(legPhase) * 3;
+  ctx.fillStyle = pants;
+  ctx.fillRect(-5.5, -7 + stride, 4.5, 10);
+  ctx.fillRect(1, -7 - stride, 4.5, 10);
+
+  // Torso with side trim stripes.
+  ctx.fillStyle = jersey;
+  ctx.fillRect(-8, -17, 16, 15);
+  ctx.fillStyle = trim;
+  ctx.fillRect(-8, -17, 2.5, 15);
+  ctx.fillRect(5.5, -17, 2.5, 15);
+
+  // Jersey number.
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 8px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(String(number), 0, -6);
+
+  // Helmet, with a facemask hint and a small shine highlight for depth.
+  ctx.fillStyle = helmet;
+  ctx.beginPath();
+  ctx.arc(0, -21, 6.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(20,20,20,0.55)';
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.arc(0, -21, 4.6, -0.5, Math.PI + 0.5);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.beginPath();
+  ctx.ellipse(-2.2, -23.5, 2, 1.1, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
 function drawField() {
-  ctx.fillStyle = '#2f6b3f';
+  ctx.fillStyle = '#2c6438';
   ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-  // Alternating 5-yard stripes + yard numbers, scrolling with the runner.
-  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-  ctx.lineWidth = 2;
-  ctx.font = 'bold 16px sans-serif';
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  ctx.textAlign = 'center';
+  // Mowed-turf stripes: alternating shade per 5-yard band.
   const startYard = Math.floor(runner.worldY / 5) * 5 - 20;
   const endYard = startYard + 90;
+  for (let y = startYard; y < endYard; y += 5) {
+    if (y + 5 < 0 || y > fieldYards) continue;
+    const yTop = clampNum(y, 0, fieldYards);
+    const yBottom = clampNum(y + 5, 0, fieldYards);
+    const screenTop = worldToScreenY(yBottom);
+    const screenBottom = worldToScreenY(yTop);
+    const band = Math.round(y / 5);
+    ctx.fillStyle = band % 2 === 0 ? '#2c6438' : '#316f3f';
+    ctx.fillRect(0, screenTop, CANVAS_WIDTH, screenBottom - screenTop);
+  }
+
+  // Yard lines, hash marks, and numbers.
+  ctx.textAlign = 'center';
   for (let y = startYard; y <= endYard; y += 5) {
     if (y < 0 || y > fieldYards) continue;
     const screenY = worldToScreenY(y);
     if (screenY < -20 || screenY > CANVAS_HEIGHT + 20) continue;
+    const isTenYard = y % 10 === 0;
+    ctx.strokeStyle = isTenYard ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = isTenYard ? 2 : 1.3;
     ctx.beginPath();
     ctx.moveTo(0, screenY);
     ctx.lineTo(CANVAS_WIDTH, screenY);
     ctx.stroke();
-    if (y % 10 === 0) {
+    // Inbound hash marks at either side of the line.
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 2;
+    [CANVAS_WIDTH * 0.28, CANVAS_WIDTH * 0.72].forEach((hx) => {
+      ctx.beginPath();
+      ctx.moveTo(hx - 5, screenY);
+      ctx.lineTo(hx + 5, screenY);
+      ctx.stroke();
+    });
+    if (isTenYard) {
       const label = y === fieldYards ? 'GOAL' : String(Math.round(y));
-      ctx.fillText(label, CANVAS_WIDTH / 2, screenY - 6);
+      ctx.font = 'bold 16px sans-serif';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(15,35,20,0.6)';
+      ctx.strokeText(label, CANVAS_WIDTH / 2, screenY - 8);
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillText(label, CANVAS_WIDTH / 2, screenY - 8);
     }
   }
 
-  // End zone shading near the goal line.
+  // End zone: diagonal stripes + vertical "END ZONE" text.
   const goalScreenY = worldToScreenY(fieldYards);
-  if (goalScreenY > -60 && goalScreenY < CANVAS_HEIGHT + 60) {
-    ctx.fillStyle = 'rgba(74, 222, 128, 0.18)';
-    ctx.fillRect(0, Math.max(0, goalScreenY - 60), CANVAS_WIDTH, 60);
+  if (goalScreenY < CANVAS_HEIGHT + 80) {
+    const ezTop = Math.max(-80, goalScreenY - 55);
+    const ezBottom = goalScreenY;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, ezTop, CANVAS_WIDTH, ezBottom - ezTop);
+    ctx.clip();
+    ctx.fillStyle = '#1f4a29';
+    ctx.fillRect(0, ezTop, CANVAS_WIDTH, ezBottom - ezTop);
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 10;
+    for (let sx = -CANVAS_HEIGHT; sx < CANVAS_WIDTH + CANVAS_HEIGHT; sx += 26) {
+      ctx.beginPath();
+      ctx.moveTo(sx, ezBottom + 20);
+      ctx.lineTo(sx + CANVAS_HEIGHT, ezBottom - CANVAS_HEIGHT - 20);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillText('E N D   Z O N E', CANVAS_WIDTH / 2, (ezTop + ezBottom) / 2 + 4);
+    ctx.restore();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, goalScreenY);
+    ctx.lineTo(CANVAS_WIDTH, goalScreenY);
+    ctx.stroke();
   }
+
+  // Sidelines / out-of-bounds border, purely decorative (movement is still
+  // clamped to the full canvas width — this just frames it).
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fillRect(0, 0, 5, CANVAS_HEIGHT);
+  ctx.fillRect(CANVAS_WIDTH - 5, 0, 5, CANVAS_HEIGHT);
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.fillRect(5, 0, 2, CANVAS_HEIGHT);
+  ctx.fillRect(CANVAS_WIDTH - 7, 0, 2, CANVAS_HEIGHT);
 }
 
 function drawRunner() {
   const x = worldToScreenX(runner.worldX);
   const y = RUNNER_SCREEN_Y;
-  ctx.fillStyle = '#2f5fbf';
-  ctx.fillRect(x - 9, y - 12, 18, 20);
-  ctx.fillStyle = '#f0d9a0';
-  ctx.beginPath();
-  ctx.arc(x, y - 18, 7, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#eceff1';
-  ctx.fillText('1', x, y + 2);
+  const moving = Math.abs(runner.vx) + Math.abs(runner.vy) > 0.5;
+  const legPhase = moving ? performance.now() / 90 : 0;
+
+  // Evasive-burst motion streaks — replaces the old defender-side arrows as
+  // the game's directional "juice," now on the player's own move instead.
+  if (performance.now() < runner.evasiveUntil) {
+    const dir = runner.evasiveSide === 'left' ? 1 : -1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 3; i++) {
+      const sx = x + dir * (14 + i * 7);
+      ctx.beginPath();
+      ctx.moveTo(sx, y - 18 + i * 3);
+      ctx.lineTo(sx + dir * 8, y - 18 + i * 3);
+      ctx.stroke();
+    }
+  }
+
+  drawPlayerSprite(x, y, {
+    jersey: '#2f5fbf', trim: '#16234f', pants: '#e7ebef', helmet: '#1c3f8f',
+    number: 1, legPhase,
+  });
 }
 
 function drawDefenders() {
@@ -358,37 +497,30 @@ function drawDefenders() {
     const x = worldToScreenX(d.worldX);
     const y = worldToScreenY(d.worldY);
     if (y < -30 || y > CANVAS_HEIGHT + 30) continue;
+    const legPhase = performance.now() / 100 + d.worldX * 0.4;
 
-    ctx.fillStyle = '#c0392b';
-    ctx.fillRect(x - 8, y - 11, 16, 18);
-    ctx.fillStyle = '#e8b98a';
-    ctx.beginPath();
-    ctx.arc(x, y - 16, 6, 0, Math.PI * 2);
-    ctx.fill();
-
+    // The telegraph: a pulsing ring while winding up, and a stronger flash
+    // through the lunge itself — deliberately carries no left/right
+    // information, only "this one's about to (or is) diving."
+    let glowColor = null;
+    let glowStrength = 1;
     if (d.state === 'windingUp') {
-      // The telegraph: a flashing icon over the defender showing which way
-      // they've committed — the whole "tell" the player reacts to.
-      const flashing = Math.floor(performance.now() / 120) % 2 === 0;
-      ctx.fillStyle = flashing ? '#ffcc33' : '#fff3c4';
-      ctx.font = 'bold 20px sans-serif';
-      const icon = d.committedSide === 'left' ? '⬅' : d.committedSide === 'right' ? '➡' : '❗';
-      ctx.fillText(icon, x, y - 30);
-      ctx.font = 'bold 16px sans-serif';
+      glowColor = '#ffcc33';
     } else if (d.state === 'lunging') {
-      ctx.strokeStyle = '#ffe08a';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(x - 10, y);
-      ctx.lineTo(x + 10, y);
-      ctx.stroke();
+      glowColor = '#ff5c3d';
+      glowStrength = 1.4;
     }
+
+    drawPlayerSprite(x, y, {
+      jersey: '#c0392b', trim: '#5c150c', pants: '#26262a', helmet: '#8e2a1e',
+      number: d.number, legPhase, glowColor, glowStrength,
+    });
   }
 }
 
 function drawHud() {
-  ctx.fillStyle = 'rgba(8, 16, 12, 0.55)';
-  ctx.fillRect(0, 0, CANVAS_WIDTH, 30);
+  ctx.fillStyle = 'rgba(8, 16, 12, 0.6)';
+  ctx.fillRect(0, 0, CANVAS_WIDTH, 34);
   ctx.fillStyle = '#eaf3ec';
   ctx.font = 'bold 15px sans-serif';
   ctx.textAlign = 'left';
@@ -397,6 +529,15 @@ function drawHud() {
   const yardsToGo = Math.max(0, Math.round(fieldYards - runner.worldY));
   ctx.fillText(`${yardsToGo} yd to go`, CANVAS_WIDTH - 10, 20);
   ctx.textAlign = 'center';
+
+  // Field-position progress bar.
+  const progress = clampNum(runner.worldY / fieldYards, 0, 1);
+  const barX = 10;
+  const barW = CANVAS_WIDTH - 20;
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.fillRect(barX, 26, barW, 4);
+  ctx.fillStyle = '#4ade80';
+  ctx.fillRect(barX, 26, barW * progress, 4);
 }
 
 function render() {
