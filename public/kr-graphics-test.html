@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kickoff Return — Graphics Test</title>
+<link rel="stylesheet" href="/style.css" />
+<style>
+  .krt-wrap { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .krt-controls { min-width: 260px; max-width: 320px; display: flex; flex-direction: column; gap: 12px; }
+  .krt-controls h3 { margin: 6px 0 0; font-size: 0.95em; opacity: 0.85; }
+  .krt-controls label { display: flex; flex-direction: column; gap: 3px; font-size: 0.85em; }
+  .krt-controls .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .krt-controls .row button { flex: 1 1 auto; }
+  #krt-defender-list { font-size: 0.78em; max-height: 140px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 4px 6px; }
+  #krt-defender-list .krt-def-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  #krt-defender-list .krt-def-row:last-child { border-bottom: none; }
+  #krt-defender-list button { font-size: 0.85em; padding: 1px 6px; }
+  .krt-hint { font-size: 0.78em; opacity: 0.65; margin: 0; }
+</style>
+</head>
+<body>
+<header class="site">
+  <a class="logo" href="/">Draft Order <span>Arena</span></a>
+</header>
+<main>
+  <h1>Kickoff Return — Graphics Test</h1>
+  <p class="lead">A pure visual sandbox for judging the field/stadium/player rendering — not wired to any game
+    instance, league, or server state (same idea as the earlier <code>fg3d-test.html</code> prototype used to
+    build out the 3D Field Goal scene). Not linked from anywhere on the site.</p>
+
+  <div class="krt-wrap">
+    <div id="kr-canvas-wrap">
+      <canvas id="kr-canvas" width="480" height="720"></canvas>
+    </div>
+
+    <div class="krt-controls panel">
+      <h3>Runner</h3>
+      <p class="krt-hint">Arrow keys move &middot; Z juke &middot; X spin, exactly like the real game.</p>
+      <div class="row">
+        <button data-jump="0">Start (20)</button>
+        <button data-jump="30">Midfield</button>
+        <button data-jump="60">Red zone</button>
+      </div>
+      <div class="row">
+        <button data-jump="78">Goal line</button>
+        <button data-jump="85">In end zone</button>
+        <button id="krt-replay-catch">Replay catch</button>
+      </div>
+
+      <h3>Defenders</h3>
+      <label>Difficulty level (drives count/speed, same curve as real gameplay)
+        <input type="range" id="krt-level" min="0" max="20" value="0" step="1">
+      </label>
+      <p class="krt-hint" id="krt-level-readout"></p>
+      <div class="row">
+        <button id="krt-spawn-wave">Spawn a wave at this level</button>
+      </div>
+
+      <label>Click-to-place state
+        <select id="krt-place-state">
+          <option value="approaching">approaching (chases the runner)</option>
+          <option value="windingUp">windingUp (telegraph)</option>
+          <option value="lunging">lunging</option>
+          <option value="recovering">recovering</option>
+        </select>
+      </label>
+      <label>Click-to-place committed side
+        <select id="krt-place-side">
+          <option value="direct">direct</option>
+          <option value="left">left</option>
+          <option value="right">right</option>
+        </select>
+      </label>
+      <p class="krt-hint">Click anywhere on the field to drop a defender there in the state/side above.</p>
+
+      <div id="krt-defender-list"></div>
+      <div class="row">
+        <button id="krt-clear-defenders">Clear all defenders</button>
+      </div>
+    </div>
+  </div>
+
+  <p><a class="btn secondary" href="/">Back</a></p>
+</main>
+<footer class="site">Draft Order Arena — internal graphics test, not linked from the site</footer>
+<script src="/js/kr-graphics-test.js"></script>
+</body>
+</html>
