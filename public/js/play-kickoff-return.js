@@ -43,6 +43,7 @@ const PX_PER_YARD_X = (FIELD_RIGHT_PX - FIELD_LEFT_PX) / FIELD_WIDTH_YARDS;
 const PX_PER_YARD_Y = 14;
 const RUNNER_SCREEN_Y = CANVAS_HEIGHT * 0.68; // the runner is always drawn here; the world scrolls around it
 const START_FIELD_POSITION = 20; // worldY=0 is the player's own 20-yard line (matches kickoffReturn.js server-side)
+const OWN_GOAL_WORLD_Y = -START_FIELD_POSITION; // the returner's own goal line — unreachable in play (movement clamps at worldY=0), but still real, drawable field behind the start
 
 // How deep (in screen pixels, back from the goal line) the end-zone-plus-
 // stadium backdrop actually extends — see drawField()'s end zone block.
@@ -60,7 +61,7 @@ const GOALPOST_DEPTH_PX = 36; // screen-space depth into the end zone (in front 
 // so the yard-line labels read like an actual broadcast field.
 function fieldPositionLabel(worldY) {
   const fieldPos = START_FIELD_POSITION + worldY;
-  if (fieldPos >= 100) return 'GOAL';
+  if (fieldPos >= 100 || fieldPos <= 0) return 'GOAL';
   return String(Math.round(fieldPos <= 50 ? fieldPos : 100 - fieldPos));
 }
 
@@ -521,9 +522,11 @@ function drawField() {
   const startYard = Math.floor(cameraWorldY() / 5) * 5 - 20;
   const endYard = startYard + 90;
   for (let y = startYard; y < endYard; y += 5) {
-    if (y + 5 < 0 || y > fieldYards) continue;
-    const yTop = clampNum(y, 0, fieldYards);
-    const yBottom = clampNum(y + 5, 0, fieldYards);
+    // Real, drawable field extends back to the returner's own goal line —
+    // only actual gameplay (movement) is clamped at worldY=0, not the view.
+    if (y + 5 < OWN_GOAL_WORLD_Y || y > fieldYards) continue;
+    const yTop = clampNum(y, OWN_GOAL_WORLD_Y, fieldYards);
+    const yBottom = clampNum(y + 5, OWN_GOAL_WORLD_Y, fieldYards);
     const screenTop = worldToScreenY(yBottom);
     const screenBottom = worldToScreenY(yTop);
     const band = Math.round(y / 5);
@@ -534,7 +537,7 @@ function drawField() {
   // Yard lines, hash marks, and numbers.
   ctx.textAlign = 'center';
   for (let y = startYard; y <= endYard; y += 5) {
-    if (y < 0 || y > fieldYards) continue;
+    if (y < OWN_GOAL_WORLD_Y || y > fieldYards) continue;
     const screenY = worldToScreenY(y);
     if (screenY < -20 || screenY > CANVAS_HEIGHT + 20) continue;
     const isTenYard = y % 10 === 0;
@@ -624,6 +627,37 @@ function drawField() {
         ctx.fillRect(lx - 6, roofTop - 19, 12, 7);
       }
     }
+  }
+
+  // The returner's own end zone, behind the start — never reachable in
+  // play (movement clamps at worldY=0), but it's real drawable field, and
+  // leaving it blank read as broken. Same solid-fill treatment as the far
+  // end zone, just simpler (no stadium mirror behind it — the camera's
+  // backward reach is far short of ever exposing anything past this).
+  const ownGoalScreenY = worldToScreenY(OWN_GOAL_WORLD_Y);
+  if (ownGoalScreenY < CANVAS_HEIGHT + 80) {
+    const ownEzTop = ownGoalScreenY;
+    const ownEzBottom = Math.min(CANVAS_HEIGHT + 80, ownGoalScreenY + EZ_DEPTH_PX);
+    ctx.fillStyle = '#1f4a29';
+    ctx.fillRect(FIELD_LEFT_PX, ownEzTop, FIELD_RIGHT_PX - FIELD_LEFT_PX, ownEzBottom - ownEzTop);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(FIELD_LEFT_PX, ownEzTop, FIELD_RIGHT_PX - FIELD_LEFT_PX, ownEzBottom - ownEzTop);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText('E N D   Z O N E', CANVAS_WIDTH / 2, (ownEzTop + ownEzBottom) / 2 + 4);
+    ctx.restore();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(FIELD_LEFT_PX, ownGoalScreenY);
+    ctx.lineTo(FIELD_RIGHT_PX, ownGoalScreenY);
+    ctx.stroke();
+    // A plain dark fill past it, just so an extreme camera position (a
+    // future tuning change, say) still can't expose true blank canvas.
+    ctx.fillStyle = '#111c27';
+    ctx.fillRect(0, ownEzBottom, CANVAS_WIDTH, Math.max(0, CANVAS_HEIGHT - ownEzBottom));
   }
 
   // Sidelines / out-of-bounds border, purely decorative (movement is still
@@ -936,7 +970,24 @@ async function init() {
   document.getElementById('status-line').style.display = 'none';
   document.getElementById('game-panel').style.display = 'block';
   fieldYards = gi.currentReturn.fieldYards || fieldYards;
-  startReturn(gi.currentReturn);
+
+  if (gi.currentReturn.index === 0) {
+    // Don't throw the player into the catch animation/defenders the
+    // instant the page loads — wait for a deliberate click so they're
+    // actually ready (keyboard focused, hands on the arrows) first.
+    // Render one static frame so the field is visible behind the button
+    // instead of a blank canvas.
+    currentReturnConfig = gi.currentReturn;
+    render();
+    document.getElementById('return-info').textContent = `Return 1 of ${returnsPerPlayer}`;
+    document.getElementById('start-return-btn').style.display = 'inline-block';
+    document.getElementById('start-return-btn').addEventListener('click', () => {
+      document.getElementById('start-return-btn').style.display = 'none';
+      startReturn(gi.currentReturn);
+    }, { once: true });
+  } else {
+    startReturn(gi.currentReturn);
+  }
 }
 
 function poll() {
