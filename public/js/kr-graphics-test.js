@@ -90,15 +90,39 @@ function defenderSpeedFor(level) {
   return Math.min(MAX_DEFENDER_SPEED, BASE_DEFENDER_SPEED + level * DEFENDER_SPEED_PER_LEVEL);
 }
 
-// ---- Sandbox state ----------------------------------------------------------
+// Difficulty ladder + scoring, copied from lib/gameEngine/kickoffReturn.js —
+// this page plays a full real session (5 returns, real progression/scoring)
+// entirely client-side, so there's no server module to actually call.
+const RETURNS_PER_PLAYER = 5;
+const YARDS_PER_POINT = 0.1;
+const TOUCHDOWN_BONUS = 7;
+const LEVEL_STEP_TOUCHDOWN = 2;
+const LEVEL_STEP_BIG_GAIN = 1;
+const LEVEL_STEP_DOWN = 1;
+const BIG_GAIN_THRESHOLD = 50;
+const HOLD_THRESHOLD = 21;
+const MIN_LEVEL = 0;
+function nextLevelFor(currentLevel, yardsGained, touchdown) {
+  if (touchdown) return currentLevel + LEVEL_STEP_TOUCHDOWN;
+  if (yardsGained >= BIG_GAIN_THRESHOLD) return currentLevel + LEVEL_STEP_BIG_GAIN;
+  if (yardsGained >= HOLD_THRESHOLD) return currentLevel;
+  return Math.max(MIN_LEVEL, currentLevel - LEVEL_STEP_DOWN);
+}
+
+// ---- Game/session state ----------------------------------------------------
 let fieldYards = 80;
 let currentReturnConfig = { index: 0, defenderCount: BASE_DEFENDER_COUNT, defenderSpeed: BASE_DEFENDER_SPEED };
+
+function freshPlayer() {
+  return { currentIndex: 0, difficultyLevel: MIN_LEVEL, totalPoints: 0, totalYards: 0, touchdowns: 0, completed: false };
+}
+let player = freshPlayer();
 
 const runner = {
   worldX: 0, worldY: 0,
   lateralDir: 'none', lastLateralDir: null,
   evasiveSide: null, evasiveUntil: 0, nextEvasiveAllowedAt: 0,
-  state: 'running', // sandbox starts already running — no catch gate, no server round-trip
+  state: 'idle', // idle -> catching -> running -> tackled/touchdown, exactly like the real game
   vx: 0, vy: 0,
 };
 
@@ -163,9 +187,7 @@ function updateRunner(dtSec) {
 
   const forwardSpeed = vy >= 0 ? RUNNER_FORWARD_SPEED : RUNNER_BACKWARD_SPEED;
   const worldYVelocity = vy * forwardSpeed;
-  // No upper clamp at fieldYards here — the sandbox lets you run past the
-  // goal line into the end zone/stadium on purpose, to inspect that view.
-  runner.worldY = Math.max(0, runner.worldY + worldYVelocity * dtSec);
+  runner.worldY = clampNum(runner.worldY + worldYVelocity * dtSec, 0, fieldYards);
 
   const evasiveActive = performance.now() < runner.evasiveUntil;
   let worldXVelocity;
@@ -184,6 +206,10 @@ function updateRunner(dtSec) {
   if (left && !right) { runner.lateralDir = 'left'; runner.lastLateralDir = 'left'; }
   else if (right && !left) { runner.lateralDir = 'right'; runner.lastLateralDir = 'right'; }
   else runner.lateralDir = 'none';
+
+  if (runner.worldY >= fieldYards) {
+    runner.state = 'touchdown';
+  }
 }
 
 // ---- Defenders (unchanged AI from the real game) ---------------------------
@@ -266,8 +292,12 @@ function updateDefenders(dtSec) {
 
       const dist = Math.hypot(runner.worldX - d.worldX, runner.worldY - d.worldY);
       if (dist <= TACKLE_RADIUS) {
-        // Sandbox doesn't end the "return" on a hit — just recovers, so you
-        // can keep testing without resetting.
+        const runnerSide = currentRunnerSide();
+        const hit = d.committedSide === 'direct' || d.committedSide === runnerSide;
+        if (hit) {
+          runner.state = 'tackled';
+          return;
+        }
         d.state = 'recovering';
         d.recoverStartedAt = now;
       } else if (t >= 1) {
@@ -641,27 +671,25 @@ function render() {
   drawRunner();
 }
 
-// ---- Game loop ---------------------------------------------------------
-// Always-visible confirmation that a control actually did something — the
-// canvas itself renders at 480x720 and can sit partly below the fold on a
-// normal window, so this text line (outside/above the canvas) is the
-// guaranteed-visible proof a button worked, independent of scroll position.
-const statusEl = document.getElementById('krt-status');
-function updateStatus() {
-  statusEl.textContent = `Runner: field pos ${fieldPositionLabel(runner.worldY)}, worldY=${runner.worldY.toFixed(1)} · ${defenders.length} defender${defenders.length === 1 ? '' : 's'} on field`;
-}
-
+// ---- Game loop (unchanged shape from the real game: ends the return on
+// tackle/touchdown instead of looping forever) ------------------------------
 function tick(now) {
   const dtSec = Math.min((now - lastFrameAt) / 1000, 0.05);
   lastFrameAt = now;
 
   if (runner.state === 'running') {
     updateRunner(dtSec);
-    updateDefenders(dtSec);
+    if (runner.state === 'running') updateDefenders(dtSec);
   }
+
   render();
-  updateStatus();
-  animationHandle = requestAnimationFrame(tick);
+
+  if (runner.state === 'running') {
+    animationHandle = requestAnimationFrame(tick);
+  } else {
+    animationHandle = null;
+    finishReturn();
+  }
 }
 
 function stopLoop() {
@@ -669,12 +697,13 @@ function stopLoop() {
   animationHandle = null;
 }
 
-// A cosmetic-only replay of the real game's catch animation, for judging
-// that piece in isolation — doesn't gate anything here (control never
-// hands off since the sandbox has no "running" state to switch into).
-async function replayCatchAnimation() {
-  stopLoop();
-  const priorState = runner.state;
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// A brief non-interactive beat before control hands over — identical to the
+// real game's.
+async function playCatchAnimation() {
   runner.state = 'catching';
   const CATCH_ANIMATION_MS = 1400;
   const start = performance.now();
@@ -693,21 +722,126 @@ async function replayCatchAnimation() {
     ctx.fillText('Kickoff...', CANVAS_WIDTH / 2, 60);
     await new Promise((r) => requestAnimationFrame(r));
   }
-  runner.state = priorState;
+}
+
+// ---- Session lifecycle (mirrors play-kickoff-return.js's startReturn/
+// finishReturn/init, minus the server round-trip — scoring and the
+// difficulty ladder are computed locally with the same formulas instead of
+// POSTing to /kickoff-return/submit and /next) -------------------------------
+function presentCurrentReturnLocal() {
+  return {
+    index: player.currentIndex,
+    defenderCount: defenderCountFor(player.difficultyLevel),
+    defenderSpeed: defenderSpeedFor(player.difficultyLevel),
+  };
+}
+
+async function startReturn(returnConfig) {
+  currentReturnConfig = returnConfig;
+  runner.worldX = 0;
+  runner.worldY = 0;
+  runner.lateralDir = 'none';
+  runner.lastLateralDir = null;
+  runner.evasiveSide = null;
+  runner.evasiveUntil = 0;
+  runner.nextEvasiveAllowedAt = 0;
+  runner.vx = 0;
+  runner.vy = 0;
+  defenders = [];
+  spawnSchedule = scheduleDefenders(returnConfig.defenderCount);
+
+  document.getElementById('krt-return-info').textContent = `Return ${returnConfig.index + 1} of ${RETURNS_PER_PLAYER}`;
+  document.getElementById('krt-result').textContent = '';
+  document.getElementById('krt-next-btn').style.display = 'none';
+
+  await playCatchAnimation();
+  runner.state = 'running';
   lastFrameAt = performance.now();
+  stopLoop();
   animationHandle = requestAnimationFrame(tick);
 }
 
-// ---- Sandbox UI wiring ---------------------------------------------------
+let lastAttempt = null; // {yardsGained, touchdown} — read by the Next Return handler to advance the ladder
+
+async function finishReturn() {
+  const touchdown = runner.state === 'touchdown';
+  const yardsGained = Math.round(clampNum(runner.worldY, 0, fieldYards));
+
+  render();
+  ctx.fillStyle = touchdown ? 'rgba(74, 222, 128, 0.85)' : 'rgba(239, 68, 68, 0.85)';
+  ctx.fillRect(0, CANVAS_HEIGHT / 2 - 40, CANVAS_WIDTH, 80);
+  ctx.fillStyle = '#0a1410';
+  ctx.font = 'bold 34px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(touchdown ? 'TOUCHDOWN!' : 'TACKLED!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 12);
+  await wait(1400);
+
+  // Local equivalent of kickoffReturn.js's submitReturn(): same
+  // normalization (touchdown always means exactly fieldYards) and scoring.
+  const clampedYards = clampNum(Math.round(yardsGained), 0, fieldYards);
+  const finalTouchdown = touchdown || clampedYards >= fieldYards;
+  const finalYards = finalTouchdown ? fieldYards : clampedYards;
+  const points = finalYards * YARDS_PER_POINT + (finalTouchdown ? TOUCHDOWN_BONUS : 0);
+  player.totalPoints += points;
+  player.totalYards += finalYards;
+  if (finalTouchdown) player.touchdowns += 1;
+  lastAttempt = { yardsGained: finalYards, touchdown: finalTouchdown };
+
+  const resultEl = document.getElementById('krt-result');
+  resultEl.textContent = finalTouchdown
+    ? `Touchdown! ${finalYards} yards — +${points.toFixed(1)} points`
+    : `Tackled after ${finalYards} yards — +${points.toFixed(1)} points`;
+  resultEl.style.color = finalTouchdown ? '#4ade80' : '#ef4444';
+  document.getElementById('krt-next-btn').style.display = 'inline-block';
+}
+
+document.getElementById('krt-start-btn').addEventListener('click', () => {
+  document.getElementById('krt-start-btn').style.display = 'none';
+  startReturn(presentCurrentReturnLocal());
+});
+
+document.getElementById('krt-next-btn').addEventListener('click', () => {
+  // Local equivalent of kickoffReturn.js's advanceToNext() — off the
+  // just-completed attempt and the pre-increment level, same as the server.
+  player.difficultyLevel = nextLevelFor(player.difficultyLevel, lastAttempt.yardsGained, lastAttempt.touchdown);
+  player.currentIndex += 1;
+  if (player.currentIndex >= RETURNS_PER_PLAYER) {
+    player.completed = true;
+    document.getElementById('krt-next-btn').style.display = 'none';
+    document.getElementById('krt-session-done').style.display = 'block';
+    document.getElementById('krt-session-done').textContent =
+      `Session finished — ${player.totalPoints.toFixed(1)} points, ${player.touchdowns} touchdown${player.touchdowns === 1 ? '' : 's'}, ${player.totalYards} total yards.`;
+    document.getElementById('krt-restart-btn').style.display = 'inline-block';
+  } else {
+    startReturn(presentCurrentReturnLocal());
+  }
+});
+
+document.getElementById('krt-restart-btn').addEventListener('click', () => {
+  stopLoop();
+  player = freshPlayer();
+  defenders = [];
+  spawnSchedule = [];
+  runner.worldX = 0;
+  runner.worldY = 0;
+  runner.state = 'idle';
+  document.getElementById('krt-result').textContent = '';
+  document.getElementById('krt-session-done').style.display = 'none';
+  document.getElementById('krt-restart-btn').style.display = 'none';
+  currentReturnConfig = presentCurrentReturnLocal();
+  document.getElementById('krt-return-info').textContent = `Return 1 of ${RETURNS_PER_PLAYER}`;
+  render();
+  document.getElementById('krt-start-btn').style.display = 'inline-block';
+});
+
+// ---- Dev tools wiring (jump/spawn/place — supplementary, act on whatever
+// return is currently in progress; see the panel's own hint text) ----------
 document.querySelectorAll('[data-jump]').forEach((btn) => {
   btn.addEventListener('click', () => {
     runner.worldY = Number(btn.dataset.jump);
     runner.worldX = 0;
+    if (animationHandle == null) render(); // instant feedback even if no loop is currently running
   });
-});
-
-document.getElementById('krt-replay-catch').addEventListener('click', () => {
-  replayCatchAnimation();
 });
 
 const levelInput = document.getElementById('krt-level');
@@ -723,22 +857,21 @@ updateLevelReadout();
 
 document.getElementById('krt-spawn-wave').addEventListener('click', () => {
   const level = Number(levelInput.value);
-  currentReturnConfig = { index: 0, defenderCount: defenderCountFor(level), defenderSpeed: defenderSpeedFor(level) };
   // Spawn every scheduled defender immediately, unlike the real game's
   // lead-distance gating (SPAWN_LEAD_YARDS) — that's meant to pace a
-  // return you're actually running, but here the runner might be
-  // stationary (e.g. right after a "Goal line" jump), and nothing would
-  // ever spawn while the gap to a distant schedule entry never closes.
-  const schedule = scheduleDefenders(currentReturnConfig.defenderCount);
-  spawnSchedule = [];
+  // return you're actually running, but this dev tool is for instant
+  // inspection regardless of whether the runner is currently moving.
+  const schedule = scheduleDefenders(defenderCountFor(level));
   schedule.forEach((entry) => {
     defenders.push(makeDefender(entry.worldX, entry.worldY, 'approaching', null));
   });
+  if (animationHandle == null) render();
 });
 
 document.getElementById('krt-clear-defenders').addEventListener('click', () => {
   defenders = [];
   spawnSchedule = [];
+  if (animationHandle == null) render();
 });
 
 // Click-to-place: convert the click's canvas-pixel position back to world
@@ -753,7 +886,10 @@ canvas.addEventListener('click', (e) => {
   const state = document.getElementById('krt-place-state').value;
   const side = document.getElementById('krt-place-side').value;
   defenders.push(makeDefender(worldX, worldY, state, state === 'approaching' ? null : side));
+  if (animationHandle == null) render();
 });
 
-lastFrameAt = performance.now();
-animationHandle = requestAnimationFrame(tick);
+// ---- Init: render one static idle frame and wait for "Start Return" ------
+currentReturnConfig = presentCurrentReturnLocal();
+document.getElementById('krt-return-info').textContent = `Return 1 of ${RETURNS_PER_PLAYER}`;
+render();
