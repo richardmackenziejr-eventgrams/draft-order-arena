@@ -642,6 +642,15 @@ function render() {
 }
 
 // ---- Game loop ---------------------------------------------------------
+// Always-visible confirmation that a control actually did something — the
+// canvas itself renders at 480x720 and can sit partly below the fold on a
+// normal window, so this text line (outside/above the canvas) is the
+// guaranteed-visible proof a button worked, independent of scroll position.
+const statusEl = document.getElementById('krt-status');
+function updateStatus() {
+  statusEl.textContent = `Runner: field pos ${fieldPositionLabel(runner.worldY)}, worldY=${runner.worldY.toFixed(1)} · ${defenders.length} defender${defenders.length === 1 ? '' : 's'} on field`;
+}
+
 function tick(now) {
   const dtSec = Math.min((now - lastFrameAt) / 1000, 0.05);
   lastFrameAt = now;
@@ -651,6 +660,7 @@ function tick(now) {
     updateDefenders(dtSec);
   }
   render();
+  updateStatus();
   animationHandle = requestAnimationFrame(tick);
 }
 
@@ -714,7 +724,16 @@ updateLevelReadout();
 document.getElementById('krt-spawn-wave').addEventListener('click', () => {
   const level = Number(levelInput.value);
   currentReturnConfig = { index: 0, defenderCount: defenderCountFor(level), defenderSpeed: defenderSpeedFor(level) };
-  spawnSchedule = scheduleDefenders(currentReturnConfig.defenderCount);
+  // Spawn every scheduled defender immediately, unlike the real game's
+  // lead-distance gating (SPAWN_LEAD_YARDS) — that's meant to pace a
+  // return you're actually running, but here the runner might be
+  // stationary (e.g. right after a "Goal line" jump), and nothing would
+  // ever spawn while the gap to a distant schedule entry never closes.
+  const schedule = scheduleDefenders(currentReturnConfig.defenderCount);
+  spawnSchedule = [];
+  schedule.forEach((entry) => {
+    defenders.push(makeDefender(entry.worldX, entry.worldY, 'approaching', null));
+  });
 });
 
 document.getElementById('krt-clear-defenders').addEventListener('click', () => {
