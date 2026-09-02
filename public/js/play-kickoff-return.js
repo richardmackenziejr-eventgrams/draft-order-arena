@@ -32,9 +32,17 @@ const CANVAS_HEIGHT = canvas.height;
 
 const FIELD_WIDTH_YARDS = 53.3;
 const RUNNER_HALF_WIDTH = 0.6;
-const PX_PER_YARD_X = CANVAS_WIDTH / FIELD_WIDTH_YARDS;
+// The playing field is inset from the canvas edges so there's room to draw
+// stadium stands in the margins on both sides — purely cosmetic, doesn't
+// touch gameplay math, since world-yard coordinates (movement, collision,
+// clamping) never reference pixels at all.
+const STADIUM_MARGIN_PX = 34;
+const FIELD_LEFT_PX = STADIUM_MARGIN_PX;
+const FIELD_RIGHT_PX = CANVAS_WIDTH - STADIUM_MARGIN_PX;
+const PX_PER_YARD_X = (FIELD_RIGHT_PX - FIELD_LEFT_PX) / FIELD_WIDTH_YARDS;
 const PX_PER_YARD_Y = 14;
 const RUNNER_SCREEN_Y = CANVAS_HEIGHT * 0.68; // the runner is always drawn here; the world scrolls around it
+const GOALPOST_DEPTH_YARDS = 7; // how far behind the goal line the posts sit
 
 function worldToScreenX(worldX) {
   return CANVAS_WIDTH / 2 + worldX * PX_PER_YARD_X;
@@ -373,9 +381,51 @@ function drawPlayerSprite(x, y, opts) {
   ctx.restore();
 }
 
+// Deterministic pseudo-random in [0,1) from a seed — used for crowd-dot
+// scatter so the stands don't shimmer/re-randomize every frame (this runs
+// inside render(), called ~60x/sec).
+function seededRandom(seed) {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+// Left/right stadium stands filling the margins the field is inset from.
+// Static relative to the screen (not tied to worldY) — the seating bowl
+// runs the length of the field, so a fixed backdrop reads fine while the
+// camera scrolls, and it's far cheaper than trying to scroll a seating
+// pattern in sync with the field.
+function drawStadiumSides() {
+  [{ x0: 0, x1: FIELD_LEFT_PX, side: 0 }, { x0: FIELD_RIGHT_PX, x1: CANVAS_WIDTH, side: 1 }].forEach(({ x0, x1, side }) => {
+    const w = x1 - x0;
+    ctx.fillStyle = '#0d1a26';
+    ctx.fillRect(x0, 0, w, CANVAS_HEIGHT);
+    // Tiered bleacher rows, each tier narrower toward the field so it reads
+    // as a raked stand rather than a flat wall.
+    const tiers = 5;
+    for (let t = 0; t < tiers; t++) {
+      const tierW = w * (0.9 - t * 0.13);
+      const tx = side === 0 ? x1 - tierW : x0;
+      ctx.fillStyle = t % 2 === 0 ? '#16283a' : '#1c3346';
+      ctx.fillRect(tx, 0, tierW, CANVAS_HEIGHT);
+    }
+    // Crowd — a scatter of small dots.
+    ctx.fillStyle = 'rgba(224,206,168,0.55)';
+    for (let i = 0; i < 46; i++) {
+      const px = x0 + seededRandom(side * 97 + i * 3.7) * w;
+      const py = seededRandom(side * 51 + i * 8.3) * CANVAS_HEIGHT;
+      ctx.fillRect(px, py, 2, 2);
+    }
+    // Low wall separating the stands from the field of play.
+    ctx.fillStyle = '#e4e4e4';
+    ctx.fillRect(side === 0 ? x1 - 3 : x0, 0, 3, CANVAS_HEIGHT);
+  });
+}
+
 function drawField() {
+  drawStadiumSides();
+
   ctx.fillStyle = '#2c6438';
-  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  ctx.fillRect(FIELD_LEFT_PX, 0, FIELD_RIGHT_PX - FIELD_LEFT_PX, CANVAS_HEIGHT);
 
   // Mowed-turf stripes: alternating shade per 5-yard band.
   const startYard = Math.floor(runner.worldY / 5) * 5 - 20;
@@ -388,7 +438,7 @@ function drawField() {
     const screenBottom = worldToScreenY(yTop);
     const band = Math.round(y / 5);
     ctx.fillStyle = band % 2 === 0 ? '#2c6438' : '#316f3f';
-    ctx.fillRect(0, screenTop, CANVAS_WIDTH, screenBottom - screenTop);
+    ctx.fillRect(FIELD_LEFT_PX, screenTop, FIELD_RIGHT_PX - FIELD_LEFT_PX, screenBottom - screenTop);
   }
 
   // Yard lines, hash marks, and numbers.
@@ -401,13 +451,13 @@ function drawField() {
     ctx.strokeStyle = isTenYard ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.4)';
     ctx.lineWidth = isTenYard ? 2 : 1.3;
     ctx.beginPath();
-    ctx.moveTo(0, screenY);
-    ctx.lineTo(CANVAS_WIDTH, screenY);
+    ctx.moveTo(FIELD_LEFT_PX, screenY);
+    ctx.lineTo(FIELD_RIGHT_PX, screenY);
     ctx.stroke();
     // Inbound hash marks at either side of the line.
     ctx.strokeStyle = 'rgba(255,255,255,0.55)';
     ctx.lineWidth = 2;
-    [CANVAS_WIDTH * 0.28, CANVAS_WIDTH * 0.72].forEach((hx) => {
+    [FIELD_LEFT_PX + (FIELD_RIGHT_PX - FIELD_LEFT_PX) * 0.28, FIELD_LEFT_PX + (FIELD_RIGHT_PX - FIELD_LEFT_PX) * 0.72].forEach((hx) => {
       ctx.beginPath();
       ctx.moveTo(hx - 5, screenY);
       ctx.lineTo(hx + 5, screenY);
@@ -431,10 +481,10 @@ function drawField() {
     const ezBottom = goalScreenY;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, ezTop, CANVAS_WIDTH, ezBottom - ezTop);
+    ctx.rect(FIELD_LEFT_PX, ezTop, FIELD_RIGHT_PX - FIELD_LEFT_PX, ezBottom - ezTop);
     ctx.clip();
     ctx.fillStyle = '#1f4a29';
-    ctx.fillRect(0, ezTop, CANVAS_WIDTH, ezBottom - ezTop);
+    ctx.fillRect(FIELD_LEFT_PX, ezTop, FIELD_RIGHT_PX - FIELD_LEFT_PX, ezBottom - ezTop);
     ctx.strokeStyle = 'rgba(255,255,255,0.12)';
     ctx.lineWidth = 10;
     for (let sx = -CANVAS_HEIGHT; sx < CANVAS_WIDTH + CANVAS_HEIGHT; sx += 26) {
@@ -450,19 +500,79 @@ function drawField() {
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(0, goalScreenY);
-    ctx.lineTo(CANVAS_WIDTH, goalScreenY);
+    ctx.moveTo(FIELD_LEFT_PX, goalScreenY);
+    ctx.lineTo(FIELD_RIGHT_PX, goalScreenY);
     ctx.stroke();
+
+    // Stadium structure behind the end zone — an upper-deck backdrop with
+    // its own crowd scatter, plus a pair of light towers — anchored to the
+    // goal line so it scrolls into view as the runner closes in on it.
+    const standBottom = ezTop;
+    const standTop = standBottom - 90;
+    if (standBottom > -20) {
+      const visTop = Math.max(-20, standTop);
+      ctx.fillStyle = '#111c27';
+      ctx.fillRect(0, visTop, CANVAS_WIDTH, standBottom - visTop);
+      ctx.fillStyle = '#0a141d';
+      ctx.fillRect(0, standBottom - 6, CANVAS_WIDTH, 6);
+      ctx.fillStyle = 'rgba(225,205,165,0.45)';
+      for (let i = 0; i < 70; i++) {
+        const px = seededRandom(i * 3.1) * CANVAS_WIDTH;
+        const py = standTop + seededRandom(i * 7.7) * (standBottom - standTop - 8) + 4;
+        if (py < -20 || py > CANVAS_HEIGHT + 20) continue;
+        ctx.fillRect(px, py, 2, 2);
+      }
+      [FIELD_LEFT_PX - 16, FIELD_RIGHT_PX + 16].forEach((lx) => {
+        ctx.strokeStyle = '#5a6672';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(lx, standTop);
+        ctx.lineTo(lx, standTop - 26);
+        ctx.stroke();
+        ctx.fillStyle = '#dfe6ee';
+        ctx.fillRect(lx - 7, standTop - 33, 14, 9);
+      });
+    }
   }
 
   // Sidelines / out-of-bounds border, purely decorative (movement is still
-  // clamped to the full canvas width — this just frames it).
+  // clamped in world-yard space regardless of where this line is drawn).
   ctx.fillStyle = 'rgba(0,0,0,0.22)';
-  ctx.fillRect(0, 0, 5, CANVAS_HEIGHT);
-  ctx.fillRect(CANVAS_WIDTH - 5, 0, 5, CANVAS_HEIGHT);
+  ctx.fillRect(FIELD_LEFT_PX - 5, 0, 5, CANVAS_HEIGHT);
+  ctx.fillRect(FIELD_RIGHT_PX, 0, 5, CANVAS_HEIGHT);
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.fillRect(5, 0, 2, CANVAS_HEIGHT);
-  ctx.fillRect(CANVAS_WIDTH - 7, 0, 2, CANVAS_HEIGHT);
+  ctx.fillRect(FIELD_LEFT_PX - 5, 0, 2, CANVAS_HEIGHT);
+  ctx.fillRect(FIELD_RIGHT_PX + 3, 0, 2, CANVAS_HEIGHT);
+}
+
+// The goalpost sits a few yards behind the goal line, dead center — drawn
+// in world space (via worldToScreenX/Y) so it scrolls into view exactly
+// like everything else as the runner closes in on the end zone.
+function drawGoalPost() {
+  const baseX = worldToScreenX(0);
+  const baseY = worldToScreenY(fieldYards + GOALPOST_DEPTH_YARDS);
+  if (baseY < -70 || baseY > CANVAS_HEIGHT + 70) return;
+  const uprightOffsetPx = 3.08 * PX_PER_YARD_X; // NFL uprights are ~18.5ft apart
+  const crossbarY = baseY - 14;
+  const uprightTopY = baseY - 48;
+
+  ctx.strokeStyle = '#ffd400';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(baseX, baseY);
+  ctx.lineTo(baseX, crossbarY);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(baseX - uprightOffsetPx, crossbarY);
+  ctx.lineTo(baseX + uprightOffsetPx, crossbarY);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(baseX - uprightOffsetPx, crossbarY);
+  ctx.lineTo(baseX - uprightOffsetPx, uprightTopY);
+  ctx.moveTo(baseX + uprightOffsetPx, crossbarY);
+  ctx.lineTo(baseX + uprightOffsetPx, uprightTopY);
+  ctx.stroke();
 }
 
 function drawRunner() {
@@ -542,6 +652,7 @@ function drawHud() {
 
 function render() {
   drawField();
+  drawGoalPost();
   drawDefenders();
   drawRunner();
   drawHud();
