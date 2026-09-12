@@ -145,7 +145,8 @@ const BLOCKER_LATERAL_SLOTS = [-20, -10, 0, 10, 20]; // 5 lanes across the field
 const BLOCKER_WAVE1_FORWARD = 35; // the setup zone's near edge (closer to the coverage team)
 const BLOCKER_WAVE2_FORWARD = 31; // the setup zone's far edge (closer to the returner)
 const BLOCKER_WAVE2_LATERAL_SHIFT = 5; // offsets wave 2's lanes from wave 1's, so it's not a rigid grid
-const BLOCKER_FORWARD_SPEED = 8; // yards/sec, close to the runner's own pace
+const BLOCKER_FORWARD_SPEED = 6; // yards/sec — deliberately slower than the runner's own pace
+const BLOCKER_MAX_LEAD_YARDS = 22; // a blocker won't advance more than this far ahead of the runner's CURRENT position — without a leash they sprint off-screen (independently, at their own fixed pace, with nothing pulling them back) well before the coverage team or the runner ever catches up to where they are, so the wedge is nowhere in view by the time it would matter
 const BLOCK_ENGAGE_DISTANCE = 3.5; // yards — how close a defender needs to get to an unbeaten blocker to be held up by it
 
 // Coverage (kicking) team — 10 defenders plus a trailing kicker makes 11.
@@ -162,8 +163,8 @@ const COVERAGE_SPAWN_SPREAD = 3; // +/- jitter — the rule has them in one line
 const KICKER_SPAWN_WORLDY = 65; // kicking team's own 35
 const KICKER_SPEED = 4.5; // yards/sec, slow, never tackles, never blocked
 const PASSIVE_DEFENDER_SPEED = 6; // yards/sec — a simple straight jog for coverage players that were never a real threat, once they get past the wedge
-const BLOCK_MIN_MS = 500;
-const BLOCK_RANDOM_MS = 2000; // once engaged, a defender's hold time is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster
+const BLOCK_MIN_MS = 2500;
+const BLOCK_RANDOM_MS = 4000; // once engaged, a defender's hold time is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster — long enough to be clearly visible as an actual holdup, not resolved in under a second
 
 // ---- Game state -------------------------------------------------------------
 let returnsPerPlayer = 5;
@@ -282,7 +283,14 @@ function makeBlockers() {
 // downfield on its own, the way a real Tecmo return's blockers do.
 function updateBlockers(dtSec) {
   for (const b of blockers) {
-    b.worldY = clampNum(b.worldY + b.speed * dtSec, 0, fieldYards);
+    if (b.beaten) continue; // spent — holds its ground rather than sprinting on with nothing left to do
+    // The leash never pulls a blocker BACK below wherever it already is
+    // (they legitimately spawn ahead of the runner, per the real setup
+    // zone) — it only caps how much FARTHER it can advance until the
+    // runner closes enough distance, so an unbeaten blocker waits for the
+    // play rather than sprinting off into empty field forever.
+    const maxWorldY = Math.min(fieldYards, Math.max(b.worldY, runner.worldY + BLOCKER_MAX_LEAD_YARDS));
+    b.worldY = clampNum(b.worldY + b.speed * dtSec, 0, maxWorldY);
   }
 }
 
