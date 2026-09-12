@@ -170,11 +170,12 @@ const BLOCK_ENGAGE_DISTANCE = 3.5; // yards — how close a blocker needs to get
 const COVERAGE_TEAM_SIZE = 10;
 const COVERAGE_SPAWN_WORLDY = 40; // receiving team's 40
 const COVERAGE_SPAWN_SPREAD = 3; // +/- jitter — the rule has them in one line, not spread out
+const COVERAGE_COLUMN_WIDTH = 4; // +/- lateral jitter — a tight column at the snap, per real kickoff footage, not spread across the whole field width
 const KICKER_SPAWN_WORLDY = 65; // kicking team's own 35
 const KICKER_SPEED = 4.5; // yards/sec, slow, never tackles, never blocked
 const PASSIVE_DEFENDER_SPEED = 6; // yards/sec — a simple straight jog for coverage players that were never a real threat, once they get past the wedge
-const BLOCK_MIN_MS = 2500;
-const BLOCK_RANDOM_MS = 4000; // once engaged, a defender's hold time is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster — long enough to be clearly visible as an actual holdup, not resolved in under a second
+const BLOCK_MIN_MS = 800;
+const BLOCK_RANDOM_MS = 1200; // once engaged, a defender's hold time is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster — a quick individual holdup, not a sustained multi-second scrum (real footage shows scattered, fast 1-on-1 blocks resolving in about a second, not one long line-wide battle)
 
 // ---- Game state -------------------------------------------------------------
 let returnsPerPlayer = 5;
@@ -351,7 +352,12 @@ function makeCoverageTeam(activeCount) {
   const positions = [];
   for (let i = 0; i < COVERAGE_TEAM_SIZE; i++) {
     positions.push({
-      worldX: runner.worldX + (i - (COVERAGE_TEAM_SIZE - 1) / 2) * (FIELD_WIDTH_YARDS / COVERAGE_TEAM_SIZE) + (Math.random() * 2 - 1) * 1.5,
+      // A tight column down the middle at the snap, not spread across the
+      // whole field width — real kickoff coverage runs down together in a
+      // narrow group and only fans out once it's actually chasing the
+      // returner's real position (which the active pursuit below already
+      // does on its own).
+      worldX: runner.worldX + (Math.random() * 2 - 1) * COVERAGE_COLUMN_WIDTH,
       worldY: runner.worldY + COVERAGE_SPAWN_WORLDY + (Math.random() * 2 - 1) * COVERAGE_SPAWN_SPREAD,
     });
   }
