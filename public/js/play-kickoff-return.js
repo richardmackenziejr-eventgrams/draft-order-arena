@@ -110,22 +110,41 @@ const DEFENDER_LUNGE_LATERAL_LEAD = 1.3; // how far to the committed side the lu
 const TACKLE_RADIUS = 1.1; // yards — collision distance during a lunge
 const DEFENDER_RECOVER_MS = 550;
 
-const SPAWN_LEAD_YARDS = 13; // defenders spawn this far ahead of the runner
-const SPAWN_LATERAL_SPREAD = FIELD_WIDTH_YARDS * 0.42;
-
 const CATCH_ANIMATION_MS = 1400;
 const RESULT_HOLD_MS = 1400;
 
-// Return-team blockers — purely cosmetic (they don't interact with
-// defenders at all; the tackle mechanic is unchanged and still entirely
-// about the runner's own dodge). They hold a fixed formation just ahead of
-// and flanking the runner, matching the wedge of teammates a real Tecmo
-// kickoff return shows around the ball carrier.
-const BLOCKER_OFFSETS = [
-  { forward: 3, lateral: 0 },
-  { forward: 1, lateral: -4.5 },
-  { forward: 1, lateral: 4.5 },
-];
+// Return-team blockers — 10 of them (plus the runner makes 11), arranged in
+// two waves of 5 just ahead of the runner at the snap, each running
+// independently downfield at its own pace (no formation-locking to the
+// runner's position — a real Tecmo return shows the wedge advancing on its
+// own, not glued to the ball carrier). They still don't interact with
+// defenders as physical obstacles; instead, every coverage defender starts
+// "blocked" (held in place) for a randomized duration representing running
+// into this wedge — see updateDefenders()'s 'blocked' state for how that
+// produces the actual gameplay effect of a staggered convergence.
+const BLOCKER_LATERAL_SLOTS = [-20, -10, 0, 10, 20]; // 5 lanes across the field's width
+const BLOCKER_WAVE1_FORWARD = 9; // yards ahead of the runner at the snap
+const BLOCKER_WAVE2_FORWARD = 5;
+const BLOCKER_WAVE2_LATERAL_SHIFT = 5; // offsets wave 2's lanes from wave 1's, so it's not a rigid grid
+const BLOCKER_FORWARD_SPEED = 8; // yards/sec, close to the runner's own pace
+
+// Coverage (kicking) team — 10 defenders plus a trailing kicker makes 11.
+// All spawn at once at the snap (no lazy proximity spawning — "the kickoff
+// team doesn't start running until the ball is kicked" just falls out of
+// updateDefenders() only ever being called once runner.state is 'running'),
+// roughly at the depth where the blocker wedge is, since that's where they
+// immediately get held up. Of the 10, only defenderCount (the server's
+// difficulty-scaled value) ever actually become tackle threats — the rest
+// are harmless filler, exactly like the extra players a real coverage unit
+// carries beyond whoever actually gets to the ball carrier.
+const COVERAGE_TEAM_SIZE = 10;
+const COVERAGE_SPAWN_DEPTH = 28; // yards ahead of the runner at the snap
+const COVERAGE_SPAWN_SPREAD = 14; // +/- jitter on that depth
+const KICKER_TRAIL_OFFSET = 20; // yards further out than the coverage line — kickers trail as a last resort, they don't join the wedge collision
+const KICKER_SPEED = 4.5; // yards/sec, slow, never tackles
+const PASSIVE_DEFENDER_SPEED = 6; // yards/sec — a simple straight jog for coverage players that were never a real threat, once they shed their block
+const BLOCK_MIN_MS = 800;
+const BLOCK_RANDOM_MS = 3000; // a defender's hold time is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster
 
 // ---- Game state -------------------------------------------------------------
 let returnsPerPlayer = 5;
@@ -142,8 +161,8 @@ const runner = {
 };
 
 let defenders = [];
-let spawnSchedule = [];
-let blockers = BLOCKER_OFFSETS.map(() => ({ worldX: 0, worldY: 0 }));
+let blockers = [];
+let kicker = { worldX: 0, worldY: 0, number: 3 };
 let animationHandle = null;
 let lastFrameAt = 0;
 
@@ -214,12 +233,36 @@ function updateRunner(dtSec) {
 // runner (no independent physics, no interaction with defenders) — just
 // enough to make the field read as a real return instead of one lone
 // runner against a wall of coverage.
-function updateBlockers() {
-  BLOCKER_OFFSETS.forEach((offset, i) => {
-    const b = blockers[i];
-    b.worldY = clampNum(runner.worldY + offset.forward, 0, fieldYards);
-    b.worldX = clampNum(runner.worldX + offset.lateral, -(FIELD_WIDTH_YARDS / 2 - RUNNER_HALF_WIDTH), FIELD_WIDTH_YARDS / 2 - RUNNER_HALF_WIDTH);
+// Builds the 10-player blocker wedge (two waves of 5) at the runner's
+// current position — called once at the start of a return.
+function makeBlockers() {
+  const list = [];
+  BLOCKER_LATERAL_SLOTS.forEach((lateral, i) => {
+    list.push({
+      worldX: runner.worldX + lateral,
+      worldY: runner.worldY + BLOCKER_WAVE1_FORWARD + (i % 2 === 0 ? 0.6 : -0.6),
+      number: 30 + i,
+      speed: BLOCKER_FORWARD_SPEED * (0.94 + Math.random() * 0.12),
+    });
   });
+  BLOCKER_LATERAL_SLOTS.forEach((lateral, i) => {
+    list.push({
+      worldX: runner.worldX + lateral + BLOCKER_WAVE2_LATERAL_SHIFT,
+      worldY: runner.worldY + BLOCKER_WAVE2_FORWARD + (i % 2 === 0 ? -0.6 : 0.6),
+      number: 40 + i,
+      speed: BLOCKER_FORWARD_SPEED * (0.94 + Math.random() * 0.12),
+    });
+  });
+  return list;
+}
+
+// Each blocker just jogs forward at its own pace — no lateral tracking of
+// the runner, no interaction with defenders. Purely a visual wedge advancing
+// downfield on its own, the way a real Tecmo return's blockers do.
+function updateBlockers(dtSec) {
+  for (const b of blockers) {
+    b.worldY = clampNum(b.worldY + b.speed * dtSec, 0, fieldYards);
+  }
 }
 
 // ---- Defenders --------------------------------------------------------------
@@ -228,48 +271,67 @@ function windupMsFor(defenderSpeed) {
   return Math.max(DEFENDER_MIN_WINDUP_MS, DEFENDER_BASE_WINDUP_MS - extra);
 }
 
-// Lays out where (in world yards downfield) each of this return's
-// defenders will spawn, spread across the field with some jitter so it's
-// not a perfectly predictable rhythm. Actual spawning happens lazily in
-// updateDefenders() as the runner approaches each scheduled point.
-function scheduleDefenders(defenderCount) {
-  const schedule = [];
-  const spacing = fieldYards / (defenderCount + 1);
-  for (let i = 1; i <= defenderCount; i++) {
-    const jitterY = (Math.random() * 2 - 1) * (spacing * 0.3);
-    const worldY = clampNum(spacing * i + jitterY, 6, fieldYards - 3);
-    const worldX = (Math.random() * 2 - 1) * SPAWN_LATERAL_SPREAD;
-    schedule.push({ worldY, worldX, spawned: false });
+// Builds the full 10-player coverage line (plus the trailing kicker set
+// separately) at the runner's current position — called once at the start
+// of a return. `activeCount` of the 10 are real tackle threats (the
+// server's difficulty-scaled defenderCount); the rest are harmless filler
+// that still run the field but can never wind up or lunge. All 10 start
+// 'blocked' — see updateDefenders() — so none of them move at all until
+// they individually shed that block at a staggered time.
+function makeCoverageTeam(activeCount) {
+  const now = performance.now();
+  const positions = [];
+  for (let i = 0; i < COVERAGE_TEAM_SIZE; i++) {
+    positions.push({
+      worldX: runner.worldX + (i - (COVERAGE_TEAM_SIZE - 1) / 2) * (FIELD_WIDTH_YARDS / COVERAGE_TEAM_SIZE) + (Math.random() * 2 - 1) * 1.5,
+      worldY: runner.worldY + COVERAGE_SPAWN_DEPTH + (Math.random() * 2 - 1) * COVERAGE_SPAWN_SPREAD * 0.5,
+    });
   }
-  schedule.sort((a, b) => a.worldY - b.worldY);
-  return schedule;
+  // Randomize which indices are "active" so it's not always the same lanes.
+  const shuffledIdx = positions.map((_, i) => i).sort(() => Math.random() - 0.5);
+  const activeSet = new Set(shuffledIdx.slice(0, activeCount));
+
+  return positions.map((p, i) => ({
+    worldX: p.worldX,
+    worldY: p.worldY,
+    number: 50 + i,
+    active: activeSet.has(i),
+    state: 'blocked', // blocked -> approaching -> windingUp -> lunging -> recovering (active only; passive just jogs once released)
+    blockedUntil: now + (BLOCK_MIN_MS + Math.random() * BLOCK_RANDOM_MS) / currentReturnConfig.defenderSpeed,
+    committedSide: null,
+    windupStartedAt: 0,
+    lungeStartedAt: 0,
+    lungeStartX: 0, lungeStartY: 0,
+    lungeTargetX: 0, lungeTargetY: 0,
+    recoverStartedAt: 0,
+  }));
+}
+
+function makeKicker() {
+  return {
+    worldX: runner.worldX,
+    worldY: runner.worldY + COVERAGE_SPAWN_DEPTH + KICKER_TRAIL_OFFSET,
+    number: 3,
+  };
 }
 
 function updateDefenders(dtSec) {
   const now = performance.now();
 
-  // Lazily spawn anything on the schedule that's now close enough ahead.
-  for (const entry of spawnSchedule) {
-    if (entry.spawned) continue;
-    if (entry.worldY - runner.worldY <= SPAWN_LEAD_YARDS) {
-      entry.spawned = true;
-      defenders.push({
-        worldX: entry.worldX,
-        worldY: entry.worldY,
-        number: 20 + Math.floor(Math.random() * 79), // cosmetic only, for the jersey sprite
-        state: 'approaching', // approaching -> windingUp -> lunging -> recovering
-        committedSide: null,
-        windupStartedAt: 0,
-        lungeStartedAt: 0,
-        lungeStartX: 0, lungeStartY: 0,
-        lungeTargetX: 0, lungeTargetY: 0,
-        recoverStartedAt: 0,
-        despawn: false,
-      });
-    }
-  }
-
   for (const d of defenders) {
+    if (d.state === 'blocked') {
+      // Held in place by the return team's wedge — this is the whole
+      // "converge on the returner at different times" effect: nothing more
+      // than each defender's own randomized release timer.
+      if (now >= d.blockedUntil) d.state = 'approaching';
+      continue;
+    }
+    if (!d.active) {
+      // Shed the block but was never a real threat — a simple straight
+      // jog downfield in its own lane, visual filler only.
+      d.worldY = Math.max(0, d.worldY - PASSIVE_DEFENDER_SPEED * currentReturnConfig.defenderSpeed * dtSec);
+      continue;
+    }
     if (d.state === 'approaching') {
       const dx = runner.worldX - d.worldX;
       const dy = runner.worldY - d.worldY;
@@ -333,12 +395,20 @@ function updateDefenders(dtSec) {
         d.recoverStartedAt = now;
       }
     } else if (d.state === 'recovering') {
+      // Spent — becomes harmless filler for the rest of the play (the
+      // 11-player roster stays visible the whole return, matching a real
+      // kickoff coverage unit; a defender who's already dived doesn't just
+      // vanish, they're just no longer a threat this return).
       if (now - d.recoverStartedAt >= DEFENDER_RECOVER_MS) {
-        d.despawn = true;
+        d.active = false;
       }
     }
   }
-  defenders = defenders.filter((d) => !d.despawn);
+
+  // The kicker trails the whole play at a slow jog, never engages the
+  // wedge, and can never tackle — a real kicker's job ends the instant the
+  // ball leaves their foot; they're only ever a last-resort safety net.
+  kicker.worldY = Math.max(0, kicker.worldY - KICKER_SPEED * dtSec);
 }
 
 // ---- Rendering ----------------------------------------------------------
@@ -738,8 +808,18 @@ function drawBlockers() {
     const legPhase = performance.now() / 95 + i * 1.7;
     drawPlayerSprite(x, y, {
       jersey: '#2f5fbf', trim: '#16234f', pants: '#e7ebef', helmet: '#123078',
-      number: 20 + i, legPhase,
+      number: b.number, legPhase,
     });
+  });
+}
+
+function drawKicker() {
+  const x = screenXForward(kicker.worldY);
+  const y = screenYLateral(kicker.worldX);
+  const legPhase = performance.now() / 110;
+  drawPlayerSprite(x, y, {
+    jersey: '#c0392b', trim: '#5c150c', pants: '#26262a', helmet: '#8e2a1e',
+    number: kicker.number, legPhase,
   });
 }
 
@@ -748,7 +828,9 @@ function drawDefenders() {
     const x = screenXForward(d.worldY);
     const y = screenYLateral(d.worldX);
     if (x < -30 || x > CANVAS_WIDTH + 30) continue;
-    const legPhase = performance.now() / 100 + d.worldX * 0.4;
+    // Standing still while held up by the wedge — no leg-stride animation
+    // for a defender that isn't actually moving.
+    const legPhase = d.state === 'blocked' ? 0 : performance.now() / 100 + d.worldX * 0.4;
 
     // The telegraph: a pulsing ring while winding up, and a stronger flash
     // through the lunge itself — deliberately carries no up/down
@@ -794,6 +876,7 @@ function drawHud() {
 function render() {
   drawField();
   drawGoalPost();
+  drawKicker();
   drawDefenders();
   drawBlockers();
   drawRunner();
@@ -808,7 +891,7 @@ function tick(now) {
   if (runner.state === 'running') {
     updateRunner(dtSec);
     if (runner.state === 'running') {
-      updateBlockers();
+      updateBlockers(dtSec);
       updateDefenders(dtSec);
     }
   }
@@ -843,6 +926,9 @@ async function playCatchAnimation() {
   while (performance.now() - start < CATCH_ANIMATION_MS) {
     const t = (performance.now() - start) / CATCH_ANIMATION_MS;
     drawField();
+    drawGoalPost();
+    drawKicker();
+    drawDefenders();
     drawBlockers();
     drawRunner();
     ctx.fillStyle = '#8a4b26';
@@ -869,10 +955,9 @@ async function startReturn(returnConfig) {
   runner.lastLateralDir = null;
   runner.vx = 0;
   runner.vy = 0;
-  blockers = BLOCKER_OFFSETS.map(() => ({ worldX: 0, worldY: 0 }));
-  updateBlockers();
-  defenders = [];
-  spawnSchedule = scheduleDefenders(returnConfig.defenderCount);
+  blockers = makeBlockers();
+  defenders = makeCoverageTeam(returnConfig.defenderCount);
+  kicker = makeKicker();
 
   document.getElementById('return-info').textContent = `Return ${returnConfig.index + 1} of ${returnsPerPlayer}`;
   document.getElementById('kr-result').textContent = '';
