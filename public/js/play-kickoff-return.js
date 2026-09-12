@@ -85,7 +85,15 @@ function screenYLateral(worldX) {
 function cameraMaxWorldY() {
   return fieldYards + (BACKDROP_DEPTH_PX - RUNNER_SCREEN_X) / PX_PER_YARD_FORWARD;
 }
+// When set, the camera ignores the runner entirely and follows this value
+// instead — used only during the kickoff intro (see playCatchAnimation()),
+// so it can pan across the field from the kicking team to the returner
+// without moving the runner's own (still-waiting) sprite. Every draw
+// function already goes through screenXForward()/cameraWorldY(), so
+// setting this is the only change needed to redirect the whole scene.
+let cameraOverride = null;
 function cameraWorldY() {
+  if (cameraOverride != null) return cameraOverride;
   return Math.min(runner.worldY, cameraMaxWorldY());
 }
 function screenXForward(worldY) {
@@ -110,41 +118,52 @@ const DEFENDER_LUNGE_LATERAL_LEAD = 1.3; // how far to the committed side the lu
 const TACKLE_RADIUS = 1.1; // yards — collision distance during a lunge
 const DEFENDER_RECOVER_MS = 550;
 
-const CATCH_ANIMATION_MS = 1400;
 const RESULT_HOLD_MS = 1400;
 
+// Formation depths below are taken from the NFL's current kickoff setup
+// (own goal line = worldY 0, same axis our field already uses):
+//   - Kicker: kicking team's own 35 -> 65 yards from the receiving goal.
+//   - The other 10 kicking-team players: receiving team's 40 -> worldY 40.
+//   - Receiving team's blockers: a 5-yard "setup zone" between the
+//     receiving team's 30 and 35 -> worldY 30-35.
+// (Sources: FanDuel Research / NFL.com's explainers on the 2024 "dynamic
+// kickoff" rule.) The one deliberate deviation from the real rule is where
+// the RETURNER stands — real kickoffs are caught anywhere in the 0-20
+// "landing zone" (usually resulting in a touchback to the 30), but this
+// game catches every kickoff right at the goal line by design, for a
+// longer, more Tecmo-authentic return.
+
 // Return-team blockers — 10 of them (plus the runner makes 11), arranged in
-// two waves of 5 just ahead of the runner at the snap, each running
-// independently downfield at its own pace (no formation-locking to the
-// runner's position — a real Tecmo return shows the wedge advancing on its
-// own, not glued to the ball carrier). They still don't interact with
-// defenders as physical obstacles; instead, every coverage defender starts
-// "blocked" (held in place) for a randomized duration representing running
-// into this wedge — see updateDefenders()'s 'blocked' state for how that
-// produces the actual gameplay effect of a staggered convergence.
+// two waves within the real 30-35 setup zone, each running independently
+// downfield at its own pace (no formation-locking to the runner's position
+// — a real Tecmo return shows the wedge advancing on its own, not glued to
+// the ball carrier). A blocker "uses itself up" the first time a coverage
+// defender gets close enough to be held by it — see updateDefenders()'s
+// blocking check for how that produces an actual, visible block rather
+// than an abstract timer.
 const BLOCKER_LATERAL_SLOTS = [-20, -10, 0, 10, 20]; // 5 lanes across the field's width
-const BLOCKER_WAVE1_FORWARD = 9; // yards ahead of the runner at the snap
-const BLOCKER_WAVE2_FORWARD = 5;
+const BLOCKER_WAVE1_FORWARD = 35; // the setup zone's near edge (closer to the coverage team)
+const BLOCKER_WAVE2_FORWARD = 31; // the setup zone's far edge (closer to the returner)
 const BLOCKER_WAVE2_LATERAL_SHIFT = 5; // offsets wave 2's lanes from wave 1's, so it's not a rigid grid
 const BLOCKER_FORWARD_SPEED = 8; // yards/sec, close to the runner's own pace
+const BLOCK_ENGAGE_DISTANCE = 3.5; // yards — how close a defender needs to get to an unbeaten blocker to be held up by it
 
 // Coverage (kicking) team — 10 defenders plus a trailing kicker makes 11.
 // All spawn at once at the snap (no lazy proximity spawning — "the kickoff
 // team doesn't start running until the ball is kicked" just falls out of
-// updateDefenders() only ever being called once runner.state is 'running'),
-// roughly at the depth where the blocker wedge is, since that's where they
-// immediately get held up. Of the 10, only defenderCount (the server's
-// difficulty-scaled value) ever actually become tackle threats — the rest
-// are harmless filler, exactly like the extra players a real coverage unit
-// carries beyond whoever actually gets to the ball carrier.
+// updateDefenders() only ever being called once runner.state is 'running').
+// Of the 10, only defenderCount (the server's difficulty-scaled value)
+// ever actually become tackle threats — the rest are harmless filler,
+// exactly like the extra players a real coverage unit carries beyond
+// whoever actually gets to the ball carrier.
 const COVERAGE_TEAM_SIZE = 10;
-const COVERAGE_SPAWN_DEPTH = 28; // yards ahead of the runner at the snap
-const COVERAGE_SPAWN_SPREAD = 14; // +/- jitter on that depth
-const KICKER_TRAIL_OFFSET = 20; // yards further out than the coverage line — kickers trail as a last resort, they don't join the wedge collision
-const KICKER_SPEED = 4.5; // yards/sec, slow, never tackles
-const PASSIVE_DEFENDER_SPEED = 6; // yards/sec — a simple straight jog for coverage players that were never a real threat, once they shed their block
-const BLOCK_MIN_MS = 800;
-const BLOCK_RANDOM_MS = 3000; // a defender's hold time is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster
+const COVERAGE_SPAWN_WORLDY = 40; // receiving team's 40
+const COVERAGE_SPAWN_SPREAD = 3; // +/- jitter — the rule has them in one line, not spread out
+const KICKER_SPAWN_WORLDY = 65; // kicking team's own 35
+const KICKER_SPEED = 4.5; // yards/sec, slow, never tackles, never blocked
+const PASSIVE_DEFENDER_SPEED = 6; // yards/sec — a simple straight jog for coverage players that were never a real threat, once they get past the wedge
+const BLOCK_MIN_MS = 500;
+const BLOCK_RANDOM_MS = 2000; // once engaged, a defender's hold time is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster
 
 // ---- Game state -------------------------------------------------------------
 let returnsPerPlayer = 5;
@@ -243,6 +262,7 @@ function makeBlockers() {
       worldY: runner.worldY + BLOCKER_WAVE1_FORWARD + (i % 2 === 0 ? 0.6 : -0.6),
       number: 30 + i,
       speed: BLOCKER_FORWARD_SPEED * (0.94 + Math.random() * 0.12),
+      beaten: false, // flips true the first time it holds up a defender — spent, can't block again
     });
   });
   BLOCKER_LATERAL_SLOTS.forEach((lateral, i) => {
@@ -251,6 +271,7 @@ function makeBlockers() {
       worldY: runner.worldY + BLOCKER_WAVE2_FORWARD + (i % 2 === 0 ? -0.6 : 0.6),
       number: 40 + i,
       speed: BLOCKER_FORWARD_SPEED * (0.94 + Math.random() * 0.12),
+      beaten: false,
     });
   });
   return list;
@@ -279,12 +300,11 @@ function windupMsFor(defenderSpeed) {
 // 'blocked' — see updateDefenders() — so none of them move at all until
 // they individually shed that block at a staggered time.
 function makeCoverageTeam(activeCount) {
-  const now = performance.now();
   const positions = [];
   for (let i = 0; i < COVERAGE_TEAM_SIZE; i++) {
     positions.push({
       worldX: runner.worldX + (i - (COVERAGE_TEAM_SIZE - 1) / 2) * (FIELD_WIDTH_YARDS / COVERAGE_TEAM_SIZE) + (Math.random() * 2 - 1) * 1.5,
-      worldY: runner.worldY + COVERAGE_SPAWN_DEPTH + (Math.random() * 2 - 1) * COVERAGE_SPAWN_SPREAD * 0.5,
+      worldY: runner.worldY + COVERAGE_SPAWN_WORLDY + (Math.random() * 2 - 1) * COVERAGE_SPAWN_SPREAD,
     });
   }
   // Randomize which indices are "active" so it's not always the same lanes.
@@ -296,8 +316,13 @@ function makeCoverageTeam(activeCount) {
     worldY: p.worldY,
     number: 50 + i,
     active: activeSet.has(i),
-    state: 'blocked', // blocked -> approaching -> windingUp -> lunging -> recovering (active only; passive just jogs once released)
-    blockedUntil: now + (BLOCK_MIN_MS + Math.random() * BLOCK_RANDOM_MS) / currentReturnConfig.defenderSpeed,
+    // approaching -> blocked (on contact with an unbeaten blocker) ->
+    // approaching again -> windingUp -> lunging -> recovering (active only;
+    // passive just jogs once it's past the wedge, whether or not it was
+    // ever actually held up by one).
+    state: 'approaching',
+    blockedUntil: 0,
+    blockedByBlocker: null,
     committedSide: null,
     windupStartedAt: 0,
     lungeStartedAt: 0,
@@ -310,7 +335,7 @@ function makeCoverageTeam(activeCount) {
 function makeKicker() {
   return {
     worldX: runner.worldX,
-    worldY: runner.worldY + COVERAGE_SPAWN_DEPTH + KICKER_TRAIL_OFFSET,
+    worldY: runner.worldY + KICKER_SPAWN_WORLDY,
     number: 3,
   };
 }
@@ -320,12 +345,33 @@ function updateDefenders(dtSec) {
 
   for (const d of defenders) {
     if (d.state === 'blocked') {
-      // Held in place by the return team's wedge — this is the whole
-      // "converge on the returner at different times" effect: nothing more
-      // than each defender's own randomized release timer.
-      if (now >= d.blockedUntil) d.state = 'approaching';
+      // Actually held up by the specific blocker it ran into — released
+      // after a randomized duration, at which point that blocker is spent
+      // (beaten) and can never block anyone else this return. This (plus
+      // each engagement happening at a different moment as defenders reach
+      // the wedge at different times) is the whole "get by them and
+      // converge on the returner at different times" effect — no extra
+      // logic needed beyond the collision check below and this timer.
+      if (now >= d.blockedUntil) {
+        if (d.blockedByBlocker) d.blockedByBlocker.beaten = true;
+        d.blockedByBlocker = null;
+        d.state = 'approaching';
+      }
       continue;
     }
+
+    // Get held up by the first unbeaten blocker within range — checked for
+    // every defender (active or passive), since blocking is physical and
+    // doesn't care whether this particular defender was ever going to be a
+    // real threat.
+    const blocker = blockers.find((b) => !b.beaten && Math.hypot(d.worldX - b.worldX, d.worldY - b.worldY) <= BLOCK_ENGAGE_DISTANCE);
+    if (blocker) {
+      d.state = 'blocked';
+      d.blockedByBlocker = blocker;
+      d.blockedUntil = now + (BLOCK_MIN_MS + Math.random() * BLOCK_RANDOM_MS) / currentReturnConfig.defenderSpeed;
+      continue;
+    }
+
     if (!d.active) {
       // Shed the block but was never a real threat — a simple straight
       // jog downfield in its own lane, visual filler only.
@@ -920,28 +966,56 @@ function wait(ms) {
 // from the right and the runner makes the catch at the goal line. Purely
 // cosmetic — the server-authoritative part of a return only ever starts
 // once this resolves.
+// Two-beat kickoff intro: first the camera holds on the kicking team (the
+// kicker approaching the ball, teed up out near their own formation), then
+// once the kick happens the camera pans across the field — following the
+// ball's flight — down to the returner waiting at the goal line, exactly
+// where the real return then picks up. Uses cameraOverride so every
+// existing draw function (field, stands, both end zones, defenders,
+// blockers, the kicker) renders this pan for free — only the ball's own
+// position needs computing here.
+const KICKOFF_FORMATION_MS = 550;
+const KICKOFF_FLIGHT_MS = 1000;
 async function playCatchAnimation() {
   runner.state = 'catching';
+  const kickoffSpotWorldY = kicker.worldY + 6; // a bit beyond the kicker, so the whole formation fits on screen
   const start = performance.now();
-  while (performance.now() - start < CATCH_ANIMATION_MS) {
-    const t = (performance.now() - start) / CATCH_ANIMATION_MS;
+  const totalMs = KICKOFF_FORMATION_MS + KICKOFF_FLIGHT_MS;
+
+  while (performance.now() - start < totalMs) {
+    const elapsed = performance.now() - start;
+    let ballWorldY;
+    let ballArcPx;
+    if (elapsed < KICKOFF_FORMATION_MS) {
+      cameraOverride = kickoffSpotWorldY;
+      ballWorldY = kicker.worldY;
+      ballArcPx = 0; // sitting teed up, not yet in the air
+    } else {
+      const t = (elapsed - KICKOFF_FORMATION_MS) / KICKOFF_FLIGHT_MS;
+      const eased = t * t * (3 - 2 * t); // smoothstep — gentle start/stop on the pan
+      cameraOverride = kickoffSpotWorldY + (0 - kickoffSpotWorldY) * eased;
+      ballWorldY = kicker.worldY + (0 - kicker.worldY) * eased;
+      ballArcPx = Math.sin(t * Math.PI) * -70; // rises then falls back to the ground
+    }
+
     drawField();
     drawGoalPost();
     drawKicker();
     drawDefenders();
     drawBlockers();
-    drawRunner();
+    if (elapsed >= KICKOFF_FORMATION_MS) drawRunner(); // stays off-screen until the pan brings the goal line into view
     ctx.fillStyle = '#8a4b26';
-    const ballX = RUNNER_SCREEN_X + 260 - t * 260;
     ctx.beginPath();
-    ctx.ellipse(ballX, screenYLateral(runner.worldX), 8, 6, 0, 0, Math.PI * 2);
+    ctx.ellipse(screenXForward(ballWorldY), screenYLateral(0) + ballArcPx, 7, 6, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#eaf3ec';
     ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Kickoff...', CANVAS_WIDTH / 2, 60);
+    ctx.fillText(elapsed < KICKOFF_FORMATION_MS ? 'Kickoff...' : '', CANVAS_WIDTH / 2, 60);
     await new Promise((r) => requestAnimationFrame(r));
   }
+
+  cameraOverride = null; // hand back to the normal runner-following camera
 }
 
 // Starts a fresh return using the server-provided difficulty config —
