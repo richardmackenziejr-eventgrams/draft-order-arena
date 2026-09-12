@@ -193,6 +193,7 @@ const runner = {
   lastLateralDir: null,
   state: 'idle', // 'idle' | 'catching' | 'running' | 'tackled' | 'touchdown'
   vx: 0, vy: 0, // yards/sec, last frame's actual velocity — used to lead a defender's lunge target
+  facingLeft: true, // which way the side-profile sprite is drawn — see drawPlayerSprite()
 };
 
 let defenders = [];
@@ -254,6 +255,10 @@ function updateRunner(dtSec) {
   // targeting comment in updateDefenders() for why this matters.
   runner.vx = worldXVelocity;
   runner.vy = worldYVelocity;
+  // Face the direction actually being run (forward = left on screen); hold
+  // the last facing during a pure lateral dodge with no forward/back input.
+  if (worldYVelocity > 0.05) runner.facingLeft = true;
+  else if (worldYVelocity < -0.05) runner.facingLeft = false;
 
   if (up && !down) { runner.lateralDir = 'up'; runner.lastLateralDir = 'up'; }
   else if (down && !up) { runner.lateralDir = 'down'; runner.lastLateralDir = 'down'; }
@@ -265,9 +270,9 @@ function updateRunner(dtSec) {
 }
 
 // Builds the 10-player blocker wedge (two waves of 5) at the real setup-
-// zone depth — called once at the start of a return. Blockers never move
-// afterward (see updateDefenders()'s blocking check) — they just hold this
-// formation as a wall for the coverage team to fight through.
+// zone depth — called once at the start of a return. See updateBlockers()
+// for how they move afterward (Seek a live threat, or Arrive at a guard
+// position ahead of the returner).
 function makeBlockers() {
   const list = [];
   BLOCKER_LATERAL_SLOTS.forEach((lateral, i) => {
@@ -276,6 +281,7 @@ function makeBlockers() {
       worldY: runner.worldY + BLOCKER_WAVE1_FORWARD + (i % 2 === 0 ? 0.6 : -0.6),
       number: 30 + i,
       hasBlocked: false, // flips true the first time it holds up a defender -- it can still block again later, just more briefly (see REBLOCK_MIN_MS/REBLOCK_RANDOM_MS)
+      facingLeft: true,
     });
   });
   BLOCKER_LATERAL_SLOTS.forEach((lateral, i) => {
@@ -284,6 +290,7 @@ function makeBlockers() {
       worldY: runner.worldY + BLOCKER_WAVE2_FORWARD + (i % 2 === 0 ? -0.6 : 0.6),
       number: 40 + i,
       hasBlocked: false,
+      facingLeft: true,
     });
   });
   return list;
@@ -334,6 +341,7 @@ function updateBlockers(dtSec) {
       if (dist > 0.01) {
         b.worldX += (dx / dist) * BLOCKER_SEEK_SPEED * dtSec;
         b.worldY += (dy / dist) * BLOCKER_SEEK_SPEED * dtSec;
+        if (Math.abs(dy) > 0.01) b.facingLeft = dy > 0;
       }
     } else {
       // Nothing worth chasing right now (or the chase strayed too far) —
@@ -346,6 +354,7 @@ function updateBlockers(dtSec) {
       }
       const lateralDx = clampNum(runner.worldX - b.worldX, -1, 1);
       b.worldX += lateralDx * BLOCKER_ESCORT_SPEED * 0.5 * dtSec;
+      b.facingLeft = true; // escorting is always a forward move
     }
   }
 }
@@ -390,6 +399,7 @@ function makeCoverageTeam(activeCount) {
     worldY: p.worldY,
     number: 50 + i,
     active: activeSet.has(i),
+    facingLeft: false, // spawns ahead of the runner and starts by closing the gap, i.e. moving right
     // approaching -> blocked (on contact with an available blocker) ->
     // approaching again -> windingUp -> lunging -> recovering (active only;
     // passive just jogs once it's past the wedge, whether or not it was
@@ -467,6 +477,7 @@ function updateDefenders(dtSec) {
       // Shed the block but was never a real threat — a simple straight
       // jog downfield in its own lane, visual filler only.
       d.worldY = Math.max(0, d.worldY - PASSIVE_DEFENDER_SPEED * currentReturnConfig.defenderSpeed * dtSec);
+      d.facingLeft = false; // always jogging toward smaller worldY, i.e. right
       continue;
     }
     if (d.state === 'approaching') {
@@ -477,6 +488,7 @@ function updateDefenders(dtSec) {
         const speed = DEFENDER_BASE_SPEED * currentReturnConfig.defenderSpeed;
         d.worldX += (dx / dist) * speed * dtSec;
         d.worldY += (dy / dist) * speed * dtSec;
+        if (Math.abs(dy) > 0.01) d.facingLeft = dy > 0;
       }
       if (dist <= DEFENDER_TRIGGER_DISTANCE) {
         d.state = 'windingUp';
@@ -550,21 +562,28 @@ function updateDefenders(dtSec) {
 
 // ---- Rendering ----------------------------------------------------------
 // A shared sprite drawn for the runner, every defender, and every blocker —
-// layered shadow/legs/jersey/helmet instead of a flat blob, so the field
-// reads as actual players rather than colored rectangles. `legPhase` drives
-// a small running-stride wobble; `glowColor` (used only for a winding-up
-// defender's telegraph — see drawDefenders()) draws a pulsing ring with no
-// directional information in it, on purpose: it tells the player a hit is
-// coming, never which way to dodge.
+// a classic Tecmo-style SIDE-PROFILE runner (not facing the camera), so two
+// players standing near each other read as two distinct silhouettes rather
+// than one flat front-on blob hiding whatever's directly behind it. Always
+// authored facing left (running toward the goal, the play's usual forward
+// direction) and mirrored via a horizontal flip when `facingLeft` is false —
+// see the various updateX() functions for how each entity decides which way
+// it's currently headed. `legPhase` drives the running stride; `glowColor`
+// (used only for a winding-up defender's telegraph — see drawDefenders())
+// draws a pulsing ring with no directional information in it, on purpose:
+// it tells the player a hit is coming, never which way to dodge.
 function drawPlayerSprite(x, y, opts) {
-  const { jersey, trim, pants, helmet, number, legPhase, glowColor, glowStrength } = opts;
+  const { jersey, trim, pants, helmet, number, legPhase, glowColor, glowStrength, facingLeft } = opts;
+  const mirror = facingLeft === false;
+
   ctx.save();
   ctx.translate(x, y);
+  if (mirror) ctx.scale(-1, 1);
 
   // Ground shadow.
   ctx.fillStyle = 'rgba(0,0,0,0.32)';
   ctx.beginPath();
-  ctx.ellipse(0, 3, 10, 3.5, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 3, 9, 3, 0, 0, Math.PI * 2);
   ctx.fill();
 
   if (glowColor) {
@@ -573,45 +592,91 @@ function drawPlayerSprite(x, y, opts) {
     ctx.globalAlpha = (0.35 + 0.4 * pulse) * (glowStrength != null ? glowStrength : 1);
     ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(0, -9, 15 + pulse * 3, 0, Math.PI * 2);
+    ctx.arc(0, -13, 15 + pulse * 3, 0, Math.PI * 2);
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
-  // Legs — a simple alternating stride.
-  const stride = Math.sin(legPhase) * 3;
+  const HIP_Y = -9;
+  const SHOULDER_Y = -18;
+  const swing = (Math.sin(legPhase) + 1) / 2; // 0..1, smoother to blend two poses across
+
+  // A two-segment (thigh + shin) leg reads as an actual running stride, not
+  // just a rigid stick swinging from the hip — the knee bend is what sells
+  // "mid-stride" at this scale. `t` (0..1) blends between a leg fully
+  // extended forward-and-down (planting) and one lifted with a bent knee
+  // (recovering); the two legs are given opposite `t` so one is always
+  // planting while the other recovers, like an actual gait.
+  function leg(pivotY, t, thickness) {
+    const thighAngle = -0.9 + t * 1.5; // -0.9 (reaching forward) .. 0.6 (trailing back)
+    const kneeBend = 0.15 + (1 - Math.abs(t - 0.5) * 2) * 1.3; // most bent mid-swing, straightest at the extremes
+    ctx.save();
+    ctx.translate(0, pivotY);
+    ctx.rotate(thighAngle);
+    ctx.fillRect(-thickness / 2, 0, thickness, 5);
+    ctx.translate(0, 5);
+    ctx.rotate(kneeBend);
+    ctx.fillRect(-thickness / 2, 0, thickness, 5.5);
+    ctx.restore();
+  }
+
+  // A plain single-segment limb — used for the arm, which doesn't need a
+  // knee-style bend.
+  function limb(pivotY, angle, length, thickness) {
+    ctx.save();
+    ctx.translate(0, pivotY);
+    ctx.rotate(angle);
+    ctx.fillRect(-thickness / 2, 0, thickness, length);
+    ctx.restore();
+  }
+
+  // Trailing leg first, so the torso and leading leg layer in front of it.
   ctx.fillStyle = pants;
-  ctx.fillRect(-5.5, -7 + stride, 4.5, 10);
-  ctx.fillRect(1, -7 - stride, 4.5, 10);
+  leg(HIP_Y, 1 - swing, 3.2);
 
-  // Torso with side trim stripes.
+  // Torso, leaning forward into the run — narrower than a front-on jersey
+  // since we're now looking at it edge-on.
+  ctx.save();
+  ctx.translate(0, HIP_Y);
+  ctx.rotate(-0.2);
   ctx.fillStyle = jersey;
-  ctx.fillRect(-8, -17, 16, 15);
+  ctx.fillRect(-3.5, SHOULDER_Y - HIP_Y, 7, HIP_Y - SHOULDER_Y);
   ctx.fillStyle = trim;
-  ctx.fillRect(-8, -17, 2.5, 15);
-  ctx.fillRect(5.5, -17, 2.5, 15);
+  ctx.fillRect(-3.5, SHOULDER_Y - HIP_Y, 7, 2.5);
+  ctx.restore();
 
-  // Jersey number.
+  // Leading leg and pumping arm, layered over the torso.
+  ctx.fillStyle = pants;
+  leg(HIP_Y, swing, 3.2);
+  ctx.fillStyle = jersey;
+  limb(SHOULDER_Y + 4, (0.5 - swing) * 1.4, 7, 2.4);
+
+  // Head in profile (an oval, not a circle, so it doesn't read as a
+  // front-on face) with a bold, solid facemask bar projecting out the
+  // front — the single clearest "which way is this player headed" cue a
+  // small side-view sprite has.
+  const headX = -3, headY = SHOULDER_Y - 3;
+  ctx.fillStyle = helmet;
+  ctx.beginPath();
+  ctx.ellipse(headX, headY, 4.6, 5.2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(headX - 8, headY - 0.5, 5.5, 2.2); // facemask bar, front-and-down from the helmet
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.beginPath();
+  ctx.ellipse(headX + 0.5, headY - 2.5, 1.6, 1, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+
+  // Jersey number, floating just above the helmet — drawn in its own,
+  // never-mirrored pass so the digits always read left-to-right no matter
+  // which way the player is facing.
+  ctx.save();
+  ctx.translate(x, y);
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 8px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(String(number), 0, -6);
-
-  // Helmet, with a facemask hint and a small shine highlight for depth.
-  ctx.fillStyle = helmet;
-  ctx.beginPath();
-  ctx.arc(0, -21, 6.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(20,20,20,0.55)';
-  ctx.lineWidth = 1.3;
-  ctx.beginPath();
-  ctx.arc(0, -21, 4.6, -0.5, Math.PI + 0.5);
-  ctx.stroke();
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.beginPath();
-  ctx.ellipse(-2.2, -23.5, 2, 1.1, -0.4, 0, Math.PI * 2);
-  ctx.fill();
-
+  ctx.fillText(String(number), 0, SHOULDER_Y - 11);
   ctx.restore();
 }
 
@@ -926,6 +991,14 @@ function drawGoalPost() {
   ctx.stroke();
 }
 
+// A block visually nudges the two combatants apart perpendicular to their
+// direction of travel (i.e. a few pixels up/down on screen) so an engaged
+// blocker and defender read as two distinct figures side by side instead
+// of one sprite sitting exactly on top of the other -- the two are often
+// only a yard or two apart in world space when the hold starts, close
+// enough on screen that one profile sprite fully hides the other.
+const ENGAGE_DRAW_OFFSET_PX = 5;
+
 function drawRunner() {
   const x = screenXForward(runner.worldY);
   const y = screenYLateral(runner.worldX);
@@ -934,18 +1007,19 @@ function drawRunner() {
 
   drawPlayerSprite(x, y, {
     jersey: '#2f5fbf', trim: '#16234f', pants: '#e7ebef', helmet: '#1c3f8f',
-    number: 1, legPhase,
+    number: 1, legPhase, facingLeft: runner.facingLeft,
   });
 }
 
 function drawBlockers() {
   blockers.forEach((b, i) => {
+    const engagedWith = defenders.find((d) => d.state === 'blocked' && d.blockedByBlocker === b);
     const x = screenXForward(b.worldY);
-    const y = screenYLateral(b.worldX);
-    const legPhase = performance.now() / 95 + i * 1.7;
+    const y = screenYLateral(b.worldX) - (engagedWith ? ENGAGE_DRAW_OFFSET_PX : 0);
+    const legPhase = engagedWith ? 0 : performance.now() / 95 + i * 1.7;
     drawPlayerSprite(x, y, {
       jersey: '#2f5fbf', trim: '#16234f', pants: '#e7ebef', helmet: '#123078',
-      number: b.number, legPhase,
+      number: b.number, legPhase, facingLeft: b.facingLeft,
     });
   });
 }
@@ -956,18 +1030,19 @@ function drawKicker() {
   const legPhase = performance.now() / 110;
   drawPlayerSprite(x, y, {
     jersey: '#c0392b', trim: '#5c150c', pants: '#26262a', helmet: '#8e2a1e',
-    number: kicker.number, legPhase,
+    number: kicker.number, legPhase, facingLeft: false, // trails the play, always headed backward
   });
 }
 
 function drawDefenders() {
   for (const d of defenders) {
+    const isBlocked = d.state === 'blocked';
     const x = screenXForward(d.worldY);
-    const y = screenYLateral(d.worldX);
+    const y = screenYLateral(d.worldX) + (isBlocked ? ENGAGE_DRAW_OFFSET_PX : 0);
     if (x < -30 || x > CANVAS_WIDTH + 30) continue;
     // Standing still while held up by the wedge — no leg-stride animation
     // for a defender that isn't actually moving.
-    const legPhase = d.state === 'blocked' ? 0 : performance.now() / 100 + d.worldX * 0.4;
+    const legPhase = isBlocked ? 0 : performance.now() / 100 + d.worldX * 0.4;
 
     // The telegraph: a pulsing ring while winding up, and a stronger flash
     // through the lunge itself — deliberately carries no up/down
@@ -983,7 +1058,7 @@ function drawDefenders() {
 
     drawPlayerSprite(x, y, {
       jersey: '#c0392b', trim: '#5c150c', pants: '#26262a', helmet: '#8e2a1e',
-      number: d.number, legPhase, glowColor, glowStrength,
+      number: d.number, legPhase, glowColor, glowStrength, facingLeft: d.facingLeft,
     });
   }
 }
