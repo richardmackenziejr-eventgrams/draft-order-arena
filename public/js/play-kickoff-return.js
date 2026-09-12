@@ -145,8 +145,13 @@ const BLOCKER_LATERAL_SLOTS = [-20, -10, 0, 10, 20]; // 5 lanes across the field
 const BLOCKER_WAVE1_FORWARD = 35; // the setup zone's near edge (closer to the coverage team)
 const BLOCKER_WAVE2_FORWARD = 31; // the setup zone's far edge (closer to the returner)
 const BLOCKER_WAVE2_LATERAL_SHIFT = 5; // offsets wave 2's lanes from wave 1's, so it's not a rigid grid
-const BLOCKER_FORWARD_SPEED = 6; // yards/sec — deliberately slower than the runner's own pace
-const BLOCKER_MAX_LEAD_YARDS = 22; // a blocker won't advance more than this far ahead of the runner's CURRENT position — without a leash they sprint off-screen (independently, at their own fixed pace, with nothing pulling them back) well before the coverage team or the runner ever catches up to where they are, so the wedge is nowhere in view by the time it would matter
+// Blockers hold their ground — they never advance at all, engaged or not.
+// A real blocking wedge's whole job is to occupy a point and give the
+// returner a lane past it, not to race the returner downfield; giving them
+// any independent forward speed (tried twice before) always ends with the
+// blocker and the defender it's supposedly holding drifting apart on
+// screen, which reads as "not actually blocking" even when the hold timer
+// is technically still active.
 const BLOCK_ENGAGE_DISTANCE = 3.5; // yards — how close a defender needs to get to an unbeaten blocker to be held up by it
 
 // Coverage (kicking) team — 10 defenders plus a trailing kicker makes 11.
@@ -249,12 +254,10 @@ function updateRunner(dtSec) {
   }
 }
 
-// Cosmetic return-team teammates, held in a fixed formation relative to the
-// runner (no independent physics, no interaction with defenders) — just
-// enough to make the field read as a real return instead of one lone
-// runner against a wall of coverage.
-// Builds the 10-player blocker wedge (two waves of 5) at the runner's
-// current position — called once at the start of a return.
+// Builds the 10-player blocker wedge (two waves of 5) at the real setup-
+// zone depth — called once at the start of a return. Blockers never move
+// afterward (see updateDefenders()'s blocking check) — they just hold this
+// formation as a wall for the coverage team to fight through.
 function makeBlockers() {
   const list = [];
   BLOCKER_LATERAL_SLOTS.forEach((lateral, i) => {
@@ -262,7 +265,6 @@ function makeBlockers() {
       worldX: runner.worldX + lateral,
       worldY: runner.worldY + BLOCKER_WAVE1_FORWARD + (i % 2 === 0 ? 0.6 : -0.6),
       number: 30 + i,
-      speed: BLOCKER_FORWARD_SPEED * (0.94 + Math.random() * 0.12),
       beaten: false, // flips true the first time it holds up a defender — spent, can't block again
     });
   });
@@ -271,27 +273,10 @@ function makeBlockers() {
       worldX: runner.worldX + lateral + BLOCKER_WAVE2_LATERAL_SHIFT,
       worldY: runner.worldY + BLOCKER_WAVE2_FORWARD + (i % 2 === 0 ? -0.6 : 0.6),
       number: 40 + i,
-      speed: BLOCKER_FORWARD_SPEED * (0.94 + Math.random() * 0.12),
       beaten: false,
     });
   });
   return list;
-}
-
-// Each blocker just jogs forward at its own pace — no lateral tracking of
-// the runner, no interaction with defenders. Purely a visual wedge advancing
-// downfield on its own, the way a real Tecmo return's blockers do.
-function updateBlockers(dtSec) {
-  for (const b of blockers) {
-    if (b.beaten) continue; // spent — holds its ground rather than sprinting on with nothing left to do
-    // The leash never pulls a blocker BACK below wherever it already is
-    // (they legitimately spawn ahead of the runner, per the real setup
-    // zone) — it only caps how much FARTHER it can advance until the
-    // runner closes enough distance, so an unbeaten blocker waits for the
-    // play rather than sprinting off into empty field forever.
-    const maxWorldY = Math.min(fieldYards, Math.max(b.worldY, runner.worldY + BLOCKER_MAX_LEAD_YARDS));
-    b.worldY = clampNum(b.worldY + b.speed * dtSec, 0, maxWorldY);
-  }
 }
 
 // ---- Defenders --------------------------------------------------------------
@@ -944,10 +929,10 @@ function tick(now) {
 
   if (runner.state === 'running') {
     updateRunner(dtSec);
-    if (runner.state === 'running') {
-      updateBlockers(dtSec);
-      updateDefenders(dtSec);
-    }
+    // Blockers hold their ground the whole return — nothing to update each
+    // frame. Only the coverage team (which fights through them, then
+    // chases the runner) moves.
+    if (runner.state === 'running') updateDefenders(dtSec);
   }
 
   render();
