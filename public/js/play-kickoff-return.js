@@ -134,25 +134,30 @@ const RESULT_HOLD_MS = 1400;
 // longer, more Tecmo-authentic return.
 
 // Return-team blockers — 10 of them (plus the runner makes 11), arranged in
-// two waves within the real 30-35 setup zone, each running independently
-// downfield at its own pace (no formation-locking to the runner's position
-// — a real Tecmo return shows the wedge advancing on its own, not glued to
-// the ball carrier). A blocker "uses itself up" the first time a coverage
-// defender gets close enough to be held by it — see updateDefenders()'s
-// blocking check for how that produces an actual, visible block rather
-// than an abstract timer.
+// two waves within the real 30-35 setup zone. Each blocker runs its own
+// simple escort AI (the "Seek"/"Arrive" behaviors from Craig Reynolds'
+// "Steering Behaviors For Autonomous Characters," the standard reference
+// for exactly this move-to-intercept-or-guard pattern — see
+// https://www.red3d.com/cwr/papers/1999/gdc99steer.pdf): every frame, an
+// unengaged, unbeaten blocker either (a) seeks the single nearest live
+// defender to go meet and hold up, in ANY direction including backward —
+// a defender that's slipped behind the returner still has to be met head
+// on — or (b) if nothing needs blocking right now, advances to a guard
+// position just ahead of the returner, moving only FORWARD (the returner's
+// own direction of travel), ready for the next threat. A blocker "uses
+// itself up" the first time it actually holds a defender — see
+// updateDefenders()'s blocking check for how that produces an actual,
+// visible, in-place block (not an abstract timer) — and then never moves
+// again, spent for the rest of the return.
 const BLOCKER_LATERAL_SLOTS = [-20, -10, 0, 10, 20]; // 5 lanes across the field's width
 const BLOCKER_WAVE1_FORWARD = 35; // the setup zone's near edge (closer to the coverage team)
 const BLOCKER_WAVE2_FORWARD = 31; // the setup zone's far edge (closer to the returner)
 const BLOCKER_WAVE2_LATERAL_SHIFT = 5; // offsets wave 2's lanes from wave 1's, so it's not a rigid grid
-// Blockers hold their ground — they never advance at all, engaged or not.
-// A real blocking wedge's whole job is to occupy a point and give the
-// returner a lane past it, not to race the returner downfield; giving them
-// any independent forward speed (tried twice before) always ends with the
-// blocker and the defender it's supposedly holding drifting apart on
-// screen, which reads as "not actually blocking" even when the hold timer
-// is technically still active.
-const BLOCK_ENGAGE_DISTANCE = 3.5; // yards — how close a defender needs to get to an unbeaten blocker to be held up by it
+const BLOCKER_SEEK_SPEED = 8.5; // yards/sec while actively closing on a defender to block
+const BLOCKER_ESCORT_SPEED = 6; // yards/sec while repositioning to the guard lead with no threat nearby
+const BLOCKER_GUARD_LEAD_YARDS = 9; // how far ahead of the runner an unassigned blocker tries to stay
+const BLOCKER_MAX_CHASE_DISTANCE = 40; // give up a chase and fall back to escorting if it strays this far from the runner
+const BLOCK_ENGAGE_DISTANCE = 3.5; // yards — how close a blocker needs to get to a live defender to hold it up
 
 // Coverage (kicking) team — 10 defenders plus a trailing kicker makes 11.
 // All spawn at once at the snap (no lazy proximity spawning — "the kickoff
@@ -277,6 +282,56 @@ function makeBlockers() {
     });
   });
   return list;
+}
+
+// The single nearest defender that isn't already someone else's block in
+// progress — a blocker's target for the "Seek" behavior below.
+function nearestUnblockedDefender(b) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const d of defenders) {
+    if (d.state === 'blocked') continue; // already being held by another blocker
+    const dist = Math.hypot(d.worldX - b.worldX, d.worldY - b.worldY);
+    if (dist < bestDist) { bestDist = dist; best = d; }
+  }
+  return best;
+}
+
+function updateBlockers(dtSec) {
+  for (const b of blockers) {
+    if (b.beaten) continue; // spent — stays exactly where it made its block, for good
+
+    // While actively holding a defender, a blocker doesn't move at all —
+    // that IS the block, the two of them battling in place until it ends.
+    const isEngaged = defenders.some((d) => d.state === 'blocked' && d.blockedByBlocker === b);
+    if (isEngaged) continue;
+
+    const target = nearestUnblockedDefender(b);
+    const distFromRunner = Math.hypot(b.worldX - runner.worldX, b.worldY - runner.worldY);
+    if (target && distFromRunner < BLOCKER_MAX_CHASE_DISTANCE) {
+      // Seek: seek the nearest live threat directly, in any direction —
+      // this is the one case a blocker moves backward, since a defender
+      // that's slipped behind the returner still has to be met head-on.
+      const dx = target.worldX - b.worldX;
+      const dy = target.worldY - b.worldY;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0.01) {
+        b.worldX += (dx / dist) * BLOCKER_SEEK_SPEED * dtSec;
+        b.worldY += (dy / dist) * BLOCKER_SEEK_SPEED * dtSec;
+      }
+    } else {
+      // Nothing worth chasing right now (or the chase strayed too far) —
+      // hold an escort position just ahead of the returner instead, moving
+      // only FORWARD (their own direction of travel), never back toward
+      // their own goal.
+      const guardWorldY = runner.worldY + BLOCKER_GUARD_LEAD_YARDS;
+      if (b.worldY < guardWorldY) {
+        b.worldY = Math.min(guardWorldY, b.worldY + BLOCKER_ESCORT_SPEED * dtSec);
+      }
+      const lateralDx = clampNum(runner.worldX - b.worldX, -1, 1);
+      b.worldX += lateralDx * BLOCKER_ESCORT_SPEED * 0.5 * dtSec;
+    }
+  }
 }
 
 // ---- Defenders --------------------------------------------------------------
@@ -929,10 +984,10 @@ function tick(now) {
 
   if (runner.state === 'running') {
     updateRunner(dtSec);
-    // Blockers hold their ground the whole return — nothing to update each
-    // frame. Only the coverage team (which fights through them, then
-    // chases the runner) moves.
-    if (runner.state === 'running') updateDefenders(dtSec);
+    if (runner.state === 'running') {
+      updateBlockers(dtSec);
+      updateDefenders(dtSec);
+    }
   }
 
   render();
