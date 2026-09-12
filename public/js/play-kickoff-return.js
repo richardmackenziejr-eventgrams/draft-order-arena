@@ -157,6 +157,7 @@ const BLOCKER_SEEK_SPEED = 8.5; // yards/sec while actively closing on a defende
 const BLOCKER_ESCORT_SPEED = 6; // yards/sec while repositioning to the guard lead with no threat nearby
 const BLOCKER_GUARD_LEAD_YARDS = 9; // how far ahead of the runner an unassigned blocker tries to stay
 const BLOCKER_MAX_CHASE_DISTANCE = 40; // give up a chase and fall back to escorting if it strays this far from the runner
+const BLOCKER_RELEVANCE_MARGIN = 4; // yards -- a defender this far behind the runner has already been passed; not worth a blocker abandoning the escort to keep fighting it
 const BLOCK_ENGAGE_DISTANCE = 3.5; // yards — how close a blocker needs to get to a live defender to hold it up
 
 // Coverage (kicking) team — 10 defenders plus a trailing kicker makes 11.
@@ -291,6 +292,14 @@ function nearestUnblockedDefender(b) {
   let bestDist = Infinity;
   for (const d of defenders) {
     if (d.state === 'blocked') continue; // already being held by another blocker
+    // Already behind the runner -- the play has moved past this one, so
+    // chasing it back down just strands a blocker fighting a stale threat
+    // instead of running with the returner. Without this, a blocker and a
+    // leftover defender can keep re-engaging each other in the same spot
+    // indefinitely (release -> immediately back in block range -> blocked
+    // again), which looks like both of them just standing still forever,
+    // while the wedge never advances to stay with the runner.
+    if (d.worldY < runner.worldY - BLOCKER_RELEVANCE_MARGIN) continue;
     const dist = Math.hypot(d.worldX - b.worldX, d.worldY - b.worldY);
     if (dist < bestDist) { bestDist = dist; best = d; }
   }
