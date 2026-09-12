@@ -169,8 +169,7 @@ const BLOCK_ENGAGE_DISTANCE = 3.5; // yards — how close a blocker needs to get
 // whoever actually gets to the ball carrier.
 const COVERAGE_TEAM_SIZE = 10;
 const COVERAGE_SPAWN_WORLDY = 40; // receiving team's 40
-const COVERAGE_SPAWN_SPREAD = 3; // +/- jitter — the rule has them in one line, not spread out
-const COVERAGE_COLUMN_WIDTH = 4; // +/- lateral jitter — a tight column at the snap, per real kickoff footage, not spread across the whole field width
+const COVERAGE_SPAWN_SPREAD = 3; // +/- jitter on the shared starting depth — a real column running down together, not staggered front-to-back
 const KICKER_SPAWN_WORLDY = 65; // kicking team's own 35
 const KICKER_SPEED = 4.5; // yards/sec, slow, never tackles, never blocked
 const PASSIVE_DEFENDER_SPEED = 6; // yards/sec — a simple straight jog for coverage players that were never a real threat, once they get past the wedge
@@ -352,12 +351,17 @@ function makeCoverageTeam(activeCount) {
   const positions = [];
   for (let i = 0; i < COVERAGE_TEAM_SIZE; i++) {
     positions.push({
-      // A tight column down the middle at the snap, not spread across the
-      // whole field width — real kickoff coverage runs down together in a
-      // narrow group and only fans out once it's actually chasing the
-      // returner's real position (which the active pursuit below already
-      // does on its own).
-      worldX: runner.worldX + (Math.random() * 2 - 1) * COVERAGE_COLUMN_WIDTH,
+      // Spread across the field's width (real coverage lines up in
+      // multiple lanes, not single-file), but tight in DEPTH — all ten
+      // start at roughly the same yard line, a real column running down
+      // the field together rather than staggered front-to-back. Tightening
+      // the lateral spread too (tried once) collapsed every blocker's
+      // "nearest defender" onto the same tiny spot, since blockers seek
+      // whichever coverage player is closest — with coverage clustered in
+      // one place, that's always the same place, and the whole formation
+      // collapses into a single clump instead of the several separate
+      // battles scattered across the field the reference footage shows.
+      worldX: runner.worldX + (i - (COVERAGE_TEAM_SIZE - 1) / 2) * (FIELD_WIDTH_YARDS / COVERAGE_TEAM_SIZE) + (Math.random() * 2 - 1) * 1.5,
       worldY: runner.worldY + COVERAGE_SPAWN_WORLDY + (Math.random() * 2 - 1) * COVERAGE_SPAWN_SPREAD,
     });
   }
