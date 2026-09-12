@@ -139,16 +139,17 @@ const RESULT_HOLD_MS = 1400;
 // "Steering Behaviors For Autonomous Characters," the standard reference
 // for exactly this move-to-intercept-or-guard pattern — see
 // https://www.red3d.com/cwr/papers/1999/gdc99steer.pdf): every frame, an
-// unengaged, unbeaten blocker either (a) seeks the single nearest live
-// defender to go meet and hold up, in ANY direction including backward —
-// a defender that's slipped behind the returner still has to be met head
-// on — or (b) if nothing needs blocking right now, advances to a guard
-// position just ahead of the returner, moving only FORWARD (the returner's
-// own direction of travel), ready for the next threat. A blocker "uses
-// itself up" the first time it actually holds a defender — see
-// updateDefenders()'s blocking check for how that produces an actual,
-// visible, in-place block (not an abstract timer) — and then never moves
-// again, spent for the rest of the return.
+// unengaged blocker either (a) seeks the single nearest live defender to
+// go meet and hold up, in ANY direction including backward — a defender
+// that's slipped behind the returner still has to be met head on — or (b)
+// if nothing needs blocking right now, advances to a guard position just
+// ahead of the returner, moving only FORWARD (the returner's own direction
+// of travel), ready for the next threat. A block holds for a randomized
+// duration (see updateDefenders()'s blocking check for how that produces
+// an actual, visible, in-place battle, not an abstract timer) and then
+// both are released — the blocker isn't spent, it just goes right back to
+// seeking or escorting, so the same blocker can pick up a second defender
+// later in the return if it's the one that gets there first.
 const BLOCKER_LATERAL_SLOTS = [-20, -10, 0, 10, 20]; // 5 lanes across the field's width
 const BLOCKER_WAVE1_FORWARD = 35; // the setup zone's near edge (closer to the coverage team)
 const BLOCKER_WAVE2_FORWARD = 31; // the setup zone's far edge (closer to the returner)
@@ -175,7 +176,10 @@ const KICKER_SPAWN_WORLDY = 65; // kicking team's own 35
 const KICKER_SPEED = 4.5; // yards/sec, slow, never tackles, never blocked
 const PASSIVE_DEFENDER_SPEED = 6; // yards/sec — a simple straight jog for coverage players that were never a real threat, once they get past the wedge
 const BLOCK_MIN_MS = 800;
-const BLOCK_RANDOM_MS = 1200; // once engaged, a defender's hold time is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster — a quick individual holdup, not a sustained multi-second scrum (real footage shows scattered, fast 1-on-1 blocks resolving in about a second, not one long line-wide battle)
+const BLOCK_RANDOM_MS = 1200; // a blocker's FIRST hold is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster — a quick individual holdup, not a sustained multi-second scrum (real footage shows scattered, fast 1-on-1 blocks resolving in about a second, not one long line-wide battle)
+const REBLOCK_MIN_MS = 250;
+const REBLOCK_RANDOM_MS = 300; // a blocker that's already made its one full block can still step in front of a later defender, but only for a brief, glancing hold -- it already spent its best effort on the first one
+const BLOCK_COOLDOWN_MS = 500; // grace period after a defender is released before ANY blocker (including the one that just held it) can engage it again -- without this, a freshly-released defender sitting right next to its blocker gets re-engaged the very next frame, which looks exactly like both of them frozen in place
 
 // ---- Game state -------------------------------------------------------------
 let returnsPerPlayer = 5;
@@ -271,7 +275,7 @@ function makeBlockers() {
       worldX: runner.worldX + lateral,
       worldY: runner.worldY + BLOCKER_WAVE1_FORWARD + (i % 2 === 0 ? 0.6 : -0.6),
       number: 30 + i,
-      beaten: false, // flips true the first time it holds up a defender — spent, can't block again
+      hasBlocked: false, // flips true the first time it holds up a defender -- it can still block again later, just more briefly (see REBLOCK_MIN_MS/REBLOCK_RANDOM_MS)
     });
   });
   BLOCKER_LATERAL_SLOTS.forEach((lateral, i) => {
@@ -279,7 +283,7 @@ function makeBlockers() {
       worldX: runner.worldX + lateral + BLOCKER_WAVE2_LATERAL_SHIFT,
       worldY: runner.worldY + BLOCKER_WAVE2_FORWARD + (i % 2 === 0 ? -0.6 : 0.6),
       number: 40 + i,
-      beaten: false,
+      hasBlocked: false,
     });
   });
   return list;
@@ -308,13 +312,16 @@ function nearestUnblockedDefender(b) {
 
 function updateBlockers(dtSec) {
   for (const b of blockers) {
-    if (b.beaten) continue; // spent — stays exactly where it made its block, for good
-
     // While actively holding a defender, a blocker doesn't move at all —
     // that IS the block, the two of them battling in place until it ends.
     const isEngaged = defenders.some((d) => d.state === 'blocked' && d.blockedByBlocker === b);
     if (isEngaged) continue;
 
+    // A blocker that's already made one block can still pick up another
+    // later in the return (nearestUnblockedDefender doesn't care about
+    // hasBlocked) -- it just holds it more briefly the second time, since
+    // it already spent its best effort on the first one. See updateDefenders()
+    // for where that shorter REBLOCK_* duration actually gets applied.
     const target = nearestUnblockedDefender(b);
     const distFromRunner = Math.hypot(b.worldX - runner.worldX, b.worldY - runner.worldY);
     if (target && distFromRunner < BLOCKER_MAX_CHASE_DISTANCE) {
@@ -383,13 +390,14 @@ function makeCoverageTeam(activeCount) {
     worldY: p.worldY,
     number: 50 + i,
     active: activeSet.has(i),
-    // approaching -> blocked (on contact with an unbeaten blocker) ->
+    // approaching -> blocked (on contact with an available blocker) ->
     // approaching again -> windingUp -> lunging -> recovering (active only;
     // passive just jogs once it's past the wedge, whether or not it was
     // ever actually held up by one).
     state: 'approaching',
     blockedUntil: 0,
     blockedByBlocker: null,
+    blockImmuneUntil: 0, // brief grace period after release before anyone can engage this defender again
     committedSide: null,
     windupStartedAt: 0,
     lungeStartedAt: 0,
@@ -413,30 +421,46 @@ function updateDefenders(dtSec) {
   for (const d of defenders) {
     if (d.state === 'blocked') {
       // Actually held up by the specific blocker it ran into — released
-      // after a randomized duration, at which point that blocker is spent
-      // (beaten) and can never block anyone else this return. This (plus
-      // each engagement happening at a different moment as defenders reach
-      // the wedge at different times) is the whole "get by them and
-      // converge on the returner at different times" effect — no extra
-      // logic needed beyond the collision check below and this timer.
+      // after a randomized duration. The blocker isn't spent: it can pick
+      // up another defender later (updateBlockers() sends it right back to
+      // seeking/escorting), just for a shorter REBLOCK_* hold next time,
+      // since it already gave its best effort on the first one. Each
+      // engagement happening at a different moment as defenders reach the
+      // wedge at different times is the whole "get by them and converge on
+      // the returner at different times" effect — no extra logic needed
+      // beyond the collision check below and this timer.
       if (now >= d.blockedUntil) {
-        if (d.blockedByBlocker) d.blockedByBlocker.beaten = true;
         d.blockedByBlocker = null;
         d.state = 'approaching';
+        // A short window where NOTHING can re-engage this defender, even
+        // the blocker that just released it. Without this, a freshly-freed
+        // defender is usually still standing right on top of its blocker
+        // (well within BLOCK_ENGAGE_DISTANCE) and gets grabbed again on the
+        // very next frame — which looks exactly like both of them frozen
+        // in place, forever, instead of the defender actually breaking away.
+        d.blockImmuneUntil = now + BLOCK_COOLDOWN_MS;
       }
       continue;
     }
 
-    // Get held up by the first unbeaten blocker within range — checked for
-    // every defender (active or passive), since blocking is physical and
-    // doesn't care whether this particular defender was ever going to be a
-    // real threat.
-    const blocker = blockers.find((b) => !b.beaten && Math.hypot(d.worldX - b.worldX, d.worldY - b.worldY) <= BLOCK_ENGAGE_DISTANCE);
-    if (blocker) {
-      d.state = 'blocked';
-      d.blockedByBlocker = blocker;
-      d.blockedUntil = now + (BLOCK_MIN_MS + Math.random() * BLOCK_RANDOM_MS) / currentReturnConfig.defenderSpeed;
-      continue;
+    // Get held up by the first available blocker within range — checked
+    // for every defender (active or passive), since blocking is physical
+    // and doesn't care whether this particular defender was ever going to
+    // be a real threat. "Available" means not already holding someone else
+    // and not within this defender's own post-release cooldown.
+    if (now >= d.blockImmuneUntil) {
+      const blocker = blockers.find((b) => {
+        const alreadyEngaged = defenders.some((other) => other !== d && other.state === 'blocked' && other.blockedByBlocker === b);
+        return !alreadyEngaged && Math.hypot(d.worldX - b.worldX, d.worldY - b.worldY) <= BLOCK_ENGAGE_DISTANCE;
+      });
+      if (blocker) {
+        d.state = 'blocked';
+        d.blockedByBlocker = blocker;
+        const [minMs, randomMs] = blocker.hasBlocked ? [REBLOCK_MIN_MS, REBLOCK_RANDOM_MS] : [BLOCK_MIN_MS, BLOCK_RANDOM_MS];
+        d.blockedUntil = now + (minMs + Math.random() * randomMs) / currentReturnConfig.defenderSpeed;
+        blocker.hasBlocked = true;
+        continue;
+      }
     }
 
     if (!d.active) {
