@@ -173,13 +173,20 @@ const COVERAGE_TEAM_SIZE = 10;
 const COVERAGE_SPAWN_WORLDY = 40; // receiving team's 40
 const COVERAGE_SPAWN_SPREAD = 3; // +/- jitter on the shared starting depth — a real column running down together, not staggered front-to-back
 const KICKER_SPAWN_WORLDY = 65; // kicking team's own 35
-const KICKER_SPEED = 4.5; // yards/sec, slow, never tackles, never blocked
+const KICKER_SPEED = 4.5; // yards/sec, never blocked
+const KICKER_TRIGGER_DISTANCE = 5; // yards -- tighter than a real defender's; the kicker isn't hunting, only reacts if the runner comes right at him
+const KICKER_WINDUP_MS = 700; // slow to react -- a genuine last resort, not a real tackler
+const KICKER_LUNGE_MS = 300;
+const KICKER_RECOVER_MS = 700;
 const PASSIVE_DEFENDER_SPEED = 6; // yards/sec — a simple straight jog for coverage players that were never a real threat, once they get past the wedge
 const BLOCK_MIN_MS = 550;
 const BLOCK_RANDOM_MS = 700; // a blocker's FIRST hold is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster — a quick individual holdup, not a sustained multi-second scrum (real footage shows scattered, fast 1-on-1 blocks resolving in about a second, not one long line-wide battle). Shortened from 800-2000ms per direction to raise the pace defenders break free and come after the returner -- the wedge was holding too long and the game played too easy.
 const REBLOCK_MIN_MS = 150;
 const REBLOCK_RANDOM_MS = 200; // a blocker that's already made its one full block can still step in front of a later defender, but only for a brief, glancing hold -- it already spent its best effort on the first one
 const BLOCK_COOLDOWN_MS = 500; // grace period after a defender is released before ANY blocker (including the one that just held it) can engage it again -- without this, a freshly-released defender sitting right next to its blocker gets re-engaged the very next frame, which looks exactly like both of them frozen in place
+const BLOCKED_SLIDE_TACKLE_RANGE = 4; // yards -- how close the returner has to actually run past a restrained defender for them to take a swipe
+const BLOCKED_SLIDE_TACKLE_WINDUP_MS = 200; // short and blind (no visual telegraph, like every other lunge now) but not instant -- a fast enough direction change still beats it
+const BLOCKED_SLIDE_TACKLE_COOLDOWN_MS = 600; // after a miss, before this defender can try again -- keeps a single near-miss from resolving every single frame
 
 // ---- Game state -------------------------------------------------------------
 let returnsPerPlayer = 5;
@@ -408,6 +415,10 @@ function makeCoverageTeam(activeCount) {
     blockedUntil: 0,
     blockedByBlocker: null,
     blockImmuneUntil: 0, // brief grace period after release before anyone can engage this defender again
+    slideTackleState: null, // null | 'winding' -- a short, independent swipe attempt while still 'blocked', see updateDefenders()
+    slideTackleWindupAt: 0,
+    slideTackleCommittedSide: null,
+    nextSlideTackleAt: 0,
     committedSide: null,
     windupStartedAt: 0,
     lungeStartedAt: 0,
@@ -422,6 +433,13 @@ function makeKicker() {
     worldX: runner.worldX,
     worldY: runner.worldY + KICKER_SPAWN_WORLDY,
     number: 3,
+    state: 'jogging', // 'jogging' | 'windingUp' | 'lunging' | 'recovering'
+    committedSide: null,
+    windupStartedAt: 0,
+    lungeStartedAt: 0,
+    lungeStartX: 0, lungeStartY: 0,
+    lungeTargetX: 0, lungeTargetY: 0,
+    recoverStartedAt: 0,
   };
 }
 
@@ -430,6 +448,37 @@ function updateDefenders(dtSec) {
 
   for (const d of defenders) {
     if (d.state === 'blocked') {
+      // Even physically restrained, an active defender can still take one
+      // quick swipe at the returner if they run close enough past -- per
+      // direction, "just run around the pile" was too safe. This runs
+      // entirely independently of the release timer below (the blocker
+      // never learns about it -- it's a reach, not an escape) and can end
+      // the return on its own.
+      if (d.active) {
+        if (d.slideTackleState === 'winding') {
+          if (now - d.slideTackleWindupAt >= BLOCKED_SLIDE_TACKLE_WINDUP_MS) {
+            const dist = Math.hypot(runner.worldX - d.worldX, runner.worldY - d.worldY);
+            const runnerSide = currentRunnerSide();
+            const hit = dist <= BLOCKED_SLIDE_TACKLE_RANGE * 1.4
+              && (d.slideTackleCommittedSide === 'direct' || d.slideTackleCommittedSide === runnerSide);
+            if (hit) {
+              runner.state = 'tackled';
+              return; // the return is over — no need to keep updating anything else this frame
+            }
+            d.slideTackleState = null;
+            d.nextSlideTackleAt = now + BLOCKED_SLIDE_TACKLE_COOLDOWN_MS;
+          }
+        } else if (now >= d.nextSlideTackleAt) {
+          const dist = Math.hypot(runner.worldX - d.worldX, runner.worldY - d.worldY);
+          if (dist <= BLOCKED_SLIDE_TACKLE_RANGE) {
+            d.slideTackleState = 'winding';
+            d.slideTackleWindupAt = now;
+            const side = currentRunnerSide();
+            d.slideTackleCommittedSide = side === 'none' ? 'direct' : side;
+          }
+        }
+      }
+
       // Actually held up by the specific blocker it ran into — released
       // after a randomized duration. The blocker isn't spent: it can pick
       // up another defender later (updateBlockers() sends it right back to
@@ -449,6 +498,7 @@ function updateDefenders(dtSec) {
         // very next frame — which looks exactly like both of them frozen
         // in place, forever, instead of the defender actually breaking away.
         d.blockImmuneUntil = now + BLOCK_COOLDOWN_MS;
+        d.slideTackleState = null; // breaking free outright supersedes any swipe in progress
       }
       continue;
     }
@@ -554,10 +604,54 @@ function updateDefenders(dtSec) {
     }
   }
 
-  // The kicker trails the whole play at a slow jog, never engages the
-  // wedge, and can never tackle — a real kicker's job ends the instant the
-  // ball leaves their foot; they're only ever a last-resort safety net.
-  kicker.worldY = Math.max(0, kicker.worldY - KICKER_SPEED * dtSec);
+  // The kicker trails the whole play at a slow jog and never engages the
+  // wedge (never blocks, never gets blocked) -- but per direction, they
+  // shouldn't look totally oblivious if the returner actually runs right at
+  // them. A real kicker's job ends the instant the ball leaves their foot,
+  // so this mirrors a defender's own windingUp -> lunging pipeline but
+  // tuned deliberately weak: a longer wind-up and a tight trigger range, a
+  // genuine last-resort attempt easily beaten rather than a real threat.
+  if (kicker.state === 'windingUp') {
+    if (now - kicker.windupStartedAt >= KICKER_WINDUP_MS) {
+      kicker.state = 'lunging';
+      kicker.lungeStartedAt = now;
+      kicker.lungeStartX = kicker.worldX;
+      kicker.lungeStartY = kicker.worldY;
+      const leadSec = KICKER_LUNGE_MS / 1000;
+      kicker.lungeTargetX = runner.worldX + runner.vx * leadSec;
+      kicker.lungeTargetY = runner.worldY + runner.vy * leadSec;
+    }
+  } else if (kicker.state === 'lunging') {
+    const t = Math.min(1, (now - kicker.lungeStartedAt) / KICKER_LUNGE_MS);
+    kicker.worldX = kicker.lungeStartX + (kicker.lungeTargetX - kicker.lungeStartX) * t;
+    kicker.worldY = kicker.lungeStartY + (kicker.lungeTargetY - kicker.lungeStartY) * t;
+    const dist = Math.hypot(runner.worldX - kicker.worldX, runner.worldY - kicker.worldY);
+    if (dist <= TACKLE_RADIUS) {
+      const runnerSide = currentRunnerSide();
+      const hit = kicker.committedSide === 'direct' || kicker.committedSide === runnerSide;
+      if (hit) {
+        runner.state = 'tackled';
+        return; // the return is over — no need to keep updating anything else this frame
+      }
+      kicker.state = 'recovering';
+      kicker.recoverStartedAt = now;
+    } else if (t >= 1) {
+      kicker.state = 'recovering';
+      kicker.recoverStartedAt = now;
+    }
+  } else if (kicker.state === 'recovering') {
+    kicker.worldY = Math.max(0, kicker.worldY - KICKER_SPEED * 0.4 * dtSec); // still trailing, slower while picking himself back up
+    if (now - kicker.recoverStartedAt >= KICKER_RECOVER_MS) kicker.state = 'jogging';
+  } else {
+    kicker.worldY = Math.max(0, kicker.worldY - KICKER_SPEED * dtSec);
+    const dist = Math.hypot(runner.worldX - kicker.worldX, runner.worldY - kicker.worldY);
+    if (dist <= KICKER_TRIGGER_DISTANCE) {
+      kicker.state = 'windingUp';
+      kicker.windupStartedAt = now;
+      const side = currentRunnerSide();
+      kicker.committedSide = side === 'none' ? 'direct' : side;
+    }
+  }
 }
 
 // ---- Rendering ----------------------------------------------------------
