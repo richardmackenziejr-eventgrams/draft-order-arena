@@ -602,7 +602,16 @@ function drawPlayerSprite(x, y, opts) {
   // braced against someone plants both feet instead of mid-stride.
   function leg(pivotY, t, thickness) {
     const thighAngle = blocking ? -0.15 : -0.9 + t * 1.5; // -0.9 (reaching forward) .. 0.6 (trailing back)
-    const kneeBend = blocking ? 0.3 : 0.5 + (1 - Math.abs(t - 0.5) * 2) * 1.1; // always at least a visible bend, most bent mid-swing
+    // The knee has to fold OPPOSITE the thigh's own lean, not extend further
+    // the same way -- a trailing/recovering leg's heel tucks up and forward
+    // underneath it (less total backward reach than a straight leg would
+    // have), while a forward-reaching leg stays close to straight as it
+    // extends down to plant. Bending the shin further in the SAME direction
+    // the thigh already leans (the previous formula) reads as the leg
+    // folding the wrong way. `-thighAngle` makes it fold back toward
+    // vertical, harder the more the thigh leans; the constant keeps a
+    // baseline bend so it's never a dead-straight single line.
+    const kneeBend = blocking ? 0.25 : -thighAngle * 0.75 - 0.2;
     ctx.save();
     ctx.translate(0, pivotY);
     ctx.rotate(thighAngle);
@@ -1149,7 +1158,7 @@ function wait(ms) {
 // blockers, the kicker) renders this pan for free — only the ball's own
 // position needs computing here.
 const KICKOFF_FORMATION_MS = 550;
-const KICKOFF_FLIGHT_MS = 1000;
+const KICKOFF_FLIGHT_MS = 2200; // was 1000 -- the ball crossed the whole field in about a second, way too fast to actually watch it fly
 async function playCatchAnimation() {
   runner.state = 'catching';
   const kickoffSpotWorldY = kicker.worldY + 6; // a bit beyond the kicker, so the whole formation fits on screen
