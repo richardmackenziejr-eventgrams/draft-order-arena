@@ -1,13 +1,18 @@
-// Kickoff Return — graphics test sandbox. NOT wired to any game state, API,
-// league, or server — a pure visual tool for judging the field/stadium/
-// player rendering directly, same idea as the earlier fg3d-test.html/js
-// prototype used to iterate on the 3D Field Goal scene before it shipped.
+// Kickoff Return — graphics test sandbox. NOT wired to any real league or
+// server — a pure local tool that plays a full session (5 returns, real
+// scoring/difficulty ladder) so it can actually be played while the real
+// game's rendering/mechanics are iterated on, same idea as the earlier
+// fg3d-test.html/js prototype used to build out the 3D Field Goal scene.
 // The simulation code below (movement, defender AI, drawing) is copied
 // verbatim from public/js/play-kickoff-return.js — keep the two in sync by
-// hand if the real game's rendering changes; this file has no build step
-// or import to do that automatically. Not linked from anywhere on the site.
+// hand if the real game changes; this file has no build step or import to
+// do that automatically. Not linked from anywhere on the site.
 
 // ---- Canvas / world setup -------------------------------------------------
+// Landscape (the field runs horizontally): worldY (yards downfield) maps to
+// screen X and scrolls; worldX (lateral position) maps to screen Y and is
+// fixed/inset. Forward progress moves toward smaller screen X
+// (right-to-left), matching a kickoff return in the classic side view.
 const canvas = document.getElementById('kr-canvas');
 const ctx = canvas.getContext('2d');
 const CANVAS_WIDTH = canvas.width;
@@ -15,14 +20,14 @@ const CANVAS_HEIGHT = canvas.height;
 
 const FIELD_WIDTH_YARDS = 53.3;
 const RUNNER_HALF_WIDTH = 0.6;
-const STADIUM_MARGIN_PX = 34;
-const FIELD_LEFT_PX = STADIUM_MARGIN_PX;
-const FIELD_RIGHT_PX = CANVAS_WIDTH - STADIUM_MARGIN_PX;
-const PX_PER_YARD_X = (FIELD_RIGHT_PX - FIELD_LEFT_PX) / FIELD_WIDTH_YARDS;
-const PX_PER_YARD_Y = 14;
-const RUNNER_SCREEN_Y = CANVAS_HEIGHT * 0.68;
-const START_FIELD_POSITION = 20;
-const OWN_GOAL_WORLD_Y = -START_FIELD_POSITION;
+const STADIUM_MARGIN_PX = 30;
+const FIELD_TOP_PX = STADIUM_MARGIN_PX;
+const FIELD_BOTTOM_PX = CANVAS_HEIGHT - STADIUM_MARGIN_PX;
+const PX_PER_YARD_LATERAL = (FIELD_BOTTOM_PX - FIELD_TOP_PX) / FIELD_WIDTH_YARDS;
+const PX_PER_YARD_FORWARD = 14;
+const RUNNER_SCREEN_X = CANVAS_WIDTH * 0.68;
+const START_FIELD_POSITION = 0;
+const OWN_GOAL_WORLD_Y = 0;
 
 const EZ_DEPTH_PX = 55;
 const STADIUM_DECK_DEPTH_PX = 120;
@@ -36,17 +41,17 @@ function fieldPositionLabel(worldY) {
   return String(Math.round(fieldPos <= 50 ? fieldPos : 100 - fieldPos));
 }
 
-function worldToScreenX(worldX) {
-  return CANVAS_WIDTH / 2 + worldX * PX_PER_YARD_X;
+function screenYLateral(worldX) {
+  return CANVAS_HEIGHT / 2 + worldX * PX_PER_YARD_LATERAL;
 }
 function cameraMaxWorldY() {
-  return fieldYards + (BACKDROP_DEPTH_PX - RUNNER_SCREEN_Y) / PX_PER_YARD_Y;
+  return fieldYards + (BACKDROP_DEPTH_PX - RUNNER_SCREEN_X) / PX_PER_YARD_FORWARD;
 }
 function cameraWorldY() {
   return Math.min(runner.worldY, cameraMaxWorldY());
 }
-function worldToScreenY(worldY) {
-  return RUNNER_SCREEN_Y - (worldY - cameraWorldY()) * PX_PER_YARD_Y;
+function screenXForward(worldY) {
+  return RUNNER_SCREEN_X - (worldY - cameraWorldY()) * PX_PER_YARD_FORWARD;
 }
 function clampNum(x, min, max) {
   return Math.max(min, Math.min(max, x));
@@ -56,10 +61,6 @@ function clampNum(x, min, max) {
 const RUNNER_FORWARD_SPEED = 9;
 const RUNNER_BACKWARD_SPEED = 4;
 const RUNNER_LATERAL_SPEED = 7;
-
-const EVADE_BURST_SPEED = 12;
-const EVADE_WINDOW_MS = 250;
-const EVADE_COOLDOWN_MS = 500;
 
 const DEFENDER_BASE_SPEED = 7.5;
 const DEFENDER_TRIGGER_DISTANCE = 6;
@@ -73,6 +74,12 @@ const DEFENDER_RECOVER_MS = 550;
 
 const SPAWN_LEAD_YARDS = 13;
 const SPAWN_LATERAL_SPREAD = FIELD_WIDTH_YARDS * 0.42;
+
+const BLOCKER_OFFSETS = [
+  { forward: 3, lateral: 0 },
+  { forward: 1, lateral: -4.5 },
+  { forward: 1, lateral: 4.5 },
+];
 
 // Difficulty curve, copied from lib/gameEngine/kickoffReturn.js so the
 // "spawn a wave at this level" control matches what real gameplay would
@@ -110,7 +117,7 @@ function nextLevelFor(currentLevel, yardsGained, touchdown) {
 }
 
 // ---- Game/session state ----------------------------------------------------
-let fieldYards = 80;
+let fieldYards = 100;
 let currentReturnConfig = { index: 0, defenderCount: BASE_DEFENDER_COUNT, defenderSpeed: BASE_DEFENDER_SPEED };
 
 function freshPlayer() {
@@ -121,66 +128,46 @@ let player = freshPlayer();
 const runner = {
   worldX: 0, worldY: 0,
   lateralDir: 'none', lastLateralDir: null,
-  evasiveSide: null, evasiveUntil: 0, nextEvasiveAllowedAt: 0,
   state: 'idle', // idle -> catching -> running -> tackled/touchdown, exactly like the real game
   vx: 0, vy: 0,
 };
 
 let defenders = [];
 let spawnSchedule = [];
+let blockers = BLOCKER_OFFSETS.map(() => ({ worldX: 0, worldY: 0 }));
 let animationHandle = null;
 let lastFrameAt = 0;
 
 // ---- Input ------------------------------------------------------------------
+// Left/Right drive forward/backward; Up/Down dodge laterally — matching the
+// original Tecmo Bowl's side-view control scheme (no juke/spin).
 const heldKeys = new Set();
 const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 window.addEventListener('keydown', (e) => {
   if (ARROW_KEYS.has(e.key)) e.preventDefault();
   heldKeys.add(e.key);
-  if (e.key === 'z' || e.key === 'Z') tryEvade('juke');
-  if (e.key === 'x' || e.key === 'X') tryEvade('spin');
 });
 window.addEventListener('keyup', (e) => {
   heldKeys.delete(e.key);
 });
 
-function tryEvade(kind) {
-  if (runner.state !== 'running') return;
-  const now = performance.now();
-  if (now < runner.nextEvasiveAllowedAt) return;
-  let side;
-  if (kind === 'juke') {
-    if (runner.lateralDir === 'none') return;
-    side = runner.lateralDir;
-  } else {
-    const base = runner.lateralDir !== 'none' ? runner.lateralDir : runner.lastLateralDir;
-    if (!base) return;
-    side = base === 'left' ? 'right' : 'left';
-  }
-  runner.evasiveSide = side;
-  runner.evasiveUntil = now + EVADE_WINDOW_MS;
-  runner.nextEvasiveAllowedAt = now + EVADE_COOLDOWN_MS;
-}
-
 function currentRunnerSide() {
-  if (performance.now() < runner.evasiveUntil) return runner.evasiveSide;
   return runner.lateralDir;
 }
 
-// ---- Runner movement (unchanged from the real game, minus the touchdown/
-// tackle end-of-return handling — the sandbox just keeps going) ------------
+// ---- Runner movement (unchanged from the real game) ------------------------
 function updateRunner(dtSec) {
+  const forward = heldKeys.has('ArrowLeft');
+  const backward = heldKeys.has('ArrowRight');
   const up = heldKeys.has('ArrowUp');
   const down = heldKeys.has('ArrowDown');
-  const left = heldKeys.has('ArrowLeft');
-  const right = heldKeys.has('ArrowRight');
 
-  let vx = 0;
   let vy = 0;
-  if (left && !right) vx = -1;
-  else if (right && !left) vx = 1;
-  if (up && !down) vy = 1;
-  else if (down && !up) vy = -1;
+  let vx = 0;
+  if (forward && !backward) vy = 1;
+  else if (backward && !forward) vy = -1;
+  if (down && !up) vx = 1;
+  else if (up && !down) vx = -1;
 
   const mag = Math.hypot(vx, vy);
   if (mag > 0) { vx /= mag; vy /= mag; }
@@ -189,13 +176,7 @@ function updateRunner(dtSec) {
   const worldYVelocity = vy * forwardSpeed;
   runner.worldY = clampNum(runner.worldY + worldYVelocity * dtSec, 0, fieldYards);
 
-  const evasiveActive = performance.now() < runner.evasiveUntil;
-  let worldXVelocity;
-  if (evasiveActive) {
-    worldXVelocity = (runner.evasiveSide === 'left' ? -1 : 1) * EVADE_BURST_SPEED;
-  } else {
-    worldXVelocity = vx * RUNNER_LATERAL_SPEED;
-  }
+  const worldXVelocity = vx * RUNNER_LATERAL_SPEED;
   runner.worldX += worldXVelocity * dtSec;
   const halfField = FIELD_WIDTH_YARDS / 2 - RUNNER_HALF_WIDTH;
   runner.worldX = clampNum(runner.worldX, -halfField, halfField);
@@ -203,13 +184,23 @@ function updateRunner(dtSec) {
   runner.vx = worldXVelocity;
   runner.vy = worldYVelocity;
 
-  if (left && !right) { runner.lateralDir = 'left'; runner.lastLateralDir = 'left'; }
-  else if (right && !left) { runner.lateralDir = 'right'; runner.lastLateralDir = 'right'; }
+  if (up && !down) { runner.lateralDir = 'up'; runner.lastLateralDir = 'up'; }
+  else if (down && !up) { runner.lateralDir = 'down'; runner.lastLateralDir = 'down'; }
   else runner.lateralDir = 'none';
 
   if (runner.worldY >= fieldYards) {
     runner.state = 'touchdown';
   }
+}
+
+// Cosmetic return-team teammates, held in a fixed formation relative to the
+// runner — no interaction with defenders, just visual.
+function updateBlockers() {
+  BLOCKER_OFFSETS.forEach((offset, i) => {
+    const b = blockers[i];
+    b.worldY = clampNum(runner.worldY + offset.forward, 0, fieldYards);
+    b.worldX = clampNum(runner.worldX + offset.lateral, -(FIELD_WIDTH_YARDS / 2 - RUNNER_HALF_WIDTH), FIELD_WIDTH_YARDS / 2 - RUNNER_HALF_WIDTH);
+  });
 }
 
 // ---- Defenders (unchanged AI from the real game) ---------------------------
@@ -279,8 +270,8 @@ function updateDefenders(dtSec) {
         d.lungeStartedAt = now;
         d.lungeStartX = d.worldX;
         d.lungeStartY = d.worldY;
-        const lateralLead = d.committedSide === 'left' ? -DEFENDER_LUNGE_LATERAL_LEAD
-          : d.committedSide === 'right' ? DEFENDER_LUNGE_LATERAL_LEAD : 0;
+        const lateralLead = d.committedSide === 'up' ? -DEFENDER_LUNGE_LATERAL_LEAD
+          : d.committedSide === 'down' ? DEFENDER_LUNGE_LATERAL_LEAD : 0;
         const leadSec = DEFENDER_LUNGE_MS / 1000;
         d.lungeTargetX = runner.worldX + runner.vx * leadSec + lateralLead;
         d.lungeTargetY = runner.worldY + runner.vy * leadSec;
@@ -401,36 +392,36 @@ function drawSeatedDeck(x, y, w, h, horizontal, seed) {
   ctx.restore();
 }
 
-function drawStadiumSides() {
-  [{ x0: 0, x1: FIELD_LEFT_PX, side: 0 }, { x0: FIELD_RIGHT_PX, x1: CANVAS_WIDTH, side: 1 }].forEach(({ x0, x1, side }) => {
-    const roofEdgeX = side === 0 ? x0 + 6 : x1 - 6;
+function drawStadiumStands() {
+  [{ y0: 0, y1: FIELD_TOP_PX, side: 0 }, { y0: FIELD_BOTTOM_PX, y1: CANVAS_HEIGHT, side: 1 }].forEach(({ y0, y1, side }) => {
+    const roofEdgeY = side === 0 ? y0 + 6 : y1 - 6;
 
-    const lowerW = (x1 - x0) * 0.62;
-    const lowerX = side === 0 ? x1 - lowerW : x0;
+    const lowerH = (y1 - y0) * 0.62;
+    const lowerY = side === 0 ? y1 - lowerH : y0;
     ctx.fillStyle = '#17293b';
-    ctx.fillRect(lowerX, 0, lowerW, CANVAS_HEIGHT);
-    drawSeatedDeck(lowerX, 0, lowerW, CANVAS_HEIGHT, false, side * 97);
+    ctx.fillRect(0, lowerY, CANVAS_WIDTH, lowerH);
+    drawSeatedDeck(0, lowerY, CANVAS_WIDTH, lowerH, true, side * 97);
 
-    const upperX0 = x0;
-    const upperX1 = lowerX;
+    const upperY0 = y0;
+    const upperY1 = lowerY;
     ctx.fillStyle = '#070d13';
-    ctx.fillRect(side === 0 ? upperX1 - 2 : upperX1, 0, 2, CANVAS_HEIGHT);
+    ctx.fillRect(0, side === 0 ? upperY1 - 2 : upperY1, CANVAS_WIDTH, 2);
 
-    const upperW = upperX1 - upperX0;
+    const upperH = upperY1 - upperY0;
     ctx.fillStyle = '#101c29';
-    ctx.fillRect(upperX0, 0, upperW, CANVAS_HEIGHT);
-    drawSeatedDeck(upperX0, 0, upperW, CANVAS_HEIGHT, false, side * 97 + 1000);
+    ctx.fillRect(0, upperY0, CANVAS_WIDTH, upperH);
+    drawSeatedDeck(0, upperY0, CANVAS_WIDTH, upperH, true, side * 97 + 1000);
 
     ctx.fillStyle = '#050a0f';
-    ctx.fillRect(side === 0 ? 0 : CANVAS_WIDTH - 4, 0, 4, CANVAS_HEIGHT);
+    ctx.fillRect(0, side === 0 ? 0 : CANVAS_HEIGHT - 4, CANVAS_WIDTH, 4);
 
-    for (let ly = 60; ly < CANVAS_HEIGHT; ly += 150) {
-      const lx = roofEdgeX;
+    for (let lx = 60; lx < CANVAS_WIDTH; lx += 150) {
+      const ly = roofEdgeY;
       ctx.strokeStyle = '#5a6672';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(lx, ly - 10);
-      ctx.lineTo(lx, ly + 10);
+      ctx.moveTo(lx - 10, ly);
+      ctx.lineTo(lx + 10, ly);
       ctx.stroke();
       ctx.fillStyle = '#eef3f8';
       ctx.beginPath();
@@ -439,47 +430,47 @@ function drawStadiumSides() {
     }
 
     ctx.fillStyle = '#e4e4e4';
-    ctx.fillRect(side === 0 ? x1 - 3 : x0, 0, 3, CANVAS_HEIGHT);
+    ctx.fillRect(0, side === 0 ? y1 - 3 : y0, CANVAS_WIDTH, 3);
   });
 }
 
 function drawField() {
-  drawStadiumSides();
+  drawStadiumStands();
 
   ctx.fillStyle = '#2c6438';
-  ctx.fillRect(FIELD_LEFT_PX, 0, FIELD_RIGHT_PX - FIELD_LEFT_PX, CANVAS_HEIGHT);
+  ctx.fillRect(0, FIELD_TOP_PX, CANVAS_WIDTH, FIELD_BOTTOM_PX - FIELD_TOP_PX);
 
   const startYard = Math.floor(cameraWorldY() / 5) * 5 - 20;
   const endYard = startYard + 90;
   for (let y = startYard; y < endYard; y += 5) {
     if (y + 5 < OWN_GOAL_WORLD_Y || y > fieldYards) continue;
-    const yTop = clampNum(y, OWN_GOAL_WORLD_Y, fieldYards);
-    const yBottom = clampNum(y + 5, OWN_GOAL_WORLD_Y, fieldYards);
-    const screenTop = worldToScreenY(yBottom);
-    const screenBottom = worldToScreenY(yTop);
+    const yStart = clampNum(y, OWN_GOAL_WORLD_Y, fieldYards);
+    const yEnd = clampNum(y + 5, OWN_GOAL_WORLD_Y, fieldYards);
+    const screenLeft = screenXForward(yEnd);
+    const screenRight = screenXForward(yStart);
     const band = Math.round(y / 5);
     ctx.fillStyle = band % 2 === 0 ? '#2c6438' : '#316f3f';
-    ctx.fillRect(FIELD_LEFT_PX, screenTop, FIELD_RIGHT_PX - FIELD_LEFT_PX, screenBottom - screenTop);
+    ctx.fillRect(screenLeft, FIELD_TOP_PX, screenRight - screenLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
   }
 
   ctx.textAlign = 'center';
   for (let y = startYard; y <= endYard; y += 5) {
     if (y < OWN_GOAL_WORLD_Y || y > fieldYards) continue;
-    const screenY = worldToScreenY(y);
-    if (screenY < -20 || screenY > CANVAS_HEIGHT + 20) continue;
+    const screenX = screenXForward(y);
+    if (screenX < -20 || screenX > CANVAS_WIDTH + 20) continue;
     const isTenYard = y % 10 === 0;
     ctx.strokeStyle = isTenYard ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.4)';
     ctx.lineWidth = isTenYard ? 2 : 1.3;
     ctx.beginPath();
-    ctx.moveTo(FIELD_LEFT_PX, screenY);
-    ctx.lineTo(FIELD_RIGHT_PX, screenY);
+    ctx.moveTo(screenX, FIELD_TOP_PX);
+    ctx.lineTo(screenX, FIELD_BOTTOM_PX);
     ctx.stroke();
     ctx.strokeStyle = 'rgba(255,255,255,0.55)';
     ctx.lineWidth = 2;
-    [FIELD_LEFT_PX + (FIELD_RIGHT_PX - FIELD_LEFT_PX) * 0.28, FIELD_LEFT_PX + (FIELD_RIGHT_PX - FIELD_LEFT_PX) * 0.72].forEach((hx) => {
+    [FIELD_TOP_PX + (FIELD_BOTTOM_PX - FIELD_TOP_PX) * 0.28, FIELD_TOP_PX + (FIELD_BOTTOM_PX - FIELD_TOP_PX) * 0.72].forEach((hy) => {
       ctx.beginPath();
-      ctx.moveTo(hx - 5, screenY);
-      ctx.lineTo(hx + 5, screenY);
+      ctx.moveTo(screenX, hy - 5);
+      ctx.lineTo(screenX, hy + 5);
       ctx.stroke();
     });
     if (isTenYard) {
@@ -487,105 +478,111 @@ function drawField() {
       ctx.font = 'bold 16px sans-serif';
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(15,35,20,0.6)';
-      ctx.strokeText(label, CANVAS_WIDTH / 2, screenY - 8);
+      ctx.strokeText(label, screenX, FIELD_TOP_PX + 22);
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
-      ctx.fillText(label, CANVAS_WIDTH / 2, screenY - 8);
+      ctx.fillText(label, screenX, FIELD_TOP_PX + 22);
     }
   }
 
-  const goalScreenY = worldToScreenY(fieldYards);
-  if (goalScreenY < CANVAS_HEIGHT + 80) {
-    const ezTop = Math.max(-80, goalScreenY - EZ_DEPTH_PX);
-    const ezBottom = goalScreenY;
+  const goalScreenX = screenXForward(fieldYards);
+  if (goalScreenX > -80) {
+    const ezRight = Math.min(CANVAS_WIDTH + 80, goalScreenX);
+    const ezLeft = Math.max(-80, goalScreenX - EZ_DEPTH_PX);
     ctx.fillStyle = '#1f4a29';
-    ctx.fillRect(FIELD_LEFT_PX, ezTop, FIELD_RIGHT_PX - FIELD_LEFT_PX, ezBottom - ezTop);
+    ctx.fillRect(ezLeft, FIELD_TOP_PX, ezRight - ezLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
     ctx.save();
     ctx.beginPath();
-    ctx.rect(FIELD_LEFT_PX, ezTop, FIELD_RIGHT_PX - FIELD_LEFT_PX, ezBottom - ezTop);
+    ctx.rect(ezLeft, FIELD_TOP_PX, ezRight - ezLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
     ctx.clip();
+    ctx.translate((ezLeft + ezRight) / 2, CANVAS_HEIGHT / 2);
+    ctx.rotate(-Math.PI / 2);
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.font = 'bold 15px sans-serif';
-    ctx.fillText('E N D   Z O N E', CANVAS_WIDTH / 2, (ezTop + ezBottom) / 2 + 4);
+    ctx.textAlign = 'center';
+    ctx.fillText('E N D   Z O N E', 0, 4);
     ctx.restore();
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(FIELD_LEFT_PX, goalScreenY);
-    ctx.lineTo(FIELD_RIGHT_PX, goalScreenY);
+    ctx.moveTo(goalScreenX, FIELD_TOP_PX);
+    ctx.lineTo(goalScreenX, FIELD_BOTTOM_PX);
     ctx.stroke();
 
-    const deckBottom = ezTop;
-    const deckSplit = deckBottom - STADIUM_DECK_DEPTH_PX * 0.58;
-    const roofBottom = deckBottom - STADIUM_DECK_DEPTH_PX;
-    const roofTop = roofBottom - STADIUM_ROOF_DEPTH_PX;
-    if (deckBottom > -20) {
+    const deckRight = ezLeft;
+    const deckSplit = deckRight - STADIUM_DECK_DEPTH_PX * 0.58;
+    const roofRight = deckRight - STADIUM_DECK_DEPTH_PX;
+    const roofLeft = roofRight - STADIUM_ROOF_DEPTH_PX;
+    if (deckRight > -20) {
       ctx.fillStyle = '#17293b';
-      ctx.fillRect(0, deckSplit, CANVAS_WIDTH, deckBottom - deckSplit);
-      drawSeatedDeck(0, deckSplit, CANVAS_WIDTH, deckBottom - deckSplit, true, 2000);
+      ctx.fillRect(deckSplit, 0, deckRight - deckSplit, CANVAS_HEIGHT);
+      drawSeatedDeck(deckSplit, 0, deckRight - deckSplit, CANVAS_HEIGHT, false, 2000);
       ctx.fillStyle = '#070d13';
-      ctx.fillRect(0, deckSplit - 2, CANVAS_WIDTH, 2);
+      ctx.fillRect(deckSplit - 2, 0, 2, CANVAS_HEIGHT);
       ctx.fillStyle = '#101c29';
-      ctx.fillRect(0, roofBottom, CANVAS_WIDTH, deckSplit - roofBottom);
-      drawSeatedDeck(0, roofBottom, CANVAS_WIDTH, deckSplit - roofBottom, true, 3000);
+      ctx.fillRect(roofRight, 0, deckSplit - roofRight, CANVAS_HEIGHT);
+      drawSeatedDeck(roofRight, 0, deckSplit - roofRight, CANVAS_HEIGHT, false, 3000);
       ctx.fillStyle = '#050a0f';
-      ctx.fillRect(0, roofTop, CANVAS_WIDTH, roofBottom - roofTop);
-      for (let lx = FIELD_LEFT_PX + 30; lx < FIELD_RIGHT_PX; lx += 90) {
+      ctx.fillRect(roofLeft, 0, roofRight - roofLeft, CANVAS_HEIGHT);
+      for (let ly = FIELD_TOP_PX + 30; ly < FIELD_BOTTOM_PX; ly += 90) {
         ctx.strokeStyle = '#5a6672';
         ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.moveTo(lx, roofTop + 4);
-        ctx.lineTo(lx, roofTop - 14);
+        ctx.moveTo(roofLeft + 4, ly);
+        ctx.lineTo(roofLeft - 14, ly);
         ctx.stroke();
         ctx.fillStyle = '#eef3f8';
-        ctx.fillRect(lx - 6, roofTop - 19, 12, 7);
+        ctx.fillRect(roofLeft - 19, ly - 6, 7, 12);
       }
     }
   }
 
-  const ownGoalScreenY = worldToScreenY(OWN_GOAL_WORLD_Y);
-  if (ownGoalScreenY < CANVAS_HEIGHT + 80) {
-    const ownEzTop = ownGoalScreenY;
-    const ownEzBottom = Math.min(CANVAS_HEIGHT + 80, ownGoalScreenY + EZ_DEPTH_PX);
+  const ownGoalScreenX = screenXForward(OWN_GOAL_WORLD_Y);
+  if (ownGoalScreenX < CANVAS_WIDTH + 80) {
+    const ownEzLeft = ownGoalScreenX;
+    const ownEzRight = Math.min(CANVAS_WIDTH + 80, ownGoalScreenX + EZ_DEPTH_PX);
     ctx.fillStyle = '#1f4a29';
-    ctx.fillRect(FIELD_LEFT_PX, ownEzTop, FIELD_RIGHT_PX - FIELD_LEFT_PX, ownEzBottom - ownEzTop);
+    ctx.fillRect(ownEzLeft, FIELD_TOP_PX, ownEzRight - ownEzLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
     ctx.save();
     ctx.beginPath();
-    ctx.rect(FIELD_LEFT_PX, ownEzTop, FIELD_RIGHT_PX - FIELD_LEFT_PX, ownEzBottom - ownEzTop);
+    ctx.rect(ownEzLeft, FIELD_TOP_PX, ownEzRight - ownEzLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
     ctx.clip();
+    ctx.translate((ownEzLeft + ownEzRight) / 2, CANVAS_HEIGHT / 2);
+    ctx.rotate(-Math.PI / 2);
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.font = 'bold 15px sans-serif';
-    ctx.fillText('E N D   Z O N E', CANVAS_WIDTH / 2, (ownEzTop + ownEzBottom) / 2 + 4);
+    ctx.textAlign = 'center';
+    ctx.fillText('E N D   Z O N E', 0, 4);
     ctx.restore();
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(FIELD_LEFT_PX, ownGoalScreenY);
-    ctx.lineTo(FIELD_RIGHT_PX, ownGoalScreenY);
+    ctx.moveTo(ownGoalScreenX, FIELD_TOP_PX);
+    ctx.lineTo(ownGoalScreenX, FIELD_BOTTOM_PX);
     ctx.stroke();
     ctx.fillStyle = '#111c27';
-    ctx.fillRect(0, ownEzBottom, CANVAS_WIDTH, Math.max(0, CANVAS_HEIGHT - ownEzBottom));
+    ctx.fillRect(Math.max(0, ownEzRight), 0, Math.max(0, CANVAS_WIDTH - ownEzRight), CANVAS_HEIGHT);
   }
 
   ctx.fillStyle = 'rgba(0,0,0,0.22)';
-  ctx.fillRect(FIELD_LEFT_PX - 5, 0, 5, CANVAS_HEIGHT);
-  ctx.fillRect(FIELD_RIGHT_PX, 0, 5, CANVAS_HEIGHT);
+  ctx.fillRect(0, FIELD_TOP_PX - 5, CANVAS_WIDTH, 5);
+  ctx.fillRect(0, FIELD_BOTTOM_PX, CANVAS_WIDTH, 5);
   ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.fillRect(FIELD_LEFT_PX - 5, 0, 2, CANVAS_HEIGHT);
-  ctx.fillRect(FIELD_RIGHT_PX + 3, 0, 2, CANVAS_HEIGHT);
+  ctx.fillRect(0, FIELD_TOP_PX - 5, CANVAS_WIDTH, 2);
+  ctx.fillRect(0, FIELD_BOTTOM_PX + 3, CANVAS_WIDTH, 2);
 }
 
 function drawGoalPost() {
-  const goalScreenY = worldToScreenY(fieldYards);
-  const baseY = goalScreenY - GOALPOST_DEPTH_PX;
-  if (baseY < -70 || baseY > CANVAS_HEIGHT + 70) return;
-  const baseX = worldToScreenX(0);
-  const uprightOffsetPx = 3.08 * PX_PER_YARD_X;
-  const crossbarY = baseY - 16;
-  const uprightTopY = baseY - 52;
+  const goalScreenX = screenXForward(fieldYards);
+  const baseX = goalScreenX - GOALPOST_DEPTH_PX;
+  if (baseX < -70 || baseX > CANVAS_WIDTH + 70) return;
+  const baseY = screenYLateral(0);
+  const uprightOffsetPx = 3.08 * PX_PER_YARD_LATERAL;
+  const crossbarX = baseX - 16;
+  const uprightTipX = baseX - 52;
 
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath();
-  ctx.ellipse(baseX, baseY, 5, 2.5, 0, 0, Math.PI * 2);
+  ctx.ellipse(baseX, baseY, 2.5, 5, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.strokeStyle = '#ffd400';
@@ -594,46 +591,33 @@ function drawGoalPost() {
   ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.moveTo(baseX, baseY);
-  ctx.lineTo(baseX, crossbarY);
+  ctx.lineTo(crossbarX, baseY);
   ctx.stroke();
   ctx.lineWidth = 3.5;
   ctx.beginPath();
-  ctx.moveTo(baseX - uprightOffsetPx, crossbarY);
-  ctx.lineTo(baseX + uprightOffsetPx, crossbarY);
+  ctx.moveTo(crossbarX, baseY - uprightOffsetPx);
+  ctx.lineTo(crossbarX, baseY + uprightOffsetPx);
   ctx.stroke();
   ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.moveTo(baseX - uprightOffsetPx, crossbarY);
-  ctx.lineTo(baseX - uprightOffsetPx, uprightTopY);
-  ctx.moveTo(baseX + uprightOffsetPx, crossbarY);
-  ctx.lineTo(baseX + uprightOffsetPx, uprightTopY);
+  ctx.moveTo(crossbarX, baseY - uprightOffsetPx);
+  ctx.lineTo(uprightTipX, baseY - uprightOffsetPx);
+  ctx.moveTo(crossbarX, baseY + uprightOffsetPx);
+  ctx.lineTo(uprightTipX, baseY + uprightOffsetPx);
   ctx.stroke();
   ctx.strokeStyle = 'rgba(255,255,255,0.55)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(baseX - 1, baseY);
-  ctx.lineTo(baseX - 1, crossbarY);
+  ctx.moveTo(baseX, baseY - 1);
+  ctx.lineTo(crossbarX, baseY - 1);
   ctx.stroke();
 }
 
 function drawRunner() {
-  const x = worldToScreenX(runner.worldX);
-  const y = worldToScreenY(runner.worldY);
+  const x = screenXForward(runner.worldY);
+  const y = screenYLateral(runner.worldX);
   const moving = Math.abs(runner.vx) + Math.abs(runner.vy) > 0.5;
   const legPhase = moving ? performance.now() / 90 : 0;
-
-  if (performance.now() < runner.evasiveUntil) {
-    const dir = runner.evasiveSide === 'left' ? 1 : -1;
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 3; i++) {
-      const sx = x + dir * (14 + i * 7);
-      ctx.beginPath();
-      ctx.moveTo(sx, y - 18 + i * 3);
-      ctx.lineTo(sx + dir * 8, y - 18 + i * 3);
-      ctx.stroke();
-    }
-  }
 
   drawPlayerSprite(x, y, {
     jersey: '#2f5fbf', trim: '#16234f', pants: '#e7ebef', helmet: '#1c3f8f',
@@ -641,11 +625,23 @@ function drawRunner() {
   });
 }
 
+function drawBlockers() {
+  blockers.forEach((b, i) => {
+    const x = screenXForward(b.worldY);
+    const y = screenYLateral(b.worldX);
+    const legPhase = performance.now() / 95 + i * 1.7;
+    drawPlayerSprite(x, y, {
+      jersey: '#2f5fbf', trim: '#16234f', pants: '#e7ebef', helmet: '#123078',
+      number: 20 + i, legPhase,
+    });
+  });
+}
+
 function drawDefenders() {
   for (const d of defenders) {
-    const x = worldToScreenX(d.worldX);
-    const y = worldToScreenY(d.worldY);
-    if (y < -30 || y > CANVAS_HEIGHT + 30) continue;
+    const x = screenXForward(d.worldY);
+    const y = screenYLateral(d.worldX);
+    if (x < -30 || x > CANVAS_WIDTH + 30) continue;
     const legPhase = performance.now() / 100 + d.worldX * 0.4;
 
     let glowColor = null;
@@ -668,18 +664,22 @@ function render() {
   drawField();
   drawGoalPost();
   drawDefenders();
+  drawBlockers();
   drawRunner();
 }
 
-// ---- Game loop (unchanged shape from the real game: ends the return on
-// tackle/touchdown instead of looping forever) ------------------------------
+// ---- Game loop (ends the return on tackle/touchdown, same as the real
+// game) -----------------------------------------------------------------
 function tick(now) {
   const dtSec = Math.min((now - lastFrameAt) / 1000, 0.05);
   lastFrameAt = now;
 
   if (runner.state === 'running') {
     updateRunner(dtSec);
-    if (runner.state === 'running') updateDefenders(dtSec);
+    if (runner.state === 'running') {
+      updateBlockers();
+      updateDefenders(dtSec);
+    }
   }
 
   render();
@@ -710,11 +710,12 @@ async function playCatchAnimation() {
   while (performance.now() - start < CATCH_ANIMATION_MS) {
     const t = (performance.now() - start) / CATCH_ANIMATION_MS;
     drawField();
+    drawBlockers();
     drawRunner();
     ctx.fillStyle = '#8a4b26';
-    const ballY = RUNNER_SCREEN_Y - 260 + t * 260;
+    const ballX = RUNNER_SCREEN_X + 260 - t * 260;
     ctx.beginPath();
-    ctx.ellipse(worldToScreenX(runner.worldX), ballY, 6, 8, 0, 0, Math.PI * 2);
+    ctx.ellipse(ballX, screenYLateral(runner.worldX), 8, 6, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#eaf3ec';
     ctx.font = 'bold 20px sans-serif';
@@ -742,11 +743,10 @@ async function startReturn(returnConfig) {
   runner.worldY = 0;
   runner.lateralDir = 'none';
   runner.lastLateralDir = null;
-  runner.evasiveSide = null;
-  runner.evasiveUntil = 0;
-  runner.nextEvasiveAllowedAt = 0;
   runner.vx = 0;
   runner.vy = 0;
+  blockers = BLOCKER_OFFSETS.map(() => ({ worldX: 0, worldY: 0 }));
+  updateBlockers();
   defenders = [];
   spawnSchedule = scheduleDefenders(returnConfig.defenderCount);
 
@@ -769,11 +769,11 @@ async function finishReturn() {
 
   render();
   ctx.fillStyle = touchdown ? 'rgba(74, 222, 128, 0.85)' : 'rgba(239, 68, 68, 0.85)';
-  ctx.fillRect(0, CANVAS_HEIGHT / 2 - 40, CANVAS_WIDTH, 80);
+  ctx.fillRect(0, CANVAS_HEIGHT / 2 - 30, CANVAS_WIDTH, 60);
   ctx.fillStyle = '#0a1410';
-  ctx.font = 'bold 34px sans-serif';
+  ctx.font = 'bold 30px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(touchdown ? 'TOUCHDOWN!' : 'TACKLED!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 12);
+  ctx.fillText(touchdown ? 'TOUCHDOWN!' : 'TACKLED!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 10);
   await wait(1400);
 
   // Local equivalent of kickoffReturn.js's submitReturn(): same
@@ -875,14 +875,14 @@ document.getElementById('krt-clear-defenders').addEventListener('click', () => {
 });
 
 // Click-to-place: convert the click's canvas-pixel position back to world
-// yards (the inverse of worldToScreenX/Y) and drop a defender there in
-// whatever state/side the toolbar has selected.
+// yards (the inverse of screenXForward/screenYLateral) and drop a defender
+// there in whatever state/side the toolbar has selected.
 canvas.addEventListener('click', (e) => {
   const rect = canvas.getBoundingClientRect();
   const px = (e.clientX - rect.left) * (CANVAS_WIDTH / rect.width);
   const py = (e.clientY - rect.top) * (CANVAS_HEIGHT / rect.height);
-  const worldX = (px - CANVAS_WIDTH / 2) / PX_PER_YARD_X;
-  const worldY = cameraWorldY() - (py - RUNNER_SCREEN_Y) / PX_PER_YARD_Y;
+  const worldY = cameraWorldY() - (px - RUNNER_SCREEN_X) / PX_PER_YARD_FORWARD;
+  const worldX = (py - CANVAS_HEIGHT / 2) / PX_PER_YARD_LATERAL;
   const state = document.getElementById('krt-place-state').value;
   const side = document.getElementById('krt-place-side').value;
   defenders.push(makeDefender(worldX, worldY, state, state === 'approaching' ? null : side));
