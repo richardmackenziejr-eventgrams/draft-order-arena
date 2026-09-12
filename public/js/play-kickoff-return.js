@@ -175,10 +175,10 @@ const COVERAGE_SPAWN_SPREAD = 3; // +/- jitter on the shared starting depth — 
 const KICKER_SPAWN_WORLDY = 65; // kicking team's own 35
 const KICKER_SPEED = 4.5; // yards/sec, slow, never tackles, never blocked
 const PASSIVE_DEFENDER_SPEED = 6; // yards/sec — a simple straight jog for coverage players that were never a real threat, once they get past the wedge
-const BLOCK_MIN_MS = 800;
-const BLOCK_RANDOM_MS = 1200; // a blocker's FIRST hold is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster — a quick individual holdup, not a sustained multi-second scrum (real footage shows scattered, fast 1-on-1 blocks resolving in about a second, not one long line-wide battle)
-const REBLOCK_MIN_MS = 250;
-const REBLOCK_RANDOM_MS = 300; // a blocker that's already made its one full block can still step in front of a later defender, but only for a brief, glancing hold -- it already spent its best effort on the first one
+const BLOCK_MIN_MS = 550;
+const BLOCK_RANDOM_MS = 700; // a blocker's FIRST hold is BLOCK_MIN_MS + random() * BLOCK_RANDOM_MS, then divided by defenderSpeed so higher difficulty also sheds blocks faster — a quick individual holdup, not a sustained multi-second scrum (real footage shows scattered, fast 1-on-1 blocks resolving in about a second, not one long line-wide battle). Shortened from 800-2000ms per direction to raise the pace defenders break free and come after the returner -- the wedge was holding too long and the game played too easy.
+const REBLOCK_MIN_MS = 150;
+const REBLOCK_RANDOM_MS = 200; // a blocker that's already made its one full block can still step in front of a later defender, but only for a brief, glancing hold -- it already spent its best effort on the first one
 const BLOCK_COOLDOWN_MS = 500; // grace period after a defender is released before ANY blocker (including the one that just held it) can engage it again -- without this, a freshly-released defender sitting right next to its blocker gets re-engaged the very next frame, which looks exactly like both of them frozen in place
 
 // ---- Game state -------------------------------------------------------------
@@ -568,12 +568,13 @@ function updateDefenders(dtSec) {
 // authored facing left (running toward the goal, the play's usual forward
 // direction) and mirrored via a horizontal flip when `facingLeft` is false —
 // see the various updateX() functions for how each entity decides which way
-// it's currently headed. `legPhase` drives the running stride; `glowColor`
-// (used only for a winding-up defender's telegraph — see drawDefenders())
-// draws a pulsing ring with no directional information in it, on purpose:
-// it tells the player a hit is coming, never which way to dodge.
+// it's currently headed. `legPhase` drives the running stride. `blocking`
+// (true for an engaged blocker or the defender it's holding) swaps the bent,
+// pumping running arms for a straight, braced-out pair -- deliberately no
+// other visual "a tackle is coming" telegraph anymore (removed per
+// direction: it made the dodge mechanic too easy to react to).
 function drawPlayerSprite(x, y, opts) {
-  const { jersey, trim, pants, helmet, number, legPhase, glowColor, glowStrength, facingLeft } = opts;
+  const { jersey, trim, pants, helmet, number, legPhase, facingLeft, blocking } = opts;
   const mirror = facingLeft === false;
 
   ctx.save();
@@ -586,53 +587,61 @@ function drawPlayerSprite(x, y, opts) {
   ctx.ellipse(0, 3, 9, 3, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  if (glowColor) {
-    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 90);
-    ctx.strokeStyle = glowColor;
-    ctx.globalAlpha = (0.35 + 0.4 * pulse) * (glowStrength != null ? glowStrength : 1);
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.arc(0, -13, 15 + pulse * 3, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
-
   const HIP_Y = -9;
   const SHOULDER_Y = -18;
   const swing = (Math.sin(legPhase) + 1) / 2; // 0..1, smoother to blend two poses across
+  const kneeShade = shadeColor(pants, -22); // a visibly darker calf so the knee bend reads as two segments, not one line
 
   // A two-segment (thigh + shin) leg reads as an actual running stride, not
-  // just a rigid stick swinging from the hip — the knee bend is what sells
-  // "mid-stride" at this scale. `t` (0..1) blends between a leg fully
-  // extended forward-and-down (planting) and one lifted with a bent knee
+  // just a rigid stick swinging from the hip — the knee bend (helped by the
+  // shin's darker shade and a small knee-cap dot) is what sells "mid-
+  // stride" at this scale. `t` (0..1) blends between a leg fully extended
+  // forward-and-down (planting) and one lifted with a bent knee
   // (recovering); the two legs are given opposite `t` so one is always
-  // planting while the other recovers, like an actual gait.
+  // planting while the other recovers, like an actual gait. A blocker
+  // braced against someone plants both feet instead of mid-stride.
   function leg(pivotY, t, thickness) {
-    const thighAngle = -0.9 + t * 1.5; // -0.9 (reaching forward) .. 0.6 (trailing back)
-    const kneeBend = 0.15 + (1 - Math.abs(t - 0.5) * 2) * 1.3; // most bent mid-swing, straightest at the extremes
+    const thighAngle = blocking ? -0.15 : -0.9 + t * 1.5; // -0.9 (reaching forward) .. 0.6 (trailing back)
+    const kneeBend = blocking ? 0.3 : 0.5 + (1 - Math.abs(t - 0.5) * 2) * 1.1; // always at least a visible bend, most bent mid-swing
     ctx.save();
     ctx.translate(0, pivotY);
     ctx.rotate(thighAngle);
+    ctx.fillStyle = pants;
     ctx.fillRect(-thickness / 2, 0, thickness, 5);
     ctx.translate(0, 5);
+    ctx.beginPath();
+    ctx.arc(0, 0, thickness * 0.42, 0, Math.PI * 2);
+    ctx.fillStyle = kneeShade;
+    ctx.fill();
     ctx.rotate(kneeBend);
     ctx.fillRect(-thickness / 2, 0, thickness, 5.5);
     ctx.restore();
   }
 
-  // A plain single-segment limb — used for the arm, which doesn't need a
-  // knee-style bend.
-  function limb(pivotY, angle, length, thickness) {
+  // A two-segment arm, same shape as a leg but smaller, in `trim` (not
+  // `jersey`) so it never blends into the torso behind it. Offset a little
+  // fore/aft from center like a real shoulder, not the spine -- at x=0 even
+  // a wide swing barely pokes past the torso's own width and reads as part
+  // of it. Bent and pumping (opposite phase from the legs) while running;
+  // locked out straight toward the front when blocking, like a lineman's
+  // punch.
+  function arm(pivotX, t, thickness) {
+    const shoulderAngle = blocking ? -1.2 : -0.85 + t * 1.6;
+    const elbowBend = blocking ? 0.15 : 0.4 + (1 - Math.abs(t - 0.5) * 2) * 1.1;
     ctx.save();
-    ctx.translate(0, pivotY);
-    ctx.rotate(angle);
-    ctx.fillRect(-thickness / 2, 0, thickness, length);
+    ctx.translate(pivotX, SHOULDER_Y + 1);
+    ctx.rotate(shoulderAngle);
+    ctx.fillStyle = trim;
+    ctx.fillRect(-thickness / 2, 0, thickness, 4.5);
+    ctx.translate(0, 4.5);
+    ctx.rotate(elbowBend);
+    ctx.fillRect(-thickness / 2, 0, thickness, 4.5);
     ctx.restore();
   }
 
-  // Trailing leg first, so the torso and leading leg layer in front of it.
-  ctx.fillStyle = pants;
+  // Trailing leg and arm first, so the torso and leading pair layer in front.
   leg(HIP_Y, 1 - swing, 3.2);
+  arm(1.5, 1 - swing, 2.3);
 
   // Torso, leaning forward into the run — narrower than a front-on jersey
   // since we're now looking at it edge-on.
@@ -645,11 +654,9 @@ function drawPlayerSprite(x, y, opts) {
   ctx.fillRect(-3.5, SHOULDER_Y - HIP_Y, 7, 2.5);
   ctx.restore();
 
-  // Leading leg and pumping arm, layered over the torso.
-  ctx.fillStyle = pants;
+  // Leading leg and arm, layered over the torso.
   leg(HIP_Y, swing, 3.2);
-  ctx.fillStyle = jersey;
-  limb(SHOULDER_Y + 4, (0.5 - swing) * 1.4, 7, 2.4);
+  arm(-1.5, swing, 2.3);
 
   // Head in profile (an oval, not a circle, so it doesn't read as a
   // front-on face) with a bold, solid facemask bar projecting out the
@@ -678,6 +685,19 @@ function drawPlayerSprite(x, y, opts) {
   ctx.textAlign = 'center';
   ctx.fillText(String(number), 0, SHOULDER_Y - 11);
   ctx.restore();
+}
+
+// Darkens (or lightens, for a negative amt in the other direction) a '#rrggbb'
+// color by `amt` per channel — used to give a leg's shin a visibly different
+// shade from its thigh without needing a second color passed in everywhere
+// drawPlayerSprite is called.
+function shadeColor(hex, amt) {
+  const num = parseInt(hex.slice(1), 16);
+  const clamp = (v) => Math.max(0, Math.min(255, v));
+  const r = clamp(((num >> 16) & 0xff) + amt);
+  const g = clamp(((num >> 8) & 0xff) + amt);
+  const b = clamp((num & 0xff) + amt);
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 // Deterministic pseudo-random in [0,1) from a seed — used for crowd-dot
@@ -1019,7 +1039,7 @@ function drawBlockers() {
     const legPhase = engagedWith ? 0 : performance.now() / 95 + i * 1.7;
     drawPlayerSprite(x, y, {
       jersey: '#2f5fbf', trim: '#16234f', pants: '#e7ebef', helmet: '#123078',
-      number: b.number, legPhase, facingLeft: b.facingLeft,
+      number: b.number, legPhase, facingLeft: b.facingLeft, blocking: !!engagedWith,
     });
   });
 }
@@ -1044,21 +1064,9 @@ function drawDefenders() {
     // for a defender that isn't actually moving.
     const legPhase = isBlocked ? 0 : performance.now() / 100 + d.worldX * 0.4;
 
-    // The telegraph: a pulsing ring while winding up, and a stronger flash
-    // through the lunge itself — deliberately carries no up/down
-    // information, only "this one's about to (or is) diving."
-    let glowColor = null;
-    let glowStrength = 1;
-    if (d.state === 'windingUp') {
-      glowColor = '#ffcc33';
-    } else if (d.state === 'lunging') {
-      glowColor = '#ff5c3d';
-      glowStrength = 1.4;
-    }
-
     drawPlayerSprite(x, y, {
       jersey: '#c0392b', trim: '#5c150c', pants: '#26262a', helmet: '#8e2a1e',
-      number: d.number, legPhase, glowColor, glowStrength, facingLeft: d.facingLeft,
+      number: d.number, legPhase, facingLeft: d.facingLeft, blocking: isBlocked,
     });
   }
 }
