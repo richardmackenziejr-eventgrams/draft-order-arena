@@ -94,9 +94,9 @@ function clampNum(x, min, max) {
 }
 
 // ---- Tunable constants -----------------------------------------------------
-const RUNNER_FORWARD_SPEED = 9.3; // yards/sec at full forward speed -- straight-line speed was fine; split the earlier +0.6 bump so only half stuck here...
+const RUNNER_FORWARD_SPEED = 9.3; // yards/sec at full forward speed -- straight-line speed was fine, left as-is
 const RUNNER_BACKWARD_SPEED = 4; // yards/sec if backpedaling
-const RUNNER_LATERAL_SPEED = 7.3; // yards/sec, plain directional movement -- ...and the other half went here, since a diagonal (forward+lateral normalized) was the one that actually felt slow
+const RUNNER_LATERAL_SPEED = 7.6; // yards/sec, plain directional movement -- was 7.3, nudged up further since diagonal movement still felt a bit slow
 const REFEREE_SPEED = 7; // yards/sec -- was 6, felt a bit too sluggish; still slower than the returner's own forward speed, so a flat-out sprint pulls away from him, but anytime the returner isn't gaining forward ground at full speed (dodging, slowing, standing still) he closes the gap back up
 
 const DEFENDER_BASE_SPEED = 7.5; // yards/sec pursuit at a defenderSpeed multiplier of 1.0
