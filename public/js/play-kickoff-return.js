@@ -107,7 +107,7 @@ function clampNum(x, min, max) {
 const RUNNER_FORWARD_SPEED = 9; // yards/sec at full forward speed
 const RUNNER_BACKWARD_SPEED = 4; // yards/sec if backpedaling
 const RUNNER_LATERAL_SPEED = 7; // yards/sec, plain directional movement
-const REFEREE_SPEED = 6; // yards/sec -- slower than the returner's own 9, so a flat-out sprint pulls away from him; anytime the returner isn't gaining forward ground at full speed (dodging, slowing, standing still) he closes the gap back up
+const REFEREE_SPEED = 7; // yards/sec -- was 6, felt a bit too sluggish; still slower than the returner's own 9, so a flat-out sprint pulls away from him, but anytime the returner isn't gaining forward ground at full speed (dodging, slowing, standing still) he closes the gap back up
 
 const DEFENDER_BASE_SPEED = 7.5; // yards/sec pursuit at a defenderSpeed multiplier of 1.0
 const DEFENDER_TRIGGER_DISTANCE = 6; // yards — closing to this range starts a defender's wind-up
@@ -1145,7 +1145,13 @@ function drawField() {
     const deckRight = ezLeft;
     const deckLeft = deckRight - STADIUM_CROWD_DEPTH_PX;
     if (deckRight > -20) {
-      drawCrowdBand(deckLeft, 0, deckRight - deckLeft, CANVAS_HEIGHT, true);
+      // Crowd only down to the field's own bottom edge -- matching the
+      // sideline stands' "top crowd only" rule -- then the same plain dark
+      // strip as the bottom margin everywhere else, not fans spilling out
+      // past where the field visibly ends.
+      drawCrowdBand(deckLeft, 0, deckRight - deckLeft, FIELD_BOTTOM_PX, true);
+      ctx.fillStyle = '#1b1f26';
+      ctx.fillRect(deckLeft, FIELD_BOTTOM_PX, deckRight - deckLeft, CANVAS_HEIGHT - FIELD_BOTTOM_PX);
     }
   }
 
@@ -1180,11 +1186,14 @@ function drawField() {
     ctx.lineTo(ownGoalScreenX, FIELD_BOTTOM_PX);
     ctx.stroke();
 
-    // Stadium crowd further behind it, same as the far end zone.
+    // Stadium crowd further behind it, same as the far end zone -- clipped
+    // to the field's bottom edge for the same reason.
     const ownDeckLeft = ownEzRight;
     const ownDeckRight = ownDeckLeft + STADIUM_CROWD_DEPTH_PX;
     if (ownDeckLeft < CANVAS_WIDTH + 20) {
-      drawCrowdBand(ownDeckLeft, 0, ownDeckRight - ownDeckLeft, CANVAS_HEIGHT, true);
+      drawCrowdBand(ownDeckLeft, 0, ownDeckRight - ownDeckLeft, FIELD_BOTTOM_PX, true);
+      ctx.fillStyle = '#1b1f26';
+      ctx.fillRect(ownDeckLeft, FIELD_BOTTOM_PX, ownDeckRight - ownDeckLeft, CANVAS_HEIGHT - FIELD_BOTTOM_PX);
     }
   }
 
@@ -1207,37 +1216,39 @@ function drawField() {
 // shape as before, just transposed for the horizontal camera. A real
 // field has one of these at BOTH ends; `dir` is +1 or -1 for which way
 // "further into the end zone" actually is on screen for that goal line.
+const GOALPOST_SCALE = 1.7; // was reading as too small/thin next to everything else's SPRITE_SCALE-enlarged size
+
 function drawGoalPost(goalScreenX, dir) {
   const baseX = goalScreenX + dir * GOALPOST_DEPTH_PX;
   if (baseX < -70 || baseX > CANVAS_WIDTH + 70) return;
   const baseY = screenYLateral(0);
-  const uprightOffsetPx = 3.08 * PX_PER_YARD_LATERAL; // NFL uprights are ~18.5ft apart
-  const crossbarX = baseX + dir * 16;
-  const uprightTipX = baseX + dir * 52;
+  const uprightOffsetPx = 3.08 * PX_PER_YARD_LATERAL * GOALPOST_SCALE; // NFL uprights are ~18.5ft apart, exaggerated a bit wider for visibility at this scale
+  const crossbarX = baseX + dir * 16 * GOALPOST_SCALE;
+  const uprightTipX = baseX + dir * 52 * GOALPOST_SCALE;
 
   // Base pad.
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath();
-  ctx.ellipse(baseX, baseY, 2.5, 5, 0, 0, Math.PI * 2);
+  ctx.ellipse(baseX, baseY, 2.5 * GOALPOST_SCALE, 5 * GOALPOST_SCALE, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.strokeStyle = '#ffd400';
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   // Base pole.
-  ctx.lineWidth = 4;
+  ctx.lineWidth = 4 * GOALPOST_SCALE;
   ctx.beginPath();
   ctx.moveTo(baseX, baseY);
   ctx.lineTo(crossbarX, baseY);
   ctx.stroke();
   // Crossbar.
-  ctx.lineWidth = 3.5;
+  ctx.lineWidth = 3.5 * GOALPOST_SCALE;
   ctx.beginPath();
   ctx.moveTo(crossbarX, baseY - uprightOffsetPx);
   ctx.lineTo(crossbarX, baseY + uprightOffsetPx);
   ctx.stroke();
   // Uprights.
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 3 * GOALPOST_SCALE;
   ctx.beginPath();
   ctx.moveTo(crossbarX, baseY - uprightOffsetPx);
   ctx.lineTo(uprightTipX, baseY - uprightOffsetPx);
@@ -1246,7 +1257,7 @@ function drawGoalPost(goalScreenX, dir) {
   ctx.stroke();
   // A bright highlight down the base pole so it doesn't read as a flat line.
   ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-  ctx.lineWidth = 1;
+  ctx.lineWidth = 1 * GOALPOST_SCALE;
   ctx.beginPath();
   ctx.moveTo(baseX, baseY - 1);
   ctx.lineTo(crossbarX, baseY - 1);
