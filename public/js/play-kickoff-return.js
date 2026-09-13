@@ -52,7 +52,7 @@ const PX_PER_YARD_LATERAL = (FIELD_BOTTOM_PX - FIELD_TOP_PX) / FIELD_WIDTH_YARDS
 const PX_PER_YARD_FORWARD = 14;
 const RUNNER_SCREEN_X = CANVAS_WIDTH * 0.68; // the runner is always drawn here; the world scrolls around it, leaving more room to the left (ahead) than the right (behind)
 const START_FIELD_POSITION = 0; // worldY=0 is the player's own goal line (matches kickoffReturn.js server-side) — an authentic Tecmo-style catch right at the goal
-const OWN_GOAL_WORLD_Y = 0; // same point as the start, but kept as its own name for the "behind the start" end-zone rendering below
+const OWN_GOAL_WORLD_Y = 0; // same point as the start, but kept as its own name for the yard-stripe clamp below (nothing renderable exists behind it)
 
 // How deep (in screen pixels, back from the goal line) the end-zone-plus-
 // stadium backdrop actually extends — see drawField()'s end zone blocks.
@@ -886,12 +886,19 @@ function drawCrowdBand(x, y, w, h) {
 // to the screen since the seating runs the length of the field and doesn't
 // need to scroll in sync with the camera.
 function drawStadiumStands() {
-  [{ y0: 0, y1: FIELD_TOP_PX }, { y0: FIELD_BOTTOM_PX, y1: CANVAS_HEIGHT }].forEach(({ y0, y1 }) => {
-    drawCrowdBand(0, y0, CANVAS_WIDTH, y1 - y0);
-    // Low wall separating the stands from the field of play.
-    ctx.fillStyle = '#e4e4e4';
-    ctx.fillRect(0, y0 === 0 ? y1 - 3 : y0, CANVAS_WIDTH, 3);
-  });
+  // Real Tecmo Super Bowl only ever shows the ONE crowd band, along the top
+  // of the screen (plus the backdrop behind the end zone) -- not a second
+  // one along the bottom too. The bottom margin still exists (the field
+  // needs the same inset both sides to stay centered), it's just a plain
+  // sideline strip rather than a second crowd.
+  drawCrowdBand(0, 0, CANVAS_WIDTH, FIELD_TOP_PX);
+  ctx.fillStyle = '#e4e4e4';
+  ctx.fillRect(0, FIELD_TOP_PX - 3, CANVAS_WIDTH, 3);
+
+  ctx.fillStyle = '#1b1f26';
+  ctx.fillRect(0, FIELD_BOTTOM_PX, CANVAS_WIDTH, CANVAS_HEIGHT - FIELD_BOTTOM_PX);
+  ctx.fillStyle = '#e4e4e4';
+  ctx.fillRect(0, FIELD_BOTTOM_PX, CANVAS_WIDTH, 3);
 }
 
 function drawField() {
@@ -991,38 +998,15 @@ function drawField() {
     }
   }
 
-  // The returner's own end zone, behind the start (worldY < 0) — never
-  // reachable in play (movement clamps at worldY=0), but it's real
-  // drawable field, and leaving it blank read as broken. Same solid-fill
-  // treatment, mirrored to the right/behind side.
-  const ownGoalScreenX = screenXForward(OWN_GOAL_WORLD_Y);
-  if (ownGoalScreenX < CANVAS_WIDTH + 80) {
-    const ownEzLeft = ownGoalScreenX;
-    const ownEzRight = Math.min(CANVAS_WIDTH + 80, ownGoalScreenX + EZ_DEPTH_PX);
-    ctx.fillStyle = '#1f4a29';
-    ctx.fillRect(ownEzLeft, FIELD_TOP_PX, ownEzRight - ownEzLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(ownEzLeft, FIELD_TOP_PX, ownEzRight - ownEzLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
-    ctx.clip();
-    ctx.translate((ownEzLeft + ownEzRight) / 2, CANVAS_HEIGHT / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = 'bold 15px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('E N D   Z O N E', 0, 4);
-    ctx.restore();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(ownGoalScreenX, FIELD_TOP_PX);
-    ctx.lineTo(ownGoalScreenX, FIELD_BOTTOM_PX);
-    ctx.stroke();
-    // A plain dark fill past it, just so an extreme camera position (a
-    // future tuning change, say) still can't expose true blank canvas.
-    ctx.fillStyle = '#111c27';
-    ctx.fillRect(Math.max(0, ownEzRight), 0, Math.max(0, CANVAS_WIDTH - ownEzRight), CANVAS_HEIGHT);
-  }
+  // Behind the start (worldY < 0) is never reachable in play (movement
+  // clamps at worldY=0) and isn't a real end zone at all -- the returner
+  // catches the ball AT their own goal line, so there's nothing back there
+  // to paint a whole "END ZONE" treatment onto. That used to render right
+  // on top of the returner at the start of every single return (worldY=0
+  // means screenXForward(0) is exactly the runner's own screen position),
+  // looking like a stray colored block behind them. The plain field fill
+  // above already covers this area, and the per-5-yard stripe loop already
+  // draws an ordinary line at the y=0 boundary -- nothing else is needed.
 
   // Sidelines / out-of-bounds border, purely decorative (movement is still
   // clamped in world-yard space regardless of where this line is drawn).
