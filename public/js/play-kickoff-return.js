@@ -58,7 +58,7 @@ const OWN_GOAL_WORLD_Y = 0; // same point as the start, but kept as its own name
 // stadium backdrop actually extends — see drawField()'s end zone blocks.
 // Not to real yardage scale; this exists purely so the camera clamp below
 // knows exactly where the drawn world runs out.
-const EZ_DEPTH_PX = 55;
+const EZ_DEPTH_PX = 130; // was 55 -- real Tecmo Super Bowl's end zone is a substantial chunk of the screen, not a thin sliver
 const STADIUM_CROWD_DEPTH_PX = 140; // the flat crowd band behind the far end zone -- see drawCrowdBand()
 const BACKDROP_DEPTH_PX = EZ_DEPTH_PX + STADIUM_CROWD_DEPTH_PX;
 const GOALPOST_DEPTH_PX = 36; // screen-space depth into the end zone (in front of the stadium deck), not world yards
@@ -848,34 +848,62 @@ function shadeColor(hex, amt) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-// A handful of flat, saturated colors standing in for the crowd -- Tecmo
-// Super Bowl's actual stands are a single flat band of tightly-packed
-// colored squares, not a shaded, lit, multi-tier modern stadium bowl.
-const CROWD_COLORS = ['#c0392b', '#2f5fbf', '#e8dcc0', '#8a4b26', '#efefef'];
-const CROWD_CELL_PX = 4;
+// A handful of flat, saturated colors standing in for fans' shirts -- Tecmo
+// Super Bowl's actual crowd is small colored figures packed shoulder to
+// shoulder, not a shaded, lit, multi-tier modern stadium bowl.
+const CROWD_COLORS = ['#efefef', '#2f5fbf', '#e08fa0', '#c0392b', '#8a4b26'];
+const CROWD_SPACING_PX = 8;
 
-// The flat, blocky "sea of fans" crowd texture, clipped to the given rect —
-// a fixed (not randomized) repeating grid of small solid-color squares, on
-// purpose: it's meant to read as a regular pixel-art crowd tile, not a
-// naturalistic scatter. Shared by the sideline stands and the end-zone
-// backdrop so the whole stadium reads as one consistent, simple structure.
-function drawCrowdBand(x, y, w, h) {
+// A single tiny fan: a round head over a small rectangular body, the same
+// reduced-to-two-shapes look real Tecmo Super Bowl's crowd sprites use.
+function drawCrowdPerson(px, py, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(px - 2.5, py - 1, 5, 4.5);
+  ctx.beginPath();
+  ctx.arc(px, py - 2.5, 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// The stadium crowd: a fixed (not randomized) staggered grid of tiny fan
+// sprites, clipped to the given rect -- meant to read as actual people in
+// the stands, not an abstract texture. `vertical` picks which axis the rows
+// run along: false for a wide, short band (the sideline stands -- rows
+// stacked down the height, each spanning the width) and true for a narrow,
+// tall one (the end-zone backdrop -- rows stacked across the width, each
+// spanning the height). Shared by both so the whole stadium reads as one
+// consistent structure.
+function drawCrowdBand(x, y, w, h, vertical) {
   if (w <= 0 || h <= 0) return;
   ctx.save();
   ctx.beginPath();
   ctx.rect(x, y, w, h);
   ctx.clip();
-  ctx.fillStyle = '#241f33';
+  ctx.fillStyle = '#1a1e28';
   ctx.fillRect(x, y, w, h);
-  const startCol = Math.floor(x / CROWD_CELL_PX);
-  const startRow = Math.floor(y / CROWD_CELL_PX);
-  for (let cy = startRow * CROWD_CELL_PX; cy < y + h; cy += CROWD_CELL_PX) {
-    for (let cx = startCol * CROWD_CELL_PX; cx < x + w; cx += CROWD_CELL_PX) {
-      const col = Math.round(cx / CROWD_CELL_PX);
-      const row = Math.round(cy / CROWD_CELL_PX);
-      const idx = (col * 7 + row * 13) % CROWD_COLORS.length;
-      ctx.fillStyle = CROWD_COLORS[idx];
-      ctx.fillRect(cx, cy, CROWD_CELL_PX - 1, CROWD_CELL_PX - 1);
+
+  if (!vertical) {
+    const rows = Math.max(1, Math.round(h / CROWD_SPACING_PX));
+    const startCol = Math.floor(x / CROWD_SPACING_PX);
+    for (let r = 0; r < rows; r++) {
+      const rowY = y + (r + 0.5) * (h / rows);
+      const rowOffset = (r % 2) * (CROWD_SPACING_PX / 2);
+      for (let px = startCol * CROWD_SPACING_PX - CROWD_SPACING_PX + rowOffset; px < x + w + CROWD_SPACING_PX; px += CROWD_SPACING_PX) {
+        const col = Math.round(px / CROWD_SPACING_PX);
+        const idx = (col * 3 + r * 7) % CROWD_COLORS.length;
+        drawCrowdPerson(px, rowY, CROWD_COLORS[idx]);
+      }
+    }
+  } else {
+    const cols = Math.max(1, Math.round(w / CROWD_SPACING_PX));
+    const startRow = Math.floor(y / CROWD_SPACING_PX);
+    for (let c = 0; c < cols; c++) {
+      const colX = x + (c + 0.5) * (w / cols);
+      const colOffset = (c % 2) * (CROWD_SPACING_PX / 2);
+      for (let py = startRow * CROWD_SPACING_PX - CROWD_SPACING_PX + colOffset; py < y + h + CROWD_SPACING_PX; py += CROWD_SPACING_PX) {
+        const row = Math.round(py / CROWD_SPACING_PX);
+        const idx = (row * 3 + c * 7) % CROWD_COLORS.length;
+        drawCrowdPerson(colX, py, CROWD_COLORS[idx]);
+      }
     }
   }
   ctx.restore();
@@ -891,7 +919,7 @@ function drawStadiumStands() {
   // one along the bottom too. The bottom margin still exists (the field
   // needs the same inset both sides to stay centered), it's just a plain
   // sideline strip rather than a second crowd.
-  drawCrowdBand(0, 0, CANVAS_WIDTH, FIELD_TOP_PX);
+  drawCrowdBand(0, 0, CANVAS_WIDTH, FIELD_TOP_PX, false);
   ctx.fillStyle = '#e4e4e4';
   ctx.fillRect(0, FIELD_TOP_PX - 3, CANVAS_WIDTH, 3);
 
@@ -994,7 +1022,7 @@ function drawField() {
     const deckRight = ezLeft;
     const deckLeft = deckRight - STADIUM_CROWD_DEPTH_PX;
     if (deckRight > -20) {
-      drawCrowdBand(deckLeft, 0, deckRight - deckLeft, CANVAS_HEIGHT);
+      drawCrowdBand(deckLeft, 0, deckRight - deckLeft, CANVAS_HEIGHT, true);
     }
   }
 
