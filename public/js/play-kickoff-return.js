@@ -184,7 +184,7 @@ const BLOCK_RANDOM_MS = 700; // a blocker's FIRST hold is BLOCK_MIN_MS + random(
 const REBLOCK_MIN_MS = 150;
 const REBLOCK_RANDOM_MS = 200; // a blocker that's already made its one full block can still step in front of a later defender, but only for a brief, glancing hold -- it already spent its best effort on the first one
 const BLOCK_COOLDOWN_MS = 500; // grace period after a defender is released before ANY blocker (including the one that just held it) can engage it again -- without this, a freshly-released defender sitting right next to its blocker gets re-engaged the very next frame, which looks exactly like both of them frozen in place
-const BLOCKED_SLIDE_TACKLE_RANGE = 6; // yards -- how close the returner has to run past a restrained defender to draw a swipe (matches a normal defender's own trigger distance)
+const BLOCKED_SLIDE_TACKLE_RANGE = 11; // yards -- how close the returner has to run past a restrained defender to draw a swipe. Was 6 (barely more than a normal defender's own 6-yard trigger, despite this one being a restrained, shorter-reach swipe) and, worse, less than NEARBY_BREAK_RANGE -- so the fast-release fix usually ended the block before a swipe even got a chance to start. Wider than NEARBY_BREAK_RANGE now on purpose, so the swipe reliably gets first crack once the returner's in the area.
 const BLOCKED_SLIDE_TACKLE_WINDUP_MS = 200; // blind (no glow, like every other lunge now) but not instant -- a fast enough direction change still beats it
 const BLOCKED_SLIDE_TACKLE_LUNGE_MS = 220; // the actual physical slide toward the returner -- this IS the visible "a defender is sliding into me" cue the wind-up alone can't give
 const BLOCKED_SLIDE_TACKLE_COOLDOWN_MS = 350; // after a miss, before this defender can try again
@@ -519,8 +519,11 @@ function updateDefenders(dtSec) {
       // without a single one caring. This only ever pulls the release time
       // EARLIER (never later), and re-checks every frame, so a defender
       // already blocked when the runner arrives breaks free almost as fast
-      // as one that only just got engaged.
-      if (Math.hypot(runner.worldX - d.worldX, runner.worldY - d.worldY) <= NEARBY_BREAK_RANGE) {
+      // as one that only just got engaged. Skipped while a swipe is already
+      // winding up or lunging -- otherwise this and the swipe race each
+      // other (both resolve in a couple hundred ms), and the release almost
+      // always won, ending the block before the swipe ever got to finish.
+      if (!d.slideTackleState && Math.hypot(runner.worldX - d.worldX, runner.worldY - d.worldY) <= NEARBY_BREAK_RANGE) {
         d.blockedUntil = Math.min(d.blockedUntil, now + NEARBY_BREAK_MS / currentReturnConfig.defenderSpeed);
       }
 
