@@ -188,6 +188,8 @@ const BLOCKED_SLIDE_TACKLE_RANGE = 6; // yards -- how close the returner has to 
 const BLOCKED_SLIDE_TACKLE_WINDUP_MS = 200; // blind (no glow, like every other lunge now) but not instant -- a fast enough direction change still beats it
 const BLOCKED_SLIDE_TACKLE_LUNGE_MS = 220; // the actual physical slide toward the returner -- this IS the visible "a defender is sliding into me" cue the wind-up alone can't give
 const BLOCKED_SLIDE_TACKLE_COOLDOWN_MS = 350; // after a miss, before this defender can try again
+const NEARBY_BREAK_RANGE = 8; // yards -- once the returner is this close, a blocked defender fights to break free right away instead of riding out its full randomly-rolled hold
+const NEARBY_BREAK_MS = 200; // the shortened hold once that happens -- still divided by defenderSpeed like the normal hold, so higher difficulty breaks even faster
 
 // ---- Game state -------------------------------------------------------------
 let returnsPerPlayer = 5;
@@ -509,9 +511,23 @@ function updateDefenders(dtSec) {
         }
       }
 
+      // Fight harder to get free the instant the ball carrier is actually
+      // right there -- without this, a defender just sits out its randomly
+      // rolled hold time regardless of whether the runner is passing by
+      // this exact moment or is nowhere close yet, which is how a return
+      // could run straight through a whole cluster of blockers/defenders
+      // without a single one caring. This only ever pulls the release time
+      // EARLIER (never later), and re-checks every frame, so a defender
+      // already blocked when the runner arrives breaks free almost as fast
+      // as one that only just got engaged.
+      if (Math.hypot(runner.worldX - d.worldX, runner.worldY - d.worldY) <= NEARBY_BREAK_RANGE) {
+        d.blockedUntil = Math.min(d.blockedUntil, now + NEARBY_BREAK_MS / currentReturnConfig.defenderSpeed);
+      }
+
       // Actually held up by the specific blocker it ran into — released
-      // after a randomized duration. The blocker isn't spent: it can pick
-      // up another defender later (updateBlockers() sends it right back to
+      // after a randomized duration (or the shortened one above, if the
+      // runner's in the area). The blocker isn't spent: it can pick up
+      // another defender later (updateBlockers() sends it right back to
       // seeking/escorting), just for a shorter REBLOCK_* hold next time,
       // since it already gave its best effort on the first one. Each
       // engagement happening at a different moment as defenders reach the
