@@ -169,7 +169,7 @@ const BLOCK_ENGAGE_DISTANCE = 3.5; // yards — how close a blocker needs to get
 // exactly like the extra players a real coverage unit carries beyond
 // whoever actually gets to the ball carrier.
 const COVERAGE_TEAM_SIZE = 10;
-const COVERAGE_SPAWN_WORLDY = 40; // receiving team's 40
+const COVERAGE_SPAWN_WORLDY = 50; // was 40 -- with jitter, that left as little as ~1.4 yards between the nearest defender and the nearest blocker (35.6), so the two formations could spawn visibly overlapping before the ball was even kicked. 50 keeps real clearance between the wedge (31-35) and the coverage line even at the jitter extremes.
 const COVERAGE_SPAWN_SPREAD = 3; // +/- jitter on the shared starting depth — a real column running down together, not staggered front-to-back
 const KICKER_SPAWN_WORLDY = 65; // kicking team's own 35
 const KICKER_SPEED = 4.5; // yards/sec, never blocked
