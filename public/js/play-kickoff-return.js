@@ -61,7 +61,7 @@ const OWN_GOAL_WORLD_Y = 0; // same point as the start, but kept as its own name
 const EZ_DEPTH_PX = 130; // was 55 -- real Tecmo Super Bowl's end zone is a substantial chunk of the screen, not a thin sliver
 const STADIUM_CROWD_DEPTH_PX = 140; // the flat crowd band behind the far end zone -- see drawCrowdBand()
 const BACKDROP_DEPTH_PX = EZ_DEPTH_PX + STADIUM_CROWD_DEPTH_PX;
-const GOALPOST_DEPTH_PX = 36; // screen-space depth into the end zone (in front of the stadium deck), not world yards
+const GOALPOST_DEPTH_PX = 105; // screen-space depth into the end zone (in front of the stadium deck), not world yards -- was 36, sitting right next to the returner at the start; real Tecmo Super Bowl's goalpost stands at the BACK of the end zone, right up against the stands
 
 // worldY is always "yards gained from the return's start," but a real
 // field's painted numbers count up from EITHER goal line to midfield (50)
