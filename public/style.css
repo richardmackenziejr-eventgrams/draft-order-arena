@@ -508,24 +508,37 @@ ul.clean li:last-child { border-bottom: none; }
   background: #2f6b3f;
 }
 #kr-canvas-wrap canvas { display: block; width: 100%; height: 100%; }
-.kr-hint { text-align: center; opacity: 0.7; font-size: 0.9em; margin-top: 8px; }
-.kr-joystick-wrap { display: flex; justify-content: center; margin-top: 14px; }
+.kr-hint { text-align: right; opacity: 0.7; font-size: 0.9em; margin: 0; line-height: 1.5; }
+/* The hint, joystick, and Start/Next buttons all share one row, right
+   under the field — keeps everything above the fold on a PC instead of
+   needing a scroll to reach "Next Return" after each play. Wraps to stack
+   on a narrow phone screen where side-by-side wouldn't fit. */
+.kr-controls-row {
+  max-width: 640px;
+  margin: 10px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
 .kr-joystick-base {
   position: relative;
-  width: 120px;
-  height: 120px;
+  width: 110px;
+  height: 110px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
   border: 2px solid rgba(255, 255, 255, 0.25);
   touch-action: none;
   user-select: none;
+  flex-shrink: 0;
 }
 .kr-joystick-stick {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.55);
   border: 2px solid rgba(255, 255, 255, 0.85);
@@ -533,8 +546,6 @@ ul.clean li:last-child { border-bottom: none; }
   pointer-events: none;
 }
 .kr-action-row {
-  max-width: 640px;
-  margin: 12px auto 0;
   display: flex;
   align-items: center;
   justify-content: center;
