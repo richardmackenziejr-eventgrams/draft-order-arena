@@ -19,16 +19,17 @@
     <div id="kr-canvas-wrap">
       <canvas id="kr-canvas" width="720" height="480"></canvas>
     </div>
-    <p class="kr-hint"><strong>&larr; &rarr;</strong> run forward/back &middot; <strong>&uarr; &darr;</strong> dodge</p>
+    <p class="kr-hint"><strong>&larr; &rarr;</strong> run forward/back &middot; <strong>&uarr; &darr;</strong> dodge &middot; or use the joystick</p>
+    <div class="kr-joystick-wrap">
+      <div class="kr-joystick-base" id="kr-joystick-base">
+        <div class="kr-joystick-stick" id="kr-joystick-stick"></div>
+      </div>
+    </div>
     <div class="kr-action-row">
       <button id="start-return-btn" class="btn" style="display:none">Start Return &rarr;</button>
       <button id="next-return-btn" class="btn" style="display:none">Next Return &rarr;</button>
     </div>
     <p id="kr-result"></p>
-  </div>
-
-  <div class="panel" id="desktop-only-panel" style="display:none">
-    <p>Kickoff Return needs a keyboard to play — try it on a desktop or laptop browser.</p>
   </div>
 
   <div class="panel" id="done-panel" style="display:none">

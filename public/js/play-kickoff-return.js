@@ -10,23 +10,13 @@
 //
 // Classic Tecmo Bowl style: a horizontally-scrolling field (the kickoff
 // comes in from the right, the return runs right-to-left toward the goal
-// on the left), no juke/spin — arrow keys only, and the only way past a
+// on the left), no juke/spin — arrow keys or the on-screen joystick (see
+// the "On-screen joystick" section below), and the only way past a
 // defender is reading their dive and changing direction before it lands.
 const instanceId = qs('instance');
 const leagueId = qs('league');
 const memberId = qs('member');
 document.getElementById('back-link').href = leagueId ? `/member-home.html?league=${leagueId}` : '/';
-
-// ---- Desktop-only gate ---------------------------------------------------
-// No touch controls exist for this game yet (v1 is keyboard-only) — a
-// coarse pointer (finger, not a mouse) means arrow keys almost certainly
-// aren't available at all, so show a plain message instead of a canvas
-// nothing can control.
-if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
-  document.getElementById('status-line').style.display = 'none';
-  document.getElementById('desktop-only-panel').style.display = 'block';
-  throw new Error('kickoff-return: desktop-only, coarse pointer detected');
-}
 
 // ---- Canvas / world setup -------------------------------------------------
 // The canvas is landscape (the field runs horizontally): worldY (yards
@@ -228,6 +218,68 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
   heldKeys.delete(e.key);
 });
+
+// On-screen joystick — feeds the exact same heldKeys Set the keyboard
+// listeners above use, so updateRunner() needs no changes at all to
+// support it; from its point of view a joystick-held direction is
+// indistinguishable from a held arrow key. Independent horizontal/vertical
+// thresholds (not an 8-way angle snap) so every combination -- including
+// all four diagonals -- falls out for free, the same way holding two
+// arrow keys at once already does.
+const JOYSTICK_DEADZONE = 0.35; // fraction of the base's radius before a direction registers -- small drifts near center shouldn't register as input
+const joystickBase = document.getElementById('kr-joystick-base');
+const joystickStick = document.getElementById('kr-joystick-stick');
+let joystickPointerId = null;
+
+function setJoystickStickOffset(x, y) {
+  joystickStick.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
+}
+
+function releaseJoystick() {
+  joystickPointerId = null;
+  ARROW_KEYS.forEach((k) => heldKeys.delete(k));
+  setJoystickStickOffset(0, 0);
+}
+
+function updateJoystickFromPointer(clientX, clientY) {
+  const rect = joystickBase.getBoundingClientRect();
+  const dx = clientX - (rect.left + rect.width / 2);
+  const dy = clientY - (rect.top + rect.height / 2);
+  const maxRadius = rect.width / 2;
+  const dist = Math.hypot(dx, dy) || 1;
+  const clampedDist = Math.min(dist, maxRadius);
+  setJoystickStickOffset((dx / dist) * clampedDist, (dy / dist) * clampedDist);
+
+  const nx = dx / maxRadius;
+  const ny = dy / maxRadius;
+  // ArrowLeft/ArrowRight/ArrowUp/ArrowDown here are the same literal key
+  // names keydown/keyup add to heldKeys -- the game logic they drive
+  // (run forward/back, dodge up/down) is entirely in updateRunner().
+  if (nx < -JOYSTICK_DEADZONE) heldKeys.add('ArrowLeft'); else heldKeys.delete('ArrowLeft');
+  if (nx > JOYSTICK_DEADZONE) heldKeys.add('ArrowRight'); else heldKeys.delete('ArrowRight');
+  if (ny < -JOYSTICK_DEADZONE) heldKeys.add('ArrowUp'); else heldKeys.delete('ArrowUp');
+  if (ny > JOYSTICK_DEADZONE) heldKeys.add('ArrowDown'); else heldKeys.delete('ArrowDown');
+}
+
+if (joystickBase) {
+  joystickBase.addEventListener('pointerdown', (e) => {
+    joystickPointerId = e.pointerId;
+    joystickBase.setPointerCapture(e.pointerId); // keep receiving move events even once the finger drifts outside the base
+    updateJoystickFromPointer(e.clientX, e.clientY);
+    e.preventDefault();
+  });
+  joystickBase.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== joystickPointerId) return;
+    updateJoystickFromPointer(e.clientX, e.clientY);
+    e.preventDefault();
+  });
+  const endJoystick = (e) => {
+    if (e.pointerId !== joystickPointerId) return;
+    releaseJoystick();
+  };
+  joystickBase.addEventListener('pointerup', endJoystick);
+  joystickBase.addEventListener('pointercancel', endJoystick);
+}
 
 // The runner's lateral side right now, for defender tackle-matchup
 // purposes — just their held direction; there's no juke/spin burst to
