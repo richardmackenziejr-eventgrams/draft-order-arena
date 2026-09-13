@@ -174,6 +174,7 @@ const COVERAGE_SPAWN_WORLDY = 40; // receiving team's 40
 const COVERAGE_SPAWN_SPREAD = 3; // +/- jitter on the shared starting depth — a real column running down together, not staggered front-to-back
 const KICKER_SPAWN_WORLDY = 65; // kicking team's own 35
 const KICKER_SPEED = 4.5; // yards/sec, never blocked
+const KICKER_LATERAL_TRACK_SPEED = 3; // yards/sec -- a lazy drift toward the returner's lane while jogging/winding, so he visibly angles in rather than jogging in a straight line regardless of where you are
 const KICKER_TRIGGER_DISTANCE = 5; // yards -- tighter than a real defender's; the kicker isn't hunting, only reacts if the runner comes right at him
 const KICKER_WINDUP_MS = 700; // slow to react -- a genuine last resort, not a real tackler
 const KICKER_LUNGE_MS = 300;
@@ -184,9 +185,10 @@ const BLOCK_RANDOM_MS = 700; // a blocker's FIRST hold is BLOCK_MIN_MS + random(
 const REBLOCK_MIN_MS = 150;
 const REBLOCK_RANDOM_MS = 200; // a blocker that's already made its one full block can still step in front of a later defender, but only for a brief, glancing hold -- it already spent its best effort on the first one
 const BLOCK_COOLDOWN_MS = 500; // grace period after a defender is released before ANY blocker (including the one that just held it) can engage it again -- without this, a freshly-released defender sitting right next to its blocker gets re-engaged the very next frame, which looks exactly like both of them frozen in place
-const BLOCKED_SLIDE_TACKLE_RANGE = 4; // yards -- how close the returner has to actually run past a restrained defender for them to take a swipe
-const BLOCKED_SLIDE_TACKLE_WINDUP_MS = 200; // short and blind (no visual telegraph, like every other lunge now) but not instant -- a fast enough direction change still beats it
-const BLOCKED_SLIDE_TACKLE_COOLDOWN_MS = 600; // after a miss, before this defender can try again -- keeps a single near-miss from resolving every single frame
+const BLOCKED_SLIDE_TACKLE_RANGE = 6; // yards -- how close the returner has to run past a restrained defender to draw a swipe (matches a normal defender's own trigger distance)
+const BLOCKED_SLIDE_TACKLE_WINDUP_MS = 200; // blind (no glow, like every other lunge now) but not instant -- a fast enough direction change still beats it
+const BLOCKED_SLIDE_TACKLE_LUNGE_MS = 220; // the actual physical slide toward the returner -- this IS the visible "a defender is sliding into me" cue the wind-up alone can't give
+const BLOCKED_SLIDE_TACKLE_COOLDOWN_MS = 350; // after a miss, before this defender can try again
 
 // ---- Game state -------------------------------------------------------------
 let returnsPerPlayer = 5;
@@ -415,9 +417,13 @@ function makeCoverageTeam(activeCount) {
     blockedUntil: 0,
     blockedByBlocker: null,
     blockImmuneUntil: 0, // brief grace period after release before anyone can engage this defender again
-    slideTackleState: null, // null | 'winding' -- a short, independent swipe attempt while still 'blocked', see updateDefenders()
+    slideTackleState: null, // null | 'winding' | 'lunging' -- a short, independent swipe attempt while still 'blocked', see updateDefenders()
     slideTackleWindupAt: 0,
     slideTackleCommittedSide: null,
+    slideTackleLungeStartedAt: 0,
+    slideTackleStartX: 0, slideTackleStartY: 0,
+    slideTackleTargetX: 0, slideTackleTargetY: 0,
+    slideTackleBaseX: 0, slideTackleBaseY: 0, // snapped back to on a miss -- still held, not actually freed
     nextSlideTackleAt: 0,
     committedSide: null,
     windupStartedAt: 0,
@@ -453,18 +459,43 @@ function updateDefenders(dtSec) {
       // direction, "just run around the pile" was too safe. This runs
       // entirely independently of the release timer below (the blocker
       // never learns about it -- it's a reach, not an escape) and can end
-      // the return on its own.
+      // the return on its own. Unlike the earlier version, the swipe
+      // actually SLIDES the defender's position toward the returner during
+      // the lunge phase -- a static "invisible" hit-check was confusing
+      // (no visible defender anywhere near you when you got tackled); this
+      // is the same visible-motion cue a normal defender's own lunge gives.
       if (d.active) {
         if (d.slideTackleState === 'winding') {
           if (now - d.slideTackleWindupAt >= BLOCKED_SLIDE_TACKLE_WINDUP_MS) {
-            const dist = Math.hypot(runner.worldX - d.worldX, runner.worldY - d.worldY);
+            d.slideTackleState = 'lunging';
+            d.slideTackleLungeStartedAt = now;
+            d.slideTackleStartX = d.worldX;
+            d.slideTackleStartY = d.worldY;
+            d.slideTackleBaseX = d.worldX;
+            d.slideTackleBaseY = d.worldY;
+            const leadSec = BLOCKED_SLIDE_TACKLE_LUNGE_MS / 1000;
+            d.slideTackleTargetX = runner.worldX + runner.vx * leadSec;
+            d.slideTackleTargetY = runner.worldY + runner.vy * leadSec;
+          }
+        } else if (d.slideTackleState === 'lunging') {
+          const t = Math.min(1, (now - d.slideTackleLungeStartedAt) / BLOCKED_SLIDE_TACKLE_LUNGE_MS);
+          d.worldX = d.slideTackleStartX + (d.slideTackleTargetX - d.slideTackleStartX) * t;
+          d.worldY = d.slideTackleStartY + (d.slideTackleTargetY - d.slideTackleStartY) * t;
+          const dist = Math.hypot(runner.worldX - d.worldX, runner.worldY - d.worldY);
+          if (dist <= TACKLE_RADIUS) {
             const runnerSide = currentRunnerSide();
-            const hit = dist <= BLOCKED_SLIDE_TACKLE_RANGE * 1.4
-              && (d.slideTackleCommittedSide === 'direct' || d.slideTackleCommittedSide === runnerSide);
+            const hit = d.slideTackleCommittedSide === 'direct' || d.slideTackleCommittedSide === runnerSide;
             if (hit) {
               runner.state = 'tackled';
               return; // the return is over — no need to keep updating anything else this frame
             }
+            d.worldX = d.slideTackleBaseX; // recoils back into the hold, still just "blocked" -- this was a swipe, not an escape
+            d.worldY = d.slideTackleBaseY;
+            d.slideTackleState = null;
+            d.nextSlideTackleAt = now + BLOCKED_SLIDE_TACKLE_COOLDOWN_MS;
+          } else if (t >= 1) {
+            d.worldX = d.slideTackleBaseX;
+            d.worldY = d.slideTackleBaseY;
             d.slideTackleState = null;
             d.nextSlideTackleAt = now + BLOCKED_SLIDE_TACKLE_COOLDOWN_MS;
           }
@@ -612,6 +643,11 @@ function updateDefenders(dtSec) {
   // tuned deliberately weak: a longer wind-up and a tight trigger range, a
   // genuine last-resort attempt easily beaten rather than a real threat.
   if (kicker.state === 'windingUp') {
+    // Lean toward the returner's lane while winding up, same as jogging —
+    // otherwise he visibly commits to a tackle attempt while still facing
+    // whatever direction he happened to be jogging in.
+    const lateralDx = clampNum(runner.worldX - kicker.worldX, -1, 1);
+    kicker.worldX += lateralDx * KICKER_LATERAL_TRACK_SPEED * dtSec;
     if (now - kicker.windupStartedAt >= KICKER_WINDUP_MS) {
       kicker.state = 'lunging';
       kicker.lungeStartedAt = now;
@@ -644,6 +680,12 @@ function updateDefenders(dtSec) {
     if (now - kicker.recoverStartedAt >= KICKER_RECOVER_MS) kicker.state = 'jogging';
   } else {
     kicker.worldY = Math.max(0, kicker.worldY - KICKER_SPEED * dtSec);
+    // A lazy angle-in toward the returner's current lane -- not a real
+    // chase (KICKER_LATERAL_TRACK_SPEED is much slower than any real
+    // pursuit speed), just enough that he doesn't look oblivious jogging
+    // past in a dead-straight line regardless of where the returner is.
+    const jogLateralDx = clampNum(runner.worldX - kicker.worldX, -1, 1);
+    kicker.worldX += jogLateralDx * KICKER_LATERAL_TRACK_SPEED * dtSec;
     const dist = Math.hypot(runner.worldX - kicker.worldX, runner.worldY - kicker.worldY);
     if (dist <= KICKER_TRIGGER_DISTANCE) {
       kicker.state = 'windingUp';
@@ -1160,16 +1202,22 @@ function drawKicker() {
 function drawDefenders() {
   for (const d of defenders) {
     const isBlocked = d.state === 'blocked';
+    // A defender actively sliding into a swipe is visibly moving under its
+    // own drawn position (worldX/worldY themselves are animating, see
+    // updateDefenders()) -- treat it like any other active player rather
+    // than the frozen/offset "held" look the rest of a block gets.
+    const isSliding = d.slideTackleState === 'lunging';
     const x = screenXForward(d.worldY);
-    const y = screenYLateral(d.worldX) + (isBlocked ? ENGAGE_DRAW_OFFSET_PX : 0);
+    const y = screenYLateral(d.worldX) + (isBlocked && !isSliding ? ENGAGE_DRAW_OFFSET_PX : 0);
     if (x < -30 || x > CANVAS_WIDTH + 30) continue;
     // Standing still while held up by the wedge — no leg-stride animation
     // for a defender that isn't actually moving.
-    const legPhase = isBlocked ? 0 : performance.now() / 100 + d.worldX * 0.4;
+    const legPhase = (isBlocked && !isSliding) ? 0 : performance.now() / 100 + d.worldX * 0.4;
+    const facingLeft = isSliding ? d.slideTackleTargetY >= d.slideTackleStartY : d.facingLeft;
 
     drawPlayerSprite(x, y, {
       jersey: '#c0392b', trim: '#5c150c', pants: '#26262a', helmet: '#8e2a1e',
-      number: d.number, legPhase, facingLeft: d.facingLeft, blocking: isBlocked,
+      number: d.number, legPhase, facingLeft, blocking: isBlocked && !isSliding,
     });
   }
 }
