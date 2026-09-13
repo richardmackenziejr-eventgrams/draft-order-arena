@@ -603,6 +603,12 @@ function updateDefenders(dtSec) {
         const leadSec = DEFENDER_LUNGE_MS / 1000;
         d.lungeTargetX = runner.worldX + runner.vx * leadSec + lateralLead;
         d.lungeTargetY = runner.worldY + runner.vy * leadSec;
+        // Face the direction of the dive itself, not whatever was left over
+        // from the chase beforehand -- the lunge can head a different way
+        // than the approach did (e.g. a lateral lead on a runner who's
+        // barely moving forward), and a sprite diving one way while facing
+        // another reads as broken/backwards.
+        if (Math.abs(d.lungeTargetY - d.lungeStartY) > 0.01) d.facingLeft = d.lungeTargetY > d.lungeStartY;
       }
     } else if (d.state === 'lunging') {
       const t = Math.min(1, (now - d.lungeStartedAt) / DEFENDER_LUNGE_MS);
