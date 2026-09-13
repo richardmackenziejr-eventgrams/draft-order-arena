@@ -45,8 +45,8 @@ const RUNNER_HALF_WIDTH = 0.6;
 // room to draw stadium stands there — purely cosmetic, doesn't touch
 // gameplay math, since world-yard coordinates (movement, collision,
 // clamping) never reference pixels at all.
-const STADIUM_MARGIN_PX = 42; // was 30 -- the extra 12px is TRACK_HEIGHT_PX, a sideline apron between the crowd and the actual field edge (see drawStadiumStands())
-const TRACK_HEIGHT_PX = 12;
+const STADIUM_MARGIN_PX = 56; // was 30 (then 42) -- the extra TRACK_HEIGHT_PX is a sideline apron between the crowd and the actual field edge (see drawStadiumStands()), enlarged again to give the cheer squad more room to be drawn bigger
+const TRACK_HEIGHT_PX = 26;
 const FIELD_TOP_PX = STADIUM_MARGIN_PX;
 const FIELD_BOTTOM_PX = CANVAS_HEIGHT - STADIUM_MARGIN_PX;
 const PX_PER_YARD_LATERAL = (FIELD_BOTTOM_PX - FIELD_TOP_PX) / FIELD_WIDTH_YARDS;
@@ -107,6 +107,7 @@ function clampNum(x, min, max) {
 const RUNNER_FORWARD_SPEED = 9; // yards/sec at full forward speed
 const RUNNER_BACKWARD_SPEED = 4; // yards/sec if backpedaling
 const RUNNER_LATERAL_SPEED = 7; // yards/sec, plain directional movement
+const REFEREE_SPEED = 6; // yards/sec -- slower than the returner's own 9, so a flat-out sprint pulls away from him; anytime the returner isn't gaining forward ground at full speed (dodging, slowing, standing still) he closes the gap back up
 
 const DEFENDER_BASE_SPEED = 7.5; // yards/sec pursuit at a defenderSpeed multiplier of 1.0
 const DEFENDER_TRIGGER_DISTANCE = 6; // yards — closing to this range starts a defender's wind-up
@@ -210,6 +211,7 @@ const runner = {
 let defenders = [];
 let blockers = [];
 let kicker = { worldX: 0, worldY: 0, number: 3 };
+let referee = { worldY: 0, facingLeft: true }; // chases the returner's worldY at its own capped speed -- see updateReferee()
 let animationHandle = null;
 let lastFrameAt = 0;
 
@@ -277,6 +279,24 @@ function updateRunner(dtSec) {
 
   if (runner.worldY >= fieldYards) {
     runner.state = 'touchdown';
+  }
+}
+
+// Tracks the returner down the field at a fixed, slower straight-line
+// speed rather than mirroring worldY exactly -- a real official can't
+// actually keep pace with a full sprint. Falls behind during a flat-out
+// run and closes back up anytime the returner isn't gaining forward
+// ground at full speed (dodging, slowing, standing still, even running
+// backward), the same "he's tracking the play, not glued to the ball
+// carrier" look real sideline officials have.
+function updateReferee(dtSec) {
+  const diff = runner.worldY - referee.worldY;
+  if (Math.abs(diff) > 0.01) referee.facingLeft = diff > 0;
+  const maxStep = REFEREE_SPEED * dtSec;
+  if (Math.abs(diff) <= maxStep) {
+    referee.worldY = runner.worldY;
+  } else {
+    referee.worldY += Math.sign(diff) * maxStep;
   }
 }
 
@@ -986,22 +1006,26 @@ function drawEndZoneBlockText(centerScreenX, text, fillColor) {
 const CHEER_SHIRT_COLORS = ['#f4c430', '#1c3f6e'];
 function drawCheerleaders(bandTop, bandHeight) {
   const count = 8;
-  const baseY = bandTop + bandHeight / 2 + 1;
+  // All the constants below were sized for a 12px-tall band -- `scale`
+  // keeps that same proportioned figure at whatever size the band actually
+  // is now, rather than hardcoding new magic numbers for it.
+  const scale = bandHeight / 12;
+  const baseY = bandTop + bandHeight / 2 + 3 * scale;
   for (let i = 0; i < count; i++) {
     const x = (i + 0.5) * (CANVAS_WIDTH / count);
-    const shake = Math.sin(performance.now() / 85 + i * 1.7) * 2.6;
+    const shake = Math.sin(performance.now() / 85 + i * 1.7) * 2.6 * scale;
     ctx.fillStyle = CHEER_SHIRT_COLORS[i % 2];
-    ctx.fillRect(x - 1.8, baseY - 3, 3.6, 5.5);
+    ctx.fillRect(x - 1.8 * scale, baseY - 3 * scale, 3.6 * scale, 5.5 * scale);
     ctx.fillStyle = '#e8c39e';
     ctx.beginPath();
-    ctx.arc(x, baseY - 4.5, 1.8, 0, Math.PI * 2);
+    ctx.arc(x, baseY - 4.5 * scale, 1.8 * scale, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
-    ctx.arc(x - 3.5 + shake, baseY - 4, 1.8, 0, Math.PI * 2);
+    ctx.arc(x - 3.5 * scale + shake, baseY - 4 * scale, 1.8 * scale, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(x + 3.5 - shake, baseY - 4, 1.8, 0, Math.PI * 2);
+    ctx.arc(x + 3.5 * scale - shake, baseY - 4 * scale, 1.8 * scale, 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -1275,16 +1299,15 @@ function drawKicker() {
 // A few yards outside the near sideline -- lands in the track/apron band
 // between the field and the crowd (see drawStadiumStands()), same as a
 // real referee actually would be standing.
-const REFEREE_WORLD_X = -(FIELD_WIDTH_YARDS / 2 + 0.8); // lands centered in the track band, not right at its inner edge
+const REFEREE_WORLD_X = -(FIELD_WIDTH_YARDS / 2 + 1.9); // lands centered in the (now taller) track band, not right at its inner edge
 
 function drawReferee() {
-  const x = screenXForward(runner.worldY); // stays exactly level with the returner -- "on pace" by construction, no chase logic needed
+  const x = screenXForward(referee.worldY); // his own tracked position, not the runner's -- see updateReferee()
   const y = screenYLateral(REFEREE_WORLD_X);
-  const moving = Math.abs(runner.vy) > 0.5;
-  const legPhase = moving ? performance.now() / 95 : 0;
+  const legPhase = performance.now() / 95; // jogging the sideline the whole play, same always-animating treatment as the kicker
   drawPlayerSprite(x, y, {
     jersey: '#161616', trim: '#f5f5f0', pants: '#161616', helmet: '#161616',
-    number: '', legPhase, facingLeft: runner.facingLeft, referee: true,
+    number: '', legPhase, facingLeft: referee.facingLeft, referee: true,
   });
 }
 
@@ -1352,6 +1375,7 @@ function tick(now) {
 
   if (runner.state === 'running') {
     updateRunner(dtSec);
+    updateReferee(dtSec);
     if (runner.state === 'running') {
       updateBlockers(dtSec);
       updateDefenders(dtSec);
@@ -1446,6 +1470,8 @@ async function startReturn(returnConfig) {
   runner.lastLateralDir = null;
   runner.vx = 0;
   runner.vy = 0;
+  referee.worldY = 0;
+  referee.facingLeft = true;
   blockers = makeBlockers();
   defenders = makeCoverageTeam(returnConfig.defenderCount);
   kicker = makeKicker();
