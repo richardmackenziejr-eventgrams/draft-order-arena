@@ -508,6 +508,24 @@ ul.clean li:last-child { border-bottom: none; }
   background: #2f6b3f;
 }
 #kr-canvas-wrap canvas { display: block; width: 100%; height: 100%; }
+/* On a narrow phone, the page's own side padding plus the panel's own
+   padding (40px total each side, neither of which this page can shrink
+   globally without affecting every other page) was leaving the canvas at
+   barely 3/4 of the actual screen width -- small enough that people were
+   pinch-zooming in just to see it properly. Scoped to this page only
+   (.kr-page) and to narrow screens: shrink the page's own edge padding,
+   and let the canvas/controls row "bleed" past the panel's own padding
+   back out to that edge, recovering nearly the full screen width. No
+   effect at desktop widths, where the 640px cap above already governs.*/
+@media (max-width: 480px) {
+  main.kr-page { padding-left: 8px; padding-right: 8px; }
+  #kr-canvas-wrap, .kr-controls-row {
+    width: calc(100% + 40px);
+    max-width: none;
+    margin-left: -20px;
+    margin-right: -20px;
+  }
+}
 .kr-hint { text-align: right; opacity: 0.7; font-size: 0.9em; margin: 0; line-height: 1.5; }
 /* The hint, joystick, and Start/Next buttons all share one row, right
    under the field — keeps everything above the fold on a PC instead of
