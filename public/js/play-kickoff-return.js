@@ -938,6 +938,36 @@ function drawCrowdBand(x, y, w, h, vertical) {
 // one flat crowd band plus a low wall at the field's edge, static relative
 // to the screen since the seating runs the length of the field and doesn't
 // need to scroll in sync with the camera.
+// Big, bold, block-lettering end zone text -- sized to actually fill most
+// of the painted end zone, not just label it. The text reads along the
+// field's length (rotated 90deg, same as before), so its rendered WIDTH
+// maps to the field's width and its rendered HEIGHT maps to the end
+// zone's depth; sized against a reference font size and then uniformly
+// scaled so it's the largest size that still fits both dimensions. A
+// dark outline gives it the poster/stencil "block lettering" look a
+// thin single-color label never had.
+function drawEndZoneBlockText(centerScreenX, text, fillColor) {
+  const availableSpan = (FIELD_BOTTOM_PX - FIELD_TOP_PX) * 0.94; // rendered width after rotation
+  const availableDepth = EZ_DEPTH_PX * 0.86; // rendered height (cap height) after rotation
+  const REFERENCE_SIZE = 100;
+  ctx.save();
+  ctx.translate(centerScreenX, CANVAS_HEIGHT / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.font = `900 ${REFERENCE_SIZE}px Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const textWidth = ctx.measureText(text).width;
+  const scale = Math.min(availableSpan / textWidth, availableDepth / REFERENCE_SIZE);
+  ctx.scale(scale, scale);
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = REFERENCE_SIZE * 0.1;
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.strokeText(text, 0, 0);
+  ctx.fillStyle = fillColor;
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
 function drawStadiumStands() {
   // Real Tecmo Super Bowl only ever shows the ONE crowd band, along the top
   // of the screen (plus the backdrop behind the end zone) -- not a second
@@ -1012,25 +1042,21 @@ function drawField() {
     }
   }
 
-  // Far end zone (the opponent's, at the far/left end of the scroll):
-  // solid fill + bold centered "END ZONE" text, rotated to read along the
-  // field's length — plain and clean like a real painted end zone.
+  // Far end zone (the opponent's, at the far/left end of the scroll) —
+  // this is the one the returner is actually running toward to score, so
+  // it's painted in the RETURNER'S OWN team color (blue), same idea as a
+  // real broadcast's end zone paint identifying whose end it is.
   const goalScreenX = screenXForward(fieldYards);
   if (goalScreenX > -80) {
     const ezRight = Math.min(CANVAS_WIDTH + 80, goalScreenX);
     const ezLeft = Math.max(-80, goalScreenX - EZ_DEPTH_PX);
-    ctx.fillStyle = '#1f4a29';
+    ctx.fillStyle = '#1c3f6e';
     ctx.fillRect(ezLeft, FIELD_TOP_PX, ezRight - ezLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
     ctx.save();
     ctx.beginPath();
     ctx.rect(ezLeft, FIELD_TOP_PX, ezRight - ezLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
     ctx.clip();
-    ctx.translate((ezLeft + ezRight) / 2, CANVAS_HEIGHT / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = 'bold 15px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('E N D   Z O N E', 0, 4);
+    drawEndZoneBlockText((ezLeft + ezRight) / 2, 'END ZONE', 'rgba(255,255,255,0.92)');
     ctx.restore();
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 3;
@@ -1060,22 +1086,20 @@ function drawField() {
   // catch animation's last frame, which was the actual "brown thing behind
   // the returner" -- see playCatchAnimation()'s forced extra render() call
   // for that fix; this end zone itself was never the problem.)
+  // This end belongs to the kicking team (the returner starts right in
+  // front of it, catching the kick), so it's painted in THEIR color (red)
+  // rather than the same blue as the scoring end.
   const ownGoalScreenX = screenXForward(OWN_GOAL_WORLD_Y);
   if (ownGoalScreenX < CANVAS_WIDTH + 80) {
     const ownEzLeft = ownGoalScreenX;
     const ownEzRight = Math.min(CANVAS_WIDTH + 80, ownGoalScreenX + EZ_DEPTH_PX);
-    ctx.fillStyle = '#1f4a29';
+    ctx.fillStyle = '#6b1f1f';
     ctx.fillRect(ownEzLeft, FIELD_TOP_PX, ownEzRight - ownEzLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
     ctx.save();
     ctx.beginPath();
     ctx.rect(ownEzLeft, FIELD_TOP_PX, ownEzRight - ownEzLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
     ctx.clip();
-    ctx.translate((ownEzLeft + ownEzRight) / 2, CANVAS_HEIGHT / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.font = 'bold 15px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('E N D   Z O N E', 0, 4);
+    drawEndZoneBlockText((ownEzLeft + ownEzRight) / 2, 'END ZONE', 'rgba(255,255,255,0.92)');
     ctx.restore();
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 3;
