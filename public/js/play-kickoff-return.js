@@ -45,7 +45,8 @@ const RUNNER_HALF_WIDTH = 0.6;
 // room to draw stadium stands there — purely cosmetic, doesn't touch
 // gameplay math, since world-yard coordinates (movement, collision,
 // clamping) never reference pixels at all.
-const STADIUM_MARGIN_PX = 30;
+const STADIUM_MARGIN_PX = 42; // was 30 -- the extra 12px is TRACK_HEIGHT_PX, a sideline apron between the crowd and the actual field edge (see drawStadiumStands())
+const TRACK_HEIGHT_PX = 12;
 const FIELD_TOP_PX = STADIUM_MARGIN_PX;
 const FIELD_BOTTOM_PX = CANVAS_HEIGHT - STADIUM_MARGIN_PX;
 const PX_PER_YARD_LATERAL = (FIELD_BOTTOM_PX - FIELD_TOP_PX) / FIELD_WIDTH_YARDS;
@@ -735,7 +736,7 @@ const SPRITE_SCALE = 1.35; // players read small next to real Tecmo Super Bowl s
 // other visual "a tackle is coming" telegraph anymore (removed per
 // direction: it made the dodge mechanic too easy to react to).
 function drawPlayerSprite(x, y, opts) {
-  const { jersey, trim, pants, helmet, number, legPhase, facingLeft, blocking } = opts;
+  const { jersey, trim, pants, helmet, number, legPhase, facingLeft, blocking, referee } = opts;
   const mirror = facingLeft === false;
 
   ctx.save();
@@ -815,14 +816,23 @@ function drawPlayerSprite(x, y, opts) {
   arm(1.5, 1 - swing, 2.3);
 
   // Torso, leaning forward into the run — narrower than a front-on jersey
-  // since we're now looking at it edge-on.
+  // since we're now looking at it edge-on. A referee gets the classic
+  // black-and-white zebra stripes instead of a solid jersey.
   ctx.save();
   ctx.translate(0, HIP_Y);
   ctx.rotate(-0.2);
-  ctx.fillStyle = jersey;
-  ctx.fillRect(-3.5, SHOULDER_Y - HIP_Y, 7, HIP_Y - SHOULDER_Y);
-  ctx.fillStyle = trim;
-  ctx.fillRect(-3.5, SHOULDER_Y - HIP_Y, 7, 2.5);
+  if (referee) {
+    const stripeW = 7 / 5;
+    for (let s = 0; s < 5; s++) {
+      ctx.fillStyle = s % 2 === 0 ? '#161616' : '#f5f5f0';
+      ctx.fillRect(-3.5 + s * stripeW, SHOULDER_Y - HIP_Y, stripeW, HIP_Y - SHOULDER_Y);
+    }
+  } else {
+    ctx.fillStyle = jersey;
+    ctx.fillRect(-3.5, SHOULDER_Y - HIP_Y, 7, HIP_Y - SHOULDER_Y);
+    ctx.fillStyle = trim;
+    ctx.fillRect(-3.5, SHOULDER_Y - HIP_Y, 7, 2.5);
+  }
   ctx.restore();
 
   // Leading leg and arm, layered over the torso.
@@ -838,7 +848,7 @@ function drawPlayerSprite(x, y, opts) {
   ctx.beginPath();
   ctx.ellipse(headX, headY, 4.6, 5.2, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillRect(headX - 8, headY - 0.5, 5.5, 2.2); // facemask bar, front-and-down from the helmet
+  if (!referee) ctx.fillRect(headX - 8, headY - 0.5, 5.5, 2.2); // facemask bar, front-and-down from the helmet -- a referee wears a cap, not a facemask
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
   ctx.beginPath();
   ctx.ellipse(headX + 0.5, headY - 2.5, 1.6, 1, -0.3, 0, Math.PI * 2);
@@ -968,13 +978,51 @@ function drawEndZoneBlockText(centerScreenX, text, fillColor) {
   ctx.restore();
 }
 
+// A small squad shaking pom-poms along the sideline apron -- purely a
+// screen-space decoration (fixed spacing across the canvas, not tied to
+// world position), same as the crowd behind them. The pom-poms shake
+// continuously off performance.now(), so they're always mid-motion
+// whenever this is drawn during actual play, not just a static prop.
+const CHEER_SHIRT_COLORS = ['#f4c430', '#1c3f6e'];
+function drawCheerleaders(bandTop, bandHeight) {
+  const count = 8;
+  const baseY = bandTop + bandHeight / 2 + 1;
+  for (let i = 0; i < count; i++) {
+    const x = (i + 0.5) * (CANVAS_WIDTH / count);
+    const shake = Math.sin(performance.now() / 85 + i * 1.7) * 2.6;
+    ctx.fillStyle = CHEER_SHIRT_COLORS[i % 2];
+    ctx.fillRect(x - 1.8, baseY - 3, 3.6, 5.5);
+    ctx.fillStyle = '#e8c39e';
+    ctx.beginPath();
+    ctx.arc(x, baseY - 4.5, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x - 3.5 + shake, baseY - 4, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x + 3.5 - shake, baseY - 4, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 function drawStadiumStands() {
   // Real Tecmo Super Bowl only ever shows the ONE crowd band, along the top
   // of the screen (plus the backdrop behind the end zone) -- not a second
   // one along the bottom too. The bottom margin still exists (the field
   // needs the same inset both sides to stay centered), it's just a plain
   // sideline strip rather than a second crowd.
-  drawCrowdBand(0, 0, CANVAS_WIDTH, FIELD_TOP_PX, false);
+  const crowdBottom = FIELD_TOP_PX - TRACK_HEIGHT_PX;
+  drawCrowdBand(0, 0, CANVAS_WIDTH, crowdBottom, false);
+
+  // A sideline apron between the crowd and the actual field edge -- a real
+  // broadcast always shows a bit of a gap here (track surface, photographers,
+  // the bench area), not the crowd packed right up against the sideline
+  // paint. The cheer squad lines up along it.
+  ctx.fillStyle = '#8f8c84';
+  ctx.fillRect(0, crowdBottom, CANVAS_WIDTH, TRACK_HEIGHT_PX);
+  drawCheerleaders(crowdBottom, TRACK_HEIGHT_PX);
+
   ctx.fillStyle = '#e4e4e4';
   ctx.fillRect(0, FIELD_TOP_PX - 3, CANVAS_WIDTH, 3);
 
@@ -1224,6 +1272,22 @@ function drawKicker() {
   });
 }
 
+// A few yards outside the near sideline -- lands in the track/apron band
+// between the field and the crowd (see drawStadiumStands()), same as a
+// real referee actually would be standing.
+const REFEREE_WORLD_X = -(FIELD_WIDTH_YARDS / 2 + 0.8); // lands centered in the track band, not right at its inner edge
+
+function drawReferee() {
+  const x = screenXForward(runner.worldY); // stays exactly level with the returner -- "on pace" by construction, no chase logic needed
+  const y = screenYLateral(REFEREE_WORLD_X);
+  const moving = Math.abs(runner.vy) > 0.5;
+  const legPhase = moving ? performance.now() / 95 : 0;
+  drawPlayerSprite(x, y, {
+    jersey: '#161616', trim: '#f5f5f0', pants: '#161616', helmet: '#161616',
+    number: '', legPhase, facingLeft: runner.facingLeft, referee: true,
+  });
+}
+
 function drawDefenders() {
   for (const d of defenders) {
     const isBlocked = d.state === 'blocked';
@@ -1273,6 +1337,7 @@ function render() {
   drawField();
   drawGoalPost(screenXForward(fieldYards), -1);
   drawGoalPost(screenXForward(OWN_GOAL_WORLD_Y), 1);
+  drawReferee();
   drawKicker();
   drawDefenders();
   drawBlockers();
