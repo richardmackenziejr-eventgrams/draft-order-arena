@@ -1,7 +1,7 @@
 const instanceId = qs('instance');
 const leagueId = qs('league');
 const memberId = qs('member');
-document.getElementById('back-link').href = leagueId ? `/member-home.html?league=${leagueId}` : '/';
+document.getElementById('back-link').href = '/'; // "Home" -- always the site's main page, not back into this league specifically
 
 let countdownInterval = null;
 let timeoutTimer = null;

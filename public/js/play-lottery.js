@@ -1,6 +1,6 @@
 const instanceId = qs('instance');
 const leagueId = qs('league');
-document.getElementById('back-link').href = leagueId ? `/member-home.html?league=${leagueId}` : '/';
+document.getElementById('back-link').href = '/'; // "Home" -- always the site's main page, not back into this league specifically
 
 let members = [];
 let totalPicks = 0;
