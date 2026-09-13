@@ -1090,6 +1090,9 @@ function showDone(message) {
   document.getElementById('kick-panel').style.display = 'none';
   document.getElementById('done-panel').style.display = 'block';
   document.getElementById('done-message').textContent = message;
+  // Hidden until the player has actually finished their kicks -- per
+  // direction, no easy way to wander off mid-game.
+  document.getElementById('back-link').style.display = '';
 }
 
 // ---- Kick animation ---------------------------------------------------------

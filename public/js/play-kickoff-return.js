@@ -94,10 +94,10 @@ function clampNum(x, min, max) {
 }
 
 // ---- Tunable constants -----------------------------------------------------
-const RUNNER_FORWARD_SPEED = 9; // yards/sec at full forward speed
+const RUNNER_FORWARD_SPEED = 9.6; // yards/sec at full forward speed -- was 9, nudged up slightly since TDs had become too rare
 const RUNNER_BACKWARD_SPEED = 4; // yards/sec if backpedaling
 const RUNNER_LATERAL_SPEED = 7; // yards/sec, plain directional movement
-const REFEREE_SPEED = 7; // yards/sec -- was 6, felt a bit too sluggish; still slower than the returner's own 9, so a flat-out sprint pulls away from him, but anytime the returner isn't gaining forward ground at full speed (dodging, slowing, standing still) he closes the gap back up
+const REFEREE_SPEED = 7; // yards/sec -- was 6, felt a bit too sluggish; still slower than the returner's own forward speed, so a flat-out sprint pulls away from him, but anytime the returner isn't gaining forward ground at full speed (dodging, slowing, standing still) he closes the gap back up
 
 const DEFENDER_BASE_SPEED = 7.5; // yards/sec pursuit at a defenderSpeed multiplier of 1.0
 const DEFENDER_TRIGGER_DISTANCE = 6; // yards — closing to this range starts a defender's wind-up
@@ -1612,6 +1612,9 @@ function showDone(message) {
   document.getElementById('game-panel').style.display = 'none';
   document.getElementById('done-panel').style.display = 'block';
   document.getElementById('done-message').textContent = message;
+  // Hidden until the player has actually finished their returns -- per
+  // direction, no easy way to wander off mid-game.
+  document.getElementById('back-link').style.display = '';
 }
 
 async function init() {
