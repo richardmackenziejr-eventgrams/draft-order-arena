@@ -1440,12 +1440,19 @@ async function init() {
   fieldYards = gi.currentReturn.fieldYards || fieldYards;
 
   if (gi.currentReturn.index === 0) {
-    // Don't throw the player into the catch animation/defenders the
-    // instant the page loads — wait for a deliberate click so they're
-    // actually ready (keyboard focused, hands on the arrows) first.
-    // Render one static frame so the field is visible behind the button
-    // instead of a blank canvas.
+    // Don't throw the player into the catch animation the instant the page
+    // loads — wait for a deliberate click so they're actually ready
+    // (keyboard focused, hands on the arrows) first. Render one static
+    // frame of the pre-kick formation so the field (and the wedge/coverage/
+    // kicker, properly spawned) is visible behind the button instead of a
+    // blank canvas -- or, without this, whatever the top-level `kicker` was
+    // initialized to before its first real makeKicker() call, which is
+    // {worldX:0, worldY:0} -- exactly the returner's own spot, drawn right
+    // on top of them.
     currentReturnConfig = gi.currentReturn;
+    blockers = makeBlockers();
+    defenders = makeCoverageTeam(gi.currentReturn.defenderCount);
+    kicker = makeKicker();
     render();
     document.getElementById('return-info').textContent = `Return 1 of ${returnsPerPlayer}`;
     document.getElementById('start-return-btn').style.display = 'inline-block';
