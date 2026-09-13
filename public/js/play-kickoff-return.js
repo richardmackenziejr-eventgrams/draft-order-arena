@@ -1026,15 +1026,46 @@ function drawField() {
     }
   }
 
-  // Behind the start (worldY < 0) is never reachable in play (movement
-  // clamps at worldY=0) and isn't a real end zone at all -- the returner
-  // catches the ball AT their own goal line, so there's nothing back there
-  // to paint a whole "END ZONE" treatment onto. That used to render right
-  // on top of the returner at the start of every single return (worldY=0
-  // means screenXForward(0) is exactly the runner's own screen position),
-  // looking like a stray colored block behind them. The plain field fill
-  // above already covers this area, and the per-5-yard stripe loop already
-  // draws an ordinary line at the y=0 boundary -- nothing else is needed.
+  // The returner's own end zone, mirrored the other way (screen X
+  // increases going into it, since it's behind worldY=0 rather than beyond
+  // fieldYards). A real field is painted at both ends, goalpost included —
+  // and the returner catches the kick standing right in front of exactly
+  // this one, same as real Tecmo Super Bowl. (A version of this used to
+  // render UNDER a lingering brown ball sprite left over from the kickoff
+  // catch animation's last frame, which was the actual "brown thing behind
+  // the returner" -- see playCatchAnimation()'s forced extra render() call
+  // for that fix; this end zone itself was never the problem.)
+  const ownGoalScreenX = screenXForward(OWN_GOAL_WORLD_Y);
+  if (ownGoalScreenX < CANVAS_WIDTH + 80) {
+    const ownEzLeft = ownGoalScreenX;
+    const ownEzRight = Math.min(CANVAS_WIDTH + 80, ownGoalScreenX + EZ_DEPTH_PX);
+    ctx.fillStyle = '#1f4a29';
+    ctx.fillRect(ownEzLeft, FIELD_TOP_PX, ownEzRight - ownEzLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(ownEzLeft, FIELD_TOP_PX, ownEzRight - ownEzLeft, FIELD_BOTTOM_PX - FIELD_TOP_PX);
+    ctx.clip();
+    ctx.translate((ownEzLeft + ownEzRight) / 2, CANVAS_HEIGHT / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('E N D   Z O N E', 0, 4);
+    ctx.restore();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(ownGoalScreenX, FIELD_TOP_PX);
+    ctx.lineTo(ownGoalScreenX, FIELD_BOTTOM_PX);
+    ctx.stroke();
+
+    // Stadium crowd further behind it, same as the far end zone.
+    const ownDeckLeft = ownEzRight;
+    const ownDeckRight = ownDeckLeft + STADIUM_CROWD_DEPTH_PX;
+    if (ownDeckLeft < CANVAS_WIDTH + 20) {
+      drawCrowdBand(ownDeckLeft, 0, ownDeckRight - ownDeckLeft, CANVAS_HEIGHT, true);
+    }
+  }
 
   // Sidelines / out-of-bounds border, purely decorative (movement is still
   // clamped in world-yard space regardless of where this line is drawn).
@@ -1052,15 +1083,16 @@ function drawField() {
 // end zone turf, in front of the stadium deck behind it. The crossbar
 // spans the field's lateral width (screen Y), and the base pole/uprights
 // extend further behind the goal line (screen X) — the same physical
-// shape as before, just transposed for the horizontal camera.
-function drawGoalPost() {
-  const goalScreenX = screenXForward(fieldYards);
-  const baseX = goalScreenX - GOALPOST_DEPTH_PX;
+// shape as before, just transposed for the horizontal camera. A real
+// field has one of these at BOTH ends; `dir` is +1 or -1 for which way
+// "further into the end zone" actually is on screen for that goal line.
+function drawGoalPost(goalScreenX, dir) {
+  const baseX = goalScreenX + dir * GOALPOST_DEPTH_PX;
   if (baseX < -70 || baseX > CANVAS_WIDTH + 70) return;
   const baseY = screenYLateral(0);
   const uprightOffsetPx = 3.08 * PX_PER_YARD_LATERAL; // NFL uprights are ~18.5ft apart
-  const crossbarX = baseX - 16;
-  const uprightTipX = baseX - 52;
+  const crossbarX = baseX + dir * 16;
+  const uprightTipX = baseX + dir * 52;
 
   // Base pad.
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
@@ -1190,7 +1222,8 @@ function drawHud() {
 
 function render() {
   drawField();
-  drawGoalPost();
+  drawGoalPost(screenXForward(fieldYards), -1);
+  drawGoalPost(screenXForward(OWN_GOAL_WORLD_Y), 1);
   drawKicker();
   drawDefenders();
   drawBlockers();
@@ -1268,7 +1301,8 @@ async function playCatchAnimation() {
     }
 
     drawField();
-    drawGoalPost();
+    drawGoalPost(screenXForward(fieldYards), -1);
+    drawGoalPost(screenXForward(OWN_GOAL_WORLD_Y), 1);
     drawKicker();
     drawDefenders();
     drawBlockers();
@@ -1309,6 +1343,12 @@ async function startReturn(returnConfig) {
   await playCatchAnimation();
   runner.state = 'running';
   lastFrameAt = performance.now();
+  // The intro's own draw loop is the only thing that ever draws the ball,
+  // and its very last frame lands it right on the returner (that's the
+  // catch). Repaint immediately via the normal render() (which never draws
+  // a ball) so there's no gap where that last brown-ball frame could still
+  // be what's on screen while waiting for the first real tick().
+  render();
   stopLoop();
   animationHandle = requestAnimationFrame(tick);
 }
