@@ -59,9 +59,8 @@ const OWN_GOAL_WORLD_Y = 0; // same point as the start, but kept as its own name
 // Not to real yardage scale; this exists purely so the camera clamp below
 // knows exactly where the drawn world runs out.
 const EZ_DEPTH_PX = 55;
-const STADIUM_DECK_DEPTH_PX = 120;
-const STADIUM_ROOF_DEPTH_PX = 22;
-const BACKDROP_DEPTH_PX = EZ_DEPTH_PX + STADIUM_DECK_DEPTH_PX + STADIUM_ROOF_DEPTH_PX;
+const STADIUM_CROWD_DEPTH_PX = 140; // the flat crowd band behind the far end zone -- see drawCrowdBand()
+const BACKDROP_DEPTH_PX = EZ_DEPTH_PX + STADIUM_CROWD_DEPTH_PX;
 const GOALPOST_DEPTH_PX = 36; // screen-space depth into the end zone (in front of the stadium deck), not world yards
 
 // worldY is always "yards gained from the return's start," but a real
@@ -697,6 +696,7 @@ function updateDefenders(dtSec) {
 }
 
 // ---- Rendering ----------------------------------------------------------
+const SPRITE_SCALE = 1.35; // players read small next to real Tecmo Super Bowl sprites -- scale the whole figure up uniformly rather than re-deriving every coordinate below
 // A shared sprite drawn for the runner, every defender, and every blocker —
 // a classic Tecmo-style SIDE-PROFILE runner (not facing the camera), so two
 // players standing near each other read as two distinct silhouettes rather
@@ -716,6 +716,7 @@ function drawPlayerSprite(x, y, opts) {
   ctx.save();
   ctx.translate(x, y);
   if (mirror) ctx.scale(-1, 1);
+  ctx.scale(SPRITE_SCALE, SPRITE_SCALE);
 
   // Ground shadow.
   ctx.fillStyle = 'rgba(0,0,0,0.32)';
@@ -822,13 +823,15 @@ function drawPlayerSprite(x, y, opts) {
 
   // Jersey number, floating just above the helmet — drawn in its own,
   // never-mirrored pass so the digits always read left-to-right no matter
-  // which way the player is facing.
+  // which way the player is facing. Scaled by hand (this pass skips the
+  // SPRITE_SCALE transform above so mirroring can't flip the text) to keep
+  // it sized and positioned to match the now-larger head.
   ctx.save();
   ctx.translate(x, y);
   ctx.fillStyle = '#fff';
-  ctx.font = 'bold 8px sans-serif';
+  ctx.font = `bold ${Math.round(8 * SPRITE_SCALE)}px sans-serif`;
   ctx.textAlign = 'center';
-  ctx.fillText(String(number), 0, SHOULDER_Y - 11);
+  ctx.fillText(String(number), 0, (SHOULDER_Y - 11) * SPRITE_SCALE);
   ctx.restore();
 }
 
@@ -845,98 +848,49 @@ function shadeColor(hex, amt) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-// Deterministic pseudo-random in [0,1) from a seed — used for crowd-dot
-// scatter so the stands don't shimmer/re-randomize every frame (this runs
-// inside render(), called ~60x/sec).
-function seededRandom(seed) {
-  const x = Math.sin(seed * 12.9898) * 43758.5453;
-  return x - Math.floor(x);
-}
+// A handful of flat, saturated colors standing in for the crowd -- Tecmo
+// Super Bowl's actual stands are a single flat band of tightly-packed
+// colored squares, not a shaded, lit, multi-tier modern stadium bowl.
+const CROWD_COLORS = ['#c0392b', '#2f5fbf', '#e8dcc0', '#8a4b26', '#efefef'];
+const CROWD_CELL_PX = 4;
 
-// A textured seating deck: fine alternating rows (suggesting individual
-// seat rows) plus a scatter of crowd dots on top, clipped to the given
-// rect. Shared by the top/bottom sideline stands and the end-zone
-// backdrops so the whole stadium reads as one consistent structure.
-// `horizontal` controls which way the row lines run (perpendicular to the
-// deck's own depth axis).
-function drawSeatedDeck(x, y, w, h, horizontal, seed) {
+// The flat, blocky "sea of fans" crowd texture, clipped to the given rect —
+// a fixed (not randomized) repeating grid of small solid-color squares, on
+// purpose: it's meant to read as a regular pixel-art crowd tile, not a
+// naturalistic scatter. Shared by the sideline stands and the end-zone
+// backdrop so the whole stadium reads as one consistent, simple structure.
+function drawCrowdBand(x, y, w, h) {
   if (w <= 0 || h <= 0) return;
   ctx.save();
   ctx.beginPath();
   ctx.rect(x, y, w, h);
   ctx.clip();
-  const rowSize = 4;
-  if (horizontal) {
-    for (let ry = y - (y % rowSize); ry < y + h; ry += rowSize) {
-      ctx.fillStyle = Math.floor(ry / rowSize) % 2 === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.08)';
-      ctx.fillRect(x, ry, w, rowSize);
+  ctx.fillStyle = '#241f33';
+  ctx.fillRect(x, y, w, h);
+  const startCol = Math.floor(x / CROWD_CELL_PX);
+  const startRow = Math.floor(y / CROWD_CELL_PX);
+  for (let cy = startRow * CROWD_CELL_PX; cy < y + h; cy += CROWD_CELL_PX) {
+    for (let cx = startCol * CROWD_CELL_PX; cx < x + w; cx += CROWD_CELL_PX) {
+      const col = Math.round(cx / CROWD_CELL_PX);
+      const row = Math.round(cy / CROWD_CELL_PX);
+      const idx = (col * 7 + row * 13) % CROWD_COLORS.length;
+      ctx.fillStyle = CROWD_COLORS[idx];
+      ctx.fillRect(cx, cy, CROWD_CELL_PX - 1, CROWD_CELL_PX - 1);
     }
-  } else {
-    for (let rx = x - (x % rowSize); rx < x + w; rx += rowSize) {
-      ctx.fillStyle = Math.floor(rx / rowSize) % 2 === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.08)';
-      ctx.fillRect(rx, y, rowSize, h);
-    }
-  }
-  ctx.fillStyle = 'rgba(226,208,170,0.6)';
-  const dotCount = Math.round((w * h) / 260);
-  for (let i = 0; i < dotCount; i++) {
-    const px = x + seededRandom(seed + i * 3.7) * w;
-    const py = y + seededRandom(seed + 500 + i * 8.3) * h;
-    ctx.fillRect(px, py, 2, 2);
   }
   ctx.restore();
 }
 
 // Top/bottom stadium stands filling the margins the field is inset from —
-// a two-level bowl (lower deck + an upper deck set back behind a roof
-// line) with light standards along the roof, static relative to the
-// screen since the seating bowl runs the length of the field and doesn't
+// one flat crowd band plus a low wall at the field's edge, static relative
+// to the screen since the seating runs the length of the field and doesn't
 // need to scroll in sync with the camera.
 function drawStadiumStands() {
-  [{ y0: 0, y1: FIELD_TOP_PX, side: 0 }, { y0: FIELD_BOTTOM_PX, y1: CANVAS_HEIGHT, side: 1 }].forEach(({ y0, y1, side }) => {
-    const roofEdgeY = side === 0 ? y0 + 6 : y1 - 6; // near the outer roofline, not the field
-
-    // Lower deck: the two-thirds closest to the field.
-    const lowerH = (y1 - y0) * 0.62;
-    const lowerY = side === 0 ? y1 - lowerH : y0;
-    ctx.fillStyle = '#17293b';
-    ctx.fillRect(0, lowerY, CANVAS_WIDTH, lowerH);
-    drawSeatedDeck(0, lowerY, CANVAS_WIDTH, lowerH, true, side * 97);
-
-    // Roof shadow line between decks.
-    const upperY0 = y0;
-    const upperY1 = lowerY;
-    ctx.fillStyle = '#070d13';
-    ctx.fillRect(0, side === 0 ? upperY1 - 2 : upperY1, CANVAS_WIDTH, 2);
-
-    // Upper deck: the outer third, a touch darker (further from the lights).
-    const upperH = upperY1 - upperY0;
-    ctx.fillStyle = '#101c29';
-    ctx.fillRect(0, upperY0, CANVAS_WIDTH, upperH);
-    drawSeatedDeck(0, upperY0, CANVAS_WIDTH, upperH, true, side * 97 + 1000);
-
-    // Roof cap along the very outer edge.
-    ctx.fillStyle = '#050a0f';
-    ctx.fillRect(0, side === 0 ? 0 : CANVAS_HEIGHT - 4, CANVAS_WIDTH, 4);
-
-    // Light standards spaced along the roofline.
-    for (let lx = 60; lx < CANVAS_WIDTH; lx += 150) {
-      const ly = roofEdgeY;
-      ctx.strokeStyle = '#5a6672';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(lx - 10, ly);
-      ctx.lineTo(lx + 10, ly);
-      ctx.stroke();
-      ctx.fillStyle = '#eef3f8';
-      ctx.beginPath();
-      ctx.arc(lx, ly, 2.4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
+  [{ y0: 0, y1: FIELD_TOP_PX }, { y0: FIELD_BOTTOM_PX, y1: CANVAS_HEIGHT }].forEach(({ y0, y1 }) => {
+    drawCrowdBand(0, y0, CANVAS_WIDTH, y1 - y0);
     // Low wall separating the stands from the field of play.
     ctx.fillStyle = '#e4e4e4';
-    ctx.fillRect(0, side === 0 ? y1 - 3 : y0, CANVAS_WIDTH, 3);
+    ctx.fillRect(0, y0 === 0 ? y1 - 3 : y0, CANVAS_WIDTH, 3);
   });
 }
 
@@ -1025,37 +979,15 @@ function drawField() {
     ctx.lineTo(goalScreenX, FIELD_BOTTOM_PX);
     ctx.stroke();
 
-    // Stadium structure behind the end zone — the same tiered-deck
-    // language as the sidelines (lower deck / roof line / upper deck /
-    // roof cap / light standards), so the whole thing reads as one
-    // continuous bowl wrapping around the field rather than a flat wall
+    // Stadium crowd behind the end zone — the same flat crowd-band language
+    // as the sidelines, so the whole thing reads as one consistent, simple
+    // structure wrapping around the field rather than a different style
     // stuck on behind the goal line. Anchored to the goal line so it
     // scrolls into view exactly as the runner closes in on it.
     const deckRight = ezLeft;
-    const deckSplit = deckRight - STADIUM_DECK_DEPTH_PX * 0.58;
-    const roofRight = deckRight - STADIUM_DECK_DEPTH_PX;
-    const roofLeft = roofRight - STADIUM_ROOF_DEPTH_PX;
+    const deckLeft = deckRight - STADIUM_CROWD_DEPTH_PX;
     if (deckRight > -20) {
-      ctx.fillStyle = '#17293b';
-      ctx.fillRect(deckSplit, 0, deckRight - deckSplit, CANVAS_HEIGHT);
-      drawSeatedDeck(deckSplit, 0, deckRight - deckSplit, CANVAS_HEIGHT, false, 2000);
-      ctx.fillStyle = '#070d13';
-      ctx.fillRect(deckSplit - 2, 0, 2, CANVAS_HEIGHT);
-      ctx.fillStyle = '#101c29';
-      ctx.fillRect(roofRight, 0, deckSplit - roofRight, CANVAS_HEIGHT);
-      drawSeatedDeck(roofRight, 0, deckSplit - roofRight, CANVAS_HEIGHT, false, 3000);
-      ctx.fillStyle = '#050a0f';
-      ctx.fillRect(roofLeft, 0, roofRight - roofLeft, CANVAS_HEIGHT);
-      for (let ly = FIELD_TOP_PX + 30; ly < FIELD_BOTTOM_PX; ly += 90) {
-        ctx.strokeStyle = '#5a6672';
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.moveTo(roofLeft + 4, ly);
-        ctx.lineTo(roofLeft - 14, ly);
-        ctx.stroke();
-        ctx.fillStyle = '#eef3f8';
-        ctx.fillRect(roofLeft - 19, ly - 6, 7, 12);
-      }
+      drawCrowdBand(deckLeft, 0, deckRight - deckLeft, CANVAS_HEIGHT);
     }
   }
 
@@ -1162,7 +1094,7 @@ function drawGoalPost() {
 // of one sprite sitting exactly on top of the other -- the two are often
 // only a yard or two apart in world space when the hold starts, close
 // enough on screen that one profile sprite fully hides the other.
-const ENGAGE_DRAW_OFFSET_PX = 5;
+const ENGAGE_DRAW_OFFSET_PX = 7; // a bit more than before now that SPRITE_SCALE makes each figure wider
 
 function drawRunner() {
   const x = screenXForward(runner.worldY);
