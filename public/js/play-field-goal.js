@@ -268,7 +268,7 @@ scene.add(kicker);
 // existing animation code above doesn't error on a model with no bones)
 // and stand the loaded model in the same spot instead.
 kicker.children.forEach((child) => { child.visible = false; });
-new GLTFLoader().load('/models/player-goat.glb', (gltf) => {
+new GLTFLoader().load('/models/player.glb', (gltf) => {
   const model = gltf.scene;
   // Real-world height from Rodin's own bounding box (~1.896) vs. this
   // figure's procedural height (helmet top ~2.12) -- scale up to match.
