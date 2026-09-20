@@ -261,21 +261,111 @@ const kicker = buildFigure({
 kicker.position.x = KICKER_SIDE_OFFSET;
 scene.add(kicker);
 
-// Swap the procedural kicker figure for the Rodin-generated .glb model.
-// It has no skeleton, so it's not wired to the run-up/kick leg animation --
-// the legs won't move, it just stands in place for the whole kick. Hide the
-// procedural parts (but leave the group/legPivots structure intact so the
-// existing animation code above doesn't error on a model with no bones)
-// and stand the loaded model in the same spot instead.
+// Swap the procedural kicker figure for the Rodin-generated, Mixamo-rigged
+// .glb model -- mesh, textures, a 65-joint skeleton, and one baked
+// animation ("Strike Forward Jog": a run-up into a real kicking motion)
+// all bundled in the one file. Hide the procedural parts (but leave the
+// group/legPivots structure intact so the OLD tween-based fallback below
+// still works if this model hasn't finished loading -- or fails to load --
+// by the time a kick starts) and stand the loaded model in the same spot.
+//
+// The clip has real baked root motion (the hips bone actually translates
+// through the animation, confirmed by sampling its world position frame by
+// frame), which performKick() below uses to drive the run-up instead of a
+// generic tween -- see calibrateKickAnimation() for how that's extracted.
 kicker.children.forEach((child) => { child.visible = false; });
-new GLTFLoader().load('/models/player.glb', (gltf) => {
+new GLTFLoader().load('/models/player-kick.glb', (gltf) => {
   const model = gltf.scene;
   // Real-world height from Rodin's own bounding box (~1.896) vs. this
   // figure's procedural height (helmet top ~2.12) -- scale up to match.
   model.scale.setScalar(2.12 / 1.896);
   model.rotation.y = Math.PI; // face downfield (-z), like the procedural figure
   kicker.add(model);
-}, undefined, (err) => console.error('preview model load failed', err));
+
+  const clip = gltf.animations[0];
+  if (!clip) { console.warn('player-kick.glb has no animation clip -- falling back to the procedural tween'); return; }
+  let hips = null;
+  model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') hips = o; });
+  if (!hips) { console.warn('no hips bone found in player-kick.glb -- falling back to the procedural tween'); return; }
+
+  const mixer = new THREE.AnimationMixer(model);
+  const action = mixer.clipAction(clip);
+  action.clampWhenFinished = true;
+  action.setLoop(THREE.LoopOnce);
+
+  kicker.userData.kickAnim = calibrateKickAnimation({ kicker, model, mixer, action, clip, hips });
+}, undefined, (err) => console.error('kicker model load failed', err));
+
+// The clip's own root motion doesn't travel the exact distance/direction
+// this scene's run-up needs (real kickers set up wherever the scene's
+// camera framing wants them, not wherever the mocap actor happened to be
+// standing), so this samples the hips bone's real per-frame displacement
+// once, up front, with the kicker at a neutral identity transform -- then
+// performKick() reuses that as a progress-over-time curve to drive a
+// straight-line lerp from the run-up's actual start/plant positions. This
+// keeps the organic acceleration/deceleration feel and correct foot-plant
+// timing of the real mocap (no foot-sliding), without needing the raw clip
+// to happen to travel the right distance in the right direction.
+//
+// CONTACT_TIME is where the kicking foot is near its most forward/highest
+// reach in the swing (found by sampling mixamorigRightFoot's position
+// relative to the hips across the clip) -- close enough to real "the foot
+// meets the ball" for the ball-launch trigger below. SEQUENCE_END is a bit
+// past that, for a brief visible follow-through before the rest of
+// performKick() takes over (camera/ball flight/referee signal).
+const CONTACT_TIME = 0.55;
+const SEQUENCE_END = 1.0;
+
+function calibrateKickAnimation({ kicker, model, mixer, action, clip, hips }) {
+  const hipsBindLocalPos = hips.position.clone();
+
+  // Run the calibration with the whole group at a clean identity transform
+  // so the hips' world position directly reflects only the animation's own
+  // motion, not wherever the kicker actually happens to be standing right
+  // now -- restored below once the sample table is built.
+  const savedPos = kicker.position.clone();
+  const savedRot = kicker.rotation.y;
+  kicker.position.set(0, 0, 0);
+  kicker.rotation.y = 0;
+
+  action.paused = false;
+  action.play();
+  const start = new THREE.Vector3();
+  hips.getWorldPosition(start);
+
+  const SAMPLE_STEP = 1 / 60;
+  const table = []; // [{t, dist}] -- cumulative straight-line distance traveled from t=0
+  const p = new THREE.Vector3();
+  for (let t = 0; t <= SEQUENCE_END + SAMPLE_STEP; t += SAMPLE_STEP) {
+    mixer.setTime(Math.min(t, clip.duration));
+    model.updateMatrixWorld(true);
+    hips.getWorldPosition(p);
+    table.push({ t, dist: p.distanceTo(start) });
+  }
+  const distAtContact = table.find((s) => s.t >= CONTACT_TIME)?.dist || table[table.length - 1].dist;
+
+  // Reset back to a stopped, t=0 state and hand the scene back the way
+  // performKick() expects to find it before a real kick starts.
+  action.stop();
+  mixer.setTime(0);
+  hips.position.copy(hipsBindLocalPos);
+  kicker.position.copy(savedPos);
+  kicker.rotation.y = savedRot;
+
+  // progress(t): 0..1 fraction of the way to the plant position, by real
+  // mocap pacing rather than a generic ease curve. Flat 1 past CONTACT_TIME
+  // -- the plant foot doesn't keep sliding forward through the follow-through.
+  function progress(t) {
+    if (t <= 0) return 0;
+    if (t >= CONTACT_TIME) return 1;
+    // table is sampled at a fixed step, so this index is a direct lookup
+    // (with a clamp for float error right at the edges).
+    const i = Math.min(table.length - 1, Math.max(0, Math.round(t / SAMPLE_STEP)));
+    return Math.min(1, table[i].dist / distAtContact);
+  }
+
+  return { mixer, action, clip, hips, hipsBindLocalPos, progress };
+}
 
 // Referees: proper NFL look — horizontal black/white striped shirt
 // (including sleeves), solid black pants/knickers, and a white cap rather
@@ -1225,6 +1315,12 @@ function resetPose() {
   kicker.rotation.y = 0;
   kicker.userData.legPivots.left.rotation.x = 0;
   kicker.userData.legPivots.right.rotation.x = 0;
+  const anim = kicker.userData.kickAnim;
+  if (anim) {
+    anim.action.stop();
+    anim.mixer.setTime(0);
+    anim.hips.position.copy(anim.hipsBindLocalPos);
+  }
   tee.visible = true;
   ball.visible = true;
   ball.position.x = 0;
@@ -1256,75 +1352,112 @@ async function performKick(outcome, distanceYards) {
   const ballStartZ = ball.position.z;
   const startPos = kicker.position.clone();
   const plantPos = { x: -0.22, z: ballStartZ + 0.1 };
-
-  // Phase 1: jog up to the ball at a forward/right angle (not straight
-  // ahead) — both the path itself (a real diagonal, not just a small
-  // sideways drift) and the body's own facing angle, which straightens out
-  // to square up with the ball right as he arrives.
   const approachAngle = -0.45; // angled toward the ball at the start of the run
-  await tween(600, (u) => {
-    const t = easeInQuad(u); // accelerate into the approach, like a real run-up
-    kicker.position.x = lerp(startPos.x, plantPos.x, t);
-    kicker.position.z = lerp(startPos.z, plantPos.z, t);
-    kicker.position.y = Math.abs(Math.sin(u * Math.PI * 3)) * 0.05;
-    kicker.rotation.y = lerp(approachAngle, 0, easeOutQuad(u));
-    const stride = Math.sin(u * Math.PI * 6);
-    kicker.userData.legPivots.left.rotation.x = stride * 0.5;
-    kicker.userData.legPivots.right.rotation.x = -stride * 0.5;
-  });
-  kicker.position.y = 0;
-  kicker.rotation.y = 0;
 
-  // Phase 2: plant the left leg, cock the right leg back, then swing it
-  // through. Contact happens partway through the forward swing.
-  let contactFired = false;
   let flightAndFollowUp = Promise.resolve();
-  await tween(260, (u) => {
-    kicker.userData.legPivots.left.rotation.x = -0.15;
-    const swing = u < 0.35
-      ? lerp(0, -0.7, easeOutQuad(u / 0.35))
-      : lerp(-0.7, 1.1, easeOutQuad((u - 0.35) / 0.65));
-    kicker.userData.legPivots.right.rotation.x = swing;
 
-    if (!contactFired && u >= 0.55) {
-      contactFired = true;
-      tee.visible = false;
-      // A short kick never reaches the goalpost, so following the ball
-      // there would just leave it stranded tiny and distant in the same
-      // frame as the posts — easier to just watch it from the kick cam,
-      // where it's actually close to the camera the whole time.
-      const followBall = outcome !== 'short';
-      if (followBall) {
-        cameraLocked = true; // hand the camera fully to this animation until the next renderKick()'s resetPose() gives it back
-        // The wind indicator's position tracks the kick-cam, not wherever
-        // the camera ends up once it follows the ball to the end zone —
-        // left up, it'd hang somewhere nonsensical relative to the new
-        // view (or right behind the posts) for the rest of the kick.
-        if (windArrow) windArrow.visible = false;
-        if (windLabel) windLabel.visible = false;
-      }
-      const camStartPos = camera.position.clone();
-      const camStartTarget = new THREE.Vector3(0, 2, GOAL_LINE_Z + 10); // matches updateDistance()'s kick-cam target
-      const flight = ballFlightFor(outcome, new THREE.Vector3(ball.position.x, ball.position.y, ballStartZ), distanceYards);
-      const ballFlight = tween(flight.duration, (fu) => {
-        const p = bezier2(flight.p0, flight.p1, flight.p2, fu);
-        ball.position.copy(p);
-        ball.rotation.z += 0.5; // spiral spin, purely cosmetic
-
-        if (followBall) {
-          // Camera eases from the kick cam to the end-zone view over the
-          // same span as the ball's flight, so it arrives right as the
-          // ball does.
-          const ct = easeOutQuad(fu);
-          camera.position.lerpVectors(camStartPos, END_CAM_POS, ct);
-          const lookTarget = new THREE.Vector3().lerpVectors(camStartTarget, END_CAM_TARGET, ct);
-          camera.lookAt(lookTarget);
-        }
-      });
-      const refSignal = wait(flight.duration * 0.6).then(() => animateRefereeSignal(outcome === 'made'));
-      flightAndFollowUp = Promise.all([ballFlight, refSignal]);
+  // Shared by both the animated and procedural-fallback paths below: tee
+  // disappears, camera hands off to follow the ball (unless it's a short
+  // kick that never reaches the goalpost -- following it there would just
+  // leave it stranded tiny and distant in the same frame as the posts, so
+  // a short kick just stays on the kick cam instead), wind indicator hides,
+  // ball flies, referee signals the result partway through the flight.
+  function fireContact() {
+    tee.visible = false;
+    const followBall = outcome !== 'short';
+    if (followBall) {
+      cameraLocked = true; // hand the camera fully to this animation until the next renderKick()'s resetPose() gives it back
+      // The wind indicator's position tracks the kick-cam, not wherever the
+      // camera ends up once it follows the ball to the end zone — left up,
+      // it'd hang somewhere nonsensical relative to the new view (or right
+      // behind the posts) for the rest of the kick.
+      if (windArrow) windArrow.visible = false;
+      if (windLabel) windLabel.visible = false;
     }
-  });
+    const camStartPos = camera.position.clone();
+    const camStartTarget = new THREE.Vector3(0, 2, GOAL_LINE_Z + 10); // matches updateDistance()'s kick-cam target
+    const flight = ballFlightFor(outcome, new THREE.Vector3(ball.position.x, ball.position.y, ballStartZ), distanceYards);
+    const ballFlight = tween(flight.duration, (fu) => {
+      const p = bezier2(flight.p0, flight.p1, flight.p2, fu);
+      ball.position.copy(p);
+      ball.rotation.z += 0.5; // spiral spin, purely cosmetic
+
+      if (followBall) {
+        // Camera eases from the kick cam to the end-zone view over the same
+        // span as the ball's flight, so it arrives right as the ball does.
+        const ct = easeOutQuad(fu);
+        camera.position.lerpVectors(camStartPos, END_CAM_POS, ct);
+        const lookTarget = new THREE.Vector3().lerpVectors(camStartTarget, END_CAM_TARGET, ct);
+        camera.lookAt(lookTarget);
+      }
+    });
+    const refSignal = wait(flight.duration * 0.6).then(() => animateRefereeSignal(outcome === 'made'));
+    flightAndFollowUp = Promise.all([ballFlight, refSignal]);
+  }
+
+  const anim = kicker.userData.kickAnim;
+  if (anim) {
+    // Real mocap run-up + kick, driven by the clip's own pacing (see
+    // calibrateKickAnimation() above) instead of a generic tween. Position
+    // is a straight-line lerp toward the plant spot using the clip's own
+    // progress-over-time curve; the hips bone's baked translation is reset
+    // to its bind pose every frame so it doesn't ALSO move the character on
+    // top of that -- only its rotation (the actual stride motion) survives.
+    let contactFired = false;
+    anim.action.reset();
+    anim.action.play();
+    await tween(SEQUENCE_END * 1000, (u) => {
+      const clipTime = u * SEQUENCE_END;
+      anim.mixer.setTime(Math.min(clipTime, anim.clip.duration));
+      anim.hips.position.copy(anim.hipsBindLocalPos);
+
+      const t = anim.progress(clipTime);
+      kicker.position.x = lerp(startPos.x, plantPos.x, t);
+      kicker.position.z = lerp(startPos.z, plantPos.z, t);
+      kicker.rotation.y = lerp(approachAngle, 0, t);
+
+      if (!contactFired && clipTime >= CONTACT_TIME) {
+        contactFired = true;
+        fireContact();
+      }
+    });
+  } else {
+    // Fallback for when the animated model hasn't loaded (or failed to) by
+    // the time a kick starts -- the original hand-built leg-pivot tweens.
+
+    // Phase 1: jog up to the ball at a forward/right angle (not straight
+    // ahead) — both the path itself (a real diagonal, not just a small
+    // sideways drift) and the body's own facing angle, which straightens
+    // out to square up with the ball right as he arrives.
+    await tween(600, (u) => {
+      const t = easeInQuad(u); // accelerate into the approach, like a real run-up
+      kicker.position.x = lerp(startPos.x, plantPos.x, t);
+      kicker.position.z = lerp(startPos.z, plantPos.z, t);
+      kicker.position.y = Math.abs(Math.sin(u * Math.PI * 3)) * 0.05;
+      kicker.rotation.y = lerp(approachAngle, 0, easeOutQuad(u));
+      const stride = Math.sin(u * Math.PI * 6);
+      kicker.userData.legPivots.left.rotation.x = stride * 0.5;
+      kicker.userData.legPivots.right.rotation.x = -stride * 0.5;
+    });
+    kicker.position.y = 0;
+    kicker.rotation.y = 0;
+
+    // Phase 2: plant the left leg, cock the right leg back, then swing it
+    // through. Contact happens partway through the forward swing.
+    let contactFired = false;
+    await tween(260, (u) => {
+      kicker.userData.legPivots.left.rotation.x = -0.15;
+      const swing = u < 0.35
+        ? lerp(0, -0.7, easeOutQuad(u / 0.35))
+        : lerp(-0.7, 1.1, easeOutQuad((u - 0.35) / 0.65));
+      kicker.userData.legPivots.right.rotation.x = swing;
+
+      if (!contactFired && u >= 0.55) {
+        contactFired = true;
+        fireContact();
+      }
+    });
+  }
 
   await flightAndFollowUp;
   showResultPopup(outcome);
