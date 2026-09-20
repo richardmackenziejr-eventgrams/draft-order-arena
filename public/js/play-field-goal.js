@@ -9,6 +9,7 @@
 // split as every other game's play-*.js.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const instanceId = qs('instance');
 const leagueId = qs('league');
@@ -259,6 +260,22 @@ const kicker = buildFigure({
 });
 kicker.position.x = KICKER_SIDE_OFFSET;
 scene.add(kicker);
+
+// Swap the procedural kicker figure for the Rodin-generated .glb model.
+// It has no skeleton, so it's not wired to the run-up/kick leg animation --
+// the legs won't move, it just stands in place for the whole kick. Hide the
+// procedural parts (but leave the group/legPivots structure intact so the
+// existing animation code above doesn't error on a model with no bones)
+// and stand the loaded model in the same spot instead.
+kicker.children.forEach((child) => { child.visible = false; });
+new GLTFLoader().load('/models/player-goat.glb', (gltf) => {
+  const model = gltf.scene;
+  // Real-world height from Rodin's own bounding box (~1.896) vs. this
+  // figure's procedural height (helmet top ~2.12) -- scale up to match.
+  model.scale.setScalar(2.12 / 1.896);
+  model.rotation.y = Math.PI; // face downfield (-z), like the procedural figure
+  kicker.add(model);
+}, undefined, (err) => console.error('preview model load failed', err));
 
 // Referees: proper NFL look — horizontal black/white striped shirt
 // (including sleeves), solid black pants/knickers, and a white cap rather
