@@ -312,9 +312,19 @@ new GLTFLoader().load('/models/player-kick.glb', (gltf) => {
 // relative to the hips across the clip) -- close enough to real "the foot
 // meets the ball" for the ball-launch trigger below. SEQUENCE_END is a bit
 // past that, for a brief visible follow-through before the rest of
-// performKick() takes over (camera/ball flight/referee signal).
+// performKick() takes over (camera/ball flight/referee signal). Both are in
+// clip-time seconds -- how far through the animation's own motion each
+// moment is, independent of how long that's stretched over in real time.
 const CONTACT_TIME = 0.55;
 const SEQUENCE_END = 1.0;
+
+// How long the run-up+kick actually takes on screen, in real milliseconds.
+// Kept separate from SEQUENCE_END (the clip-time range above) specifically
+// so this can be tuned for feel -- at 1:1 (SEQUENCE_END * 1000) it played
+// the full motion in exactly 1 real second, which read as too rushed;
+// stretching it out here slows the whole run-up+kick uniformly (still
+// hitting the same poses in the same order, just given more time to read).
+const PLAYBACK_DURATION_MS = 1700;
 
 function calibrateKickAnimation({ kicker, model, mixer, action, clip, hips }) {
   const hipsBindLocalPos = hips.position.clone();
@@ -1406,7 +1416,7 @@ async function performKick(outcome, distanceYards) {
     let contactFired = false;
     anim.action.reset();
     anim.action.play();
-    await tween(SEQUENCE_END * 1000, (u) => {
+    await tween(PLAYBACK_DURATION_MS, (u) => {
       const clipTime = u * SEQUENCE_END;
       anim.mixer.setTime(Math.min(clipTime, anim.clip.duration));
       anim.hips.position.copy(anim.hipsBindLocalPos);
