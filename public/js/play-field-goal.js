@@ -1094,7 +1094,7 @@ function showFrozenResult(k) {
   const flight = ballFlightFor(attempt.outcome, startPos, k.distance);
   ball.position.copy(flight.p2);
 
-  const followBall = attempt.outcome !== 'short';
+  const followBall = true; // every outcome now flies far enough to be worth following to the end zone
   if (followBall) {
     cameraLocked = true;
     controls.enabled = false;
@@ -1260,13 +1260,16 @@ function ballFlightFor(outcome, startPos, distanceYards) {
   const peakHeight = 5 + distanceYards * 0.1;
 
   if (outcome === 'short') {
-    const travel = (startPos.z - goalpostZ) * 0.45; // falls well short of the posts
-    const endZ = startPos.z - travel;
+    // Flies like a real, full-strength attempt -- same arc height and
+    // pacing as a made kick -- right up until it runs out of leg a few
+    // yards shy of the goal line and drops, instead of visibly dying in
+    // the air just off the tee.
+    const endZ = goalpostZ + 5; // a few yards short of the posts
     return {
       p0: startPos.clone(),
-      p1: new THREE.Vector3(startPos.x * 0.5, peakHeight * 0.45, (startPos.z + endZ) / 2),
-      p2: new THREE.Vector3(startPos.x * 0.3, 0.15, endZ),
-      duration: 650 + distanceYards * 4,
+      p1: new THREE.Vector3(startPos.x * 0.5, peakHeight, (startPos.z + endZ) / 2),
+      p2: new THREE.Vector3(startPos.x * 0.3, 0.2, endZ),
+      duration: (900 + distanceYards * 6) * 1.6,
     };
   }
 
@@ -1367,14 +1370,13 @@ async function performKick(outcome, distanceYards) {
   let flightAndFollowUp = Promise.resolve();
 
   // Shared by both the animated and procedural-fallback paths below: tee
-  // disappears, camera hands off to follow the ball (unless it's a short
-  // kick that never reaches the goalpost -- following it there would just
-  // leave it stranded tiny and distant in the same frame as the posts, so
-  // a short kick just stays on the kick cam instead), wind indicator hides,
-  // ball flies, referee signals the result partway through the flight.
+  // disappears, camera hands off to follow the ball to the end zone, wind
+  // indicator hides, ball flies, referee signals the result partway
+  // through the flight. Every outcome (including 'short') now flies far
+  // enough down the field to be worth following there.
   function fireContact() {
     tee.visible = false;
-    const followBall = outcome !== 'short';
+    const followBall = true;
     if (followBall) {
       cameraLocked = true; // hand the camera fully to this animation until the next renderKick()'s resetPose() gives it back
       // The wind indicator's position tracks the kick-cam, not wherever the
