@@ -324,7 +324,7 @@ const SEQUENCE_END = 1.0;
 // the full motion in exactly 1 real second, which read as too rushed;
 // stretching it out here slows the whole run-up+kick uniformly (still
 // hitting the same poses in the same order, just given more time to read).
-const PLAYBACK_DURATION_MS = 1700;
+const PLAYBACK_DURATION_MS = 1200;
 
 function calibrateKickAnimation({ kicker, model, mixer, action, clip, hips }) {
   const hipsBindLocalPos = hips.position.clone();
