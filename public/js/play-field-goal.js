@@ -893,9 +893,10 @@ function rebuildWindIndicator() {
 // single-sided planes back to back rather than one DoubleSide plane — a
 // DoubleSide material shows the same texture on both faces unmirrored,
 // which reads backwards from whichever side the UVs weren't drawn for.
-// Needs to read correctly from both the kick cam (Short stays there,
-// looking at the front of the post) and the end-zone cam (everything
-// else, looking at the back of it after following the ball there).
+// Needs to read correctly from both the kick cam (looking at the front of
+// the post, where the camera still is right as the popup appears) and the
+// end-zone cam (looking at the back of it, where every outcome's camera
+// ends up once it finishes following the ball there).
 function resultPopupTexture(text, color) {
   const w = 640, h = 260;
   const canvas = document.createElement('canvas');
@@ -923,13 +924,10 @@ function showResultPopup(outcome) {
   const made = outcome === 'made';
   const text = made ? 'GOOD!' : 'NO GOOD';
   const color = made ? '#4ade80' : '#ef4444';
-  // Short is the one outcome that doesn't follow the ball to the end-zone
-  // cam — the camera stays back on the kick cam, roughly 4-5x farther from
-  // the goalpost than the end-zone cam ends up for every other outcome, so
-  // a card sized right for that close-up view reads as tiny from here.
-  // Scaled up to match, even though it now dwarfs the goalpost itself.
-  const scale = outcome === 'short' ? 4.5 : 1;
-  const geo = new THREE.PlaneGeometry(4.6 * scale, 1.9 * scale);
+  // Every outcome (including 'short') now follows the ball to the same
+  // close-up end-zone cam, so one size fits all -- no more special-casing
+  // 'short' for a camera distance it doesn't use anymore.
+  const geo = new THREE.PlaneGeometry(4.6, 1.9);
 
   const front = new THREE.Mesh(geo, resultPopupTexture(text, color));
   front.position.set(0, 5, GOAL_LINE_Z - 2 + 0.02); // faces +z, toward the kick cam / kicker side
