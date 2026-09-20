@@ -447,11 +447,86 @@ function buildReferee() {
   return g;
 }
 
+// Signal-pose arm rotations for the Mixamo-rigged referee model, relative
+// to its own bind pose (a T-pose -- arms held straight out to the sides,
+// which is why these deltas look different from the procedural armPivots'
+// numbers below, which hang from a rest pose of arms straight DOWN).
+// Found empirically (see the local three-test harness this was tuned in):
+// local X swings the arm's elevation (bind + PI/2 = down at the sides,
+// bind - PI/2 = straight up overhead), local Z swings it forward/toward
+// the body's centerline (bind + ~1.1 = crossed in front of the chest).
+// Both arms use the SAME sign for both axes despite being mirrored bones
+// -- Mixamo's left/right arm bones are set up so matching signs produce
+// mirrored motion, not opposite ones.
+const REF_ARM_IDLE_X = Math.PI / 2;
+const REF_ARM_UP_X = -Math.PI / 2;
+const REF_ARM_CROSSED_X = -0.5;
+const REF_ARM_CROSSED_Z = 1.1;
+
+function setRefereeIdle(ref) {
+  ref.userData.armPivots.left.rotation.set(0, 0, 0);
+  ref.userData.armPivots.right.rotation.set(0, 0, 0);
+  const anim = ref.userData.refAnim;
+  if (anim) {
+    anim.leftArm.rotation.set(anim.bindLeft.x + REF_ARM_IDLE_X, anim.bindLeft.y, anim.bindLeft.z);
+    anim.rightArm.rotation.set(anim.bindRight.x + REF_ARM_IDLE_X, anim.bindRight.y, anim.bindRight.z);
+  }
+}
+
+// The referee model loads asynchronously, so it can finish AFTER
+// showFrozenResult() has already set the procedural armPivots to a
+// specific result pose (a page reload landing on an already-resolved
+// kick) -- calling setRefereeIdle() unconditionally at that point would
+// clobber it back to idle. Instead, read whatever pose the (synchronous,
+// always-correct) armPivots already ended up in and apply the matching
+// bone pose, without touching the armPivots themselves.
+function syncRefereeAnimToCurrentPose(ref) {
+  const anim = ref.userData.refAnim;
+  if (!anim) return;
+  const { leftArm, rightArm, bindLeft, bindRight } = anim;
+  const pivotX = ref.userData.armPivots.left.rotation.x;
+  const deltaX = Math.abs(pivotX + Math.PI) < 0.01 ? REF_ARM_UP_X // made: pivots at -PI
+    : Math.abs(pivotX) < 0.01 ? REF_ARM_IDLE_X // idle: pivots at 0
+    : REF_ARM_CROSSED_X; // miss (resolved): pivots at -1.3
+  leftArm.rotation.set(bindLeft.x + deltaX, bindLeft.y, bindLeft.z);
+  rightArm.rotation.set(bindRight.x + deltaX, bindRight.y, bindRight.z);
+}
+
 const referees = [-1, 1].map((side) => {
   const ref = buildReferee();
   ref.position.set(side * (UPRIGHT_HALF_SPAN + 1.6), 0, GOAL_LINE_Z + 3);
   ref.rotation.y = Math.PI; // face back toward the kicker
   scene.add(ref);
+
+  // Swap the procedural referee for the Rodin-generated, Mixamo-rigged
+  // model, same pattern as the kicker -- hide the procedural parts (but
+  // leave the group/armPivots structure intact so the fallback animation
+  // below still works if this hasn't loaded, or fails to, in time) and
+  // stand the loaded model in the same spot.
+  ref.children.forEach((child) => { child.visible = false; });
+  new GLTFLoader().load('/models/referee.glb', (gltf) => {
+    const model = gltf.scene;
+    // Real-world height from Rodin's own bounding box (~1.898) vs. this
+    // figure's procedural height (cap top ~2.17) -- scale up to match.
+    model.scale.setScalar(2.17 / 1.898);
+    model.rotation.y = Math.PI; // Rodin's default facing, same correction the kicker model needed
+    ref.add(model);
+
+    let leftArm = null, rightArm = null;
+    model.traverse((o) => {
+      if (o.name === 'mixamorigLeftArm') leftArm = o;
+      if (o.name === 'mixamorigRightArm') rightArm = o;
+    });
+    if (!leftArm || !rightArm) { console.warn('referee.glb missing expected arm bones -- falling back to the procedural signal animation'); return; }
+
+    ref.userData.refAnim = {
+      leftArm, rightArm,
+      bindLeft: leftArm.rotation.clone(),
+      bindRight: rightArm.rotation.clone(),
+    };
+    syncRefereeAnimToCurrentPose(ref); // starts in bind pose (T-pose) -- match whatever pose the scene is actually in by now
+  }, undefined, (err) => console.error('referee model load failed', err));
+
   return ref;
 });
 
@@ -1111,6 +1186,20 @@ function showFrozenResult(k) {
       left.rotation.set(-1.3, 0, -1.4);
       right.rotation.set(-1.3, 0, 1.4);
     }
+    const anim = ref.userData.refAnim;
+    if (anim) {
+      const { leftArm, rightArm, bindLeft, bindRight } = anim;
+      if (attempt.made) {
+        leftArm.rotation.set(bindLeft.x + REF_ARM_UP_X, bindLeft.y, bindLeft.z);
+        rightArm.rotation.set(bindRight.x + REF_ARM_UP_X, bindRight.y, bindRight.z);
+      } else {
+        // Matches animateRefereeSignal()'s miss-signal end state: elevation
+        // stays at the crossed value, Z resolved back to the bind pose's
+        // arms-wide spread.
+        leftArm.rotation.set(bindLeft.x + REF_ARM_CROSSED_X, bindLeft.y, bindLeft.z);
+        rightArm.rotation.set(bindRight.x + REF_ARM_CROSSED_X, bindRight.y, bindRight.z);
+      }
+    }
   });
 
   showResultPopup(attempt.outcome);
@@ -1287,6 +1376,43 @@ function ballFlightFor(outcome, startPos, distanceYards) {
 // a cross-then-spread-wide wave for a miss.
 function animateRefereeSignal(made) {
   const promises = referees.map((ref) => {
+    const anim = ref.userData.refAnim;
+    if (anim) {
+      const { leftArm, rightArm, bindLeft, bindRight } = anim;
+      const fromLeftX = leftArm.rotation.x, fromLeftZ = leftArm.rotation.z;
+      const fromRightX = rightArm.rotation.x, fromRightZ = rightArm.rotation.z;
+
+      if (made) {
+        const toLeftX = bindLeft.x + REF_ARM_UP_X, toRightX = bindRight.x + REF_ARM_UP_X;
+        return tween(450, (u) => {
+          const t = easeOutQuad(u);
+          leftArm.rotation.x = lerp(fromLeftX, toLeftX, t);
+          rightArm.rotation.x = lerp(fromRightX, toRightX, t);
+        });
+      }
+      // Cross in front of the chest, then spread back out to the bind
+      // pose's arms-wide stance -- elevation stays at the crossed value
+      // through this second phase (matching the procedural version's
+      // shape below, where only the spread/Z motion happens in phase 2).
+      const crossedLeftX = bindLeft.x + REF_ARM_CROSSED_X, crossedLeftZ = bindLeft.z + REF_ARM_CROSSED_Z;
+      const crossedRightX = bindRight.x + REF_ARM_CROSSED_X, crossedRightZ = bindRight.z + REF_ARM_CROSSED_Z;
+      return tween(600, (u) => {
+        if (u < 0.5) {
+          const t = easeOutQuad(u / 0.5);
+          leftArm.rotation.x = lerp(fromLeftX, crossedLeftX, t);
+          leftArm.rotation.z = lerp(fromLeftZ, crossedLeftZ, t);
+          rightArm.rotation.x = lerp(fromRightX, crossedRightX, t);
+          rightArm.rotation.z = lerp(fromRightZ, crossedRightZ, t);
+        } else {
+          const t = easeOutQuad((u - 0.5) / 0.5);
+          leftArm.rotation.z = lerp(crossedLeftZ, bindLeft.z, t);
+          rightArm.rotation.z = lerp(crossedRightZ, bindRight.z, t);
+        }
+      });
+    }
+
+    // Fallback for when the animated model hasn't loaded (or failed to) by
+    // the time a result fires -- the original hand-built arm-pivot tweens.
     const { left, right } = ref.userData.armPivots;
     if (made) {
       return tween(450, (u) => {
@@ -1338,10 +1464,7 @@ function resetPose() {
   ball.position.y = BALL_REST_Y;
   ball.scale.set(1, 1, 1.5);
   ball.rotation.set(Math.PI / 2, 0, 0);
-  referees.forEach((ref) => {
-    ref.userData.armPivots.left.rotation.set(0, 0, 0);
-    ref.userData.armPivots.right.rotation.set(0, 0, 0);
-  });
+  referees.forEach(setRefereeIdle);
   if (windArrow) windArrow.visible = true;
   if (windLabel) windLabel.visible = true;
 }
