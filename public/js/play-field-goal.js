@@ -582,9 +582,9 @@ const STAND_DEPTH = NEAR_Z - FAR_Z + 30;
 // empty sky — closes out the "bowl" on the one side that was still open.
 const BACK_STAND_Z = FAR_Z - 4;
 
-// Real curved 3D stand sections (Rodin-generated from a ChatGPT crowd
-// photo, via image-to-3D) tiled along each stand's length, replacing a
-// flat crowd-photo-textured box. The model is a single static mesh (no
+// Real 3D stand sections (Rodin-generated from a ChatGPT crowd photo, via
+// image-to-3D) tiled along each stand's length, replacing a flat
+// crowd-photo-textured box. The model is a single static mesh (no
 // skeleton), so gltf.scene.clone() correctly shares its geometry/material/
 // textures across every tile instead of duplicating them in memory.
 //
@@ -592,9 +592,14 @@ const BACK_STAND_Z = FAR_Z - 4;
 // real bounding-box height to match STAND_HEIGHT, so its proportions stay
 // true to the source photo -- tiled side by side along the needed length
 // instead, the same way the earlier flat-texture version repeated.
-const STAND_MODEL_BBOX = { w: 1.893912971019745, h: 0.6248829960823059, d: 0.8104550540447235 };
+const STAND_MODEL_BBOX = { w: 1.8945350050926208, h: 0.5554050207138062, d: 0.9296950101852417 };
 const STAND_MODEL_SCALE = STAND_HEIGHT / STAND_MODEL_BBOX.h;
 const STAND_MODEL_TILE_LEN = STAND_MODEL_BBOX.w * STAND_MODEL_SCALE;
+// Local-Z offset from the model's pivot to its crowd-facing (front) edge --
+// used below to chain tiles by their front edge instead of their
+// centerline (see placeSweptTile).
+const STAND_MODEL_FRONT_LOCAL_Z = 0.4630330204963684;
+const STAND_MODEL_FRONT_OFFSET = STAND_MODEL_FRONT_LOCAL_Z * STAND_MODEL_SCALE;
 
 new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
   function addTile(x, z, rotationY) {
@@ -605,25 +610,74 @@ new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
     scene.add(tile);
   }
 
-  // Side stands: tile along Z (the sideline) to cover the same length the
-  // old box did, facing inward toward the field.
-  const sideZCenter = (NEAR_Z + FAR_Z) / 2;
-  const nSideTiles = Math.ceil(STAND_DEPTH / STAND_MODEL_TILE_LEN);
-  [-1, 1].forEach((side) => {
-    const standX = side * (FIELD_HALF_WIDTH + 6);
-    const facingRotationY = side === -1 ? Math.PI / 2 : -Math.PI / 2;
-    for (let i = 0; i < nSideTiles; i++) {
-      const zOffset = (i - (nSideTiles - 1) / 2) * STAND_MODEL_TILE_LEN;
-      addTile(standX, sideZCenter + zOffset, facingRotationY);
-    }
-  });
-
-  // Back stand: tile along X to cover the width behind the goalpost.
-  const nBackTiles = Math.ceil((FIELD_HALF_WIDTH * 2 + 12) / STAND_MODEL_TILE_LEN);
-  for (let i = 0; i < nBackTiles; i++) {
-    const xOffset = (i - (nBackTiles - 1) / 2) * STAND_MODEL_TILE_LEN;
-    addTile(xOffset, BACK_STAND_Z, 0);
+  // Curved corner behind each end of the goalpost, sweeping into the
+  // sideline stand. A rigid tile has one rotational degree of freedom
+  // (rotationY), which controls BOTH which way it faces (crowd texture
+  // toward the field) and where its edges are (the axis the next tile in
+  // the row sits along). At rotationY=0 a tile faces +Z with its edges
+  // running along X (the back-stand orientation); at rotationY=+-90deg it
+  // faces +-X with its edges running along Z (the side-stand orientation).
+  // Sweeping rotationY smoothly between those IS the curve.
+  //
+  // Each tile's position is derived from where the PREVIOUS tile's actual
+  // outer edge landed after its own rotation -- never by rotating a tile
+  // left at an originally straight-line spacing. That's what guarantees no
+  // gap: rotating a tall tile around its own center pulls its roofline
+  // (far from the rotation axis at the base) apart from its neighbor's
+  // roofline even when the bases still roughly line up. That mistake
+  // shipped a visible gap in production once already (reverted in
+  // f4b2278).
+  //
+  // The chain tracks the tile's FRONT (crowd-facing) edge specifically,
+  // not its centerline. The model has real depth (~13 world units at this
+  // scale) -- at an angled seam, two tiles whose *centerlines* connect
+  // still have front faces that land in different places, because each
+  // tile's depth axis points a different way once rotated. Chaining on the
+  // front edge guarantees the visually-critical seam (the one every camera
+  // in this game actually looks at, from the field side) has no gap; any
+  // slack from the approximation lands on the backside, which no camera
+  // sees.
+  function placeSweptTile(edge, sweepDeg, mirror) {
+    const sweep = THREE.MathUtils.degToRad(sweepDeg);
+    const rotationY = mirror === 1 ? -sweep : sweep;
+    const dir = mirror === 1
+      ? new THREE.Vector3(Math.cos(sweep), 0, Math.sin(sweep))
+      : new THREE.Vector3(-Math.cos(sweep), 0, Math.sin(sweep));
+    const front = new THREE.Vector3(Math.sin(rotationY), 0, Math.cos(rotationY));
+    const frontEdgeCenter = edge.clone().addScaledVector(dir, STAND_MODEL_TILE_LEN / 2);
+    const origin = frontEdgeCenter.clone().addScaledVector(front, -STAND_MODEL_FRONT_OFFSET);
+    addTile(origin.x, origin.z, rotationY);
+    return edge.clone().addScaledVector(dir, STAND_MODEL_TILE_LEN);
   }
+
+  // mirror=+1 builds the right corner (standX positive), -1 the left --
+  // both start from the exact same seam point behind the center of the
+  // goalpost, so the two back tiles are guaranteed to meet there with no
+  // center gap.
+  function addCurvedCorner(mirror) {
+    // A real stand: straight directly behind the endzone, curving only at
+    // the corner where it turns to run down the sideline, then straight
+    // again for the rest of the sideline. Not a curve starting right at
+    // the goalpost -- the flat tile at 0deg is what keeps the section
+    // immediately behind the endzone reading as straight.
+    const RAMP_DEG = [0, 55, 90];
+    let edge = new THREE.Vector3(0, 0, BACK_STAND_Z);
+    RAMP_DEG.forEach((deg) => {
+      edge = placeSweptTile(edge, deg, mirror);
+    });
+    // Continue straight down the sideline (rotationY=+-90, same as the
+    // original flat side stand) until comfortably past the near edge of
+    // the visible field.
+    const targetZ = NEAR_Z + 10;
+    let guard = 0;
+    while (edge.z < targetZ && guard < 20) {
+      edge = placeSweptTile(edge, 90, mirror);
+      guard++;
+    }
+  }
+
+  addCurvedCorner(1);
+  addCurvedCorner(-1);
 }, undefined, (err) => console.error('stadium stand model load failed', err));
 
 // ---- Kick distance positioning ---------------------------------------------
