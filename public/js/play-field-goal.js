@@ -618,18 +618,11 @@ new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
     }
   });
 
-  // Back stand: tile along X to cover the width behind the goalpost, angled
-  // per-tile toward a shallow bowl curve (closest to the field at the
-  // center behind the goalpost, sweeping away toward the corners) instead
-  // of sitting as a flat wall -- a straight run of tiles back here reads
-  // as an obvious seam since it's always dead-center in view.
-  const BACK_STAND_CURVE = Math.PI / 9; // ~20° at the outermost tile -- tune to taste
+  // Back stand: tile along X to cover the width behind the goalpost.
   const nBackTiles = Math.ceil((FIELD_HALF_WIDTH * 2 + 12) / STAND_MODEL_TILE_LEN);
-  const backMaxOffset = ((nBackTiles - 1) / 2) * STAND_MODEL_TILE_LEN;
   for (let i = 0; i < nBackTiles; i++) {
     const xOffset = (i - (nBackTiles - 1) / 2) * STAND_MODEL_TILE_LEN;
-    const curveT = backMaxOffset > 0 ? xOffset / backMaxOffset : 0; // -1..1, center to edge
-    addTile(xOffset, BACK_STAND_Z, curveT * BACK_STAND_CURVE);
+    addTile(xOffset, BACK_STAND_Z, 0);
   }
 }, undefined, (err) => console.error('stadium stand model load failed', err));
 
