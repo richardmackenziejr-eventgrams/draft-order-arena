@@ -25,25 +25,8 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 wrap.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-// Flat color up front so there's something reasonable on screen for the one
-// frame or two before the real skybox finishes loading -- replaced below.
-scene.background = new THREE.Color(0x9dcbf0);
-scene.fog = new THREE.Fog(0x9dcbf0, 35, 95); // matches the skybox's own sky color, sampled directly from the image
-
-// AI-generated (Skybox AI / Blockade Labs) 360° stadium environment,
-// replacing the flat color sky with real depth -- upper deck, roof
-// structure, sky -- beyond what the procedural stands model up close. Kept
-// as an equirectangular texture on scene.background/environment rather
-// than actual geometry: it's infinitely distant and doesn't parallax as
-// the camera moves, which is fine for atmosphere behind everything that
-// IS real geometry (the procedural stands, kicker, referees, goalpost),
-// but is the reason this isn't a replacement for that geometry.
-new THREE.TextureLoader().load('/images/stadium-sky.png', (tex) => {
-  tex.mapping = THREE.EquirectangularReflectionMapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  scene.background = tex;
-  scene.environment = tex; // subtle real-environment reflections on the kicker/referee helmets' metalness
-}, undefined, (err) => console.error('stadium skybox load failed', err));
+scene.background = new THREE.Color(0x8ec9f0);
+scene.fog = new THREE.Fog(0x8ec9f0, 35, 95);
 
 const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 500);
 camera.position.set(-2, 3.2, 13); // placeholder — updateDistance() below sets the real framing
