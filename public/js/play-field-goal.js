@@ -551,75 +551,13 @@ ball.position.y = BALL_REST_Y;
 ball.castShadow = true;
 scene.add(ball);
 
-// ---- Stadium: crowd-textured stands + light stanchions ---------------------
-// A stylized, deliberately blurry stadium crowd — a low-res grid of random
-// crowd-colored pixels on a seat-colored background. Left at low resolution
-// and stretched across a big stand face, the texture's own linear filtering
-// blurs it into an impressionistic "distant fans" look rather than
-// individually-readable people (which would be way more detail than this
-// scene needs, and wouldn't hold up this close for real).
-function crowdTexture() {
-  const cols = 48;
-  const rows = 14;
-  const canvas = document.createElement('canvas');
-  canvas.width = cols;
-  canvas.height = rows;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#26313d';
-  ctx.fillRect(0, 0, cols, rows);
-  const colors = ['#e8b98a', '#8a5a3c', '#f4f4f4', '#c0392b', '#2f5fbf', '#f1c40f', '#27ae60', '#7f8c8d', '#ecf0f1', '#9b59b6'];
-  // Leave the bottom couple of rows solid (a concrete wall under the seats)
-  // and only scatter "fans" in the upper rows.
-  for (let y = 0; y < rows - 2; y++) {
-    for (let x = 0; x < cols; x++) {
-      if (Math.random() < 0.88) {
-        ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
-        ctx.fillRect(x, y, 1, 1);
-      }
-    }
-  }
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.needsUpdate = true;
-  return tex;
-}
-
+// ---- Stadium: crowd stand model + light stanchions -------------------------
 const concreteMat = new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.95 });
-
-function crowdMaterial(repeatX, repeatY) {
-  const tex = crowdTexture();
-  tex.repeat.set(repeatX, repeatY);
-  return new THREE.MeshStandardMaterial({ map: tex, roughness: 1 });
-}
-
-// BoxGeometry's face material order is [+x, -x, +y, -y, +z, -z]. Only the
-// face actually pointing back toward the field gets the crowd texture — the
-// rest are plain stadium concrete, since nobody ever sees them.
-function standMaterials(facingIndex, repeatX, repeatY) {
-  const mats = [concreteMat, concreteMat, concreteMat, concreteMat, concreteMat, concreteMat];
-  mats[facingIndex] = crowdMaterial(repeatX, repeatY);
-  return mats;
-}
 
 const STAND_HEIGHT = 8;
 const STAND_DEPTH = NEAR_Z - FAR_Z + 30;
 
 [-1, 1].forEach((side) => {
-  // side === -1 (left stand, negative x) faces the field in the +x
-  // direction, so it needs the +x face (index 0). The right stand faces -x
-  // (index 1).
-  const facingIndex = side === -1 ? 0 : 1;
-  const stand = new THREE.Mesh(
-    new THREE.BoxGeometry(6, STAND_HEIGHT, STAND_DEPTH),
-    standMaterials(facingIndex, 6, 2)
-  );
-  stand.position.set(side * (FIELD_HALF_WIDTH + 6), STAND_HEIGHT / 2, (NEAR_Z + FAR_Z) / 2);
-  stand.receiveShadow = true;
-  scene.add(stand);
-
   // Stadium light stanchions at each end of the stand, poking up above the
   // roofline — mostly a silhouette against the sky, but it sells "stadium"
   // a lot harder than bare stands do.
@@ -643,13 +581,50 @@ const STAND_DEPTH = NEAR_Z - FAR_Z + 30;
 // A stand behind the goalpost too, so missing a kick doesn't sail off into
 // empty sky — closes out the "bowl" on the one side that was still open.
 const BACK_STAND_Z = FAR_Z - 4;
-const backStand = new THREE.Mesh(
-  new THREE.BoxGeometry(FIELD_HALF_WIDTH * 2 + 12, STAND_HEIGHT + 2, 5),
-  standMaterials(4, 8, 2) // +z face (index 4) is the one facing back toward the field
-);
-backStand.position.set(0, (STAND_HEIGHT + 2) / 2, BACK_STAND_Z);
-backStand.receiveShadow = true;
-scene.add(backStand);
+
+// Real curved 3D stand sections (Rodin-generated from a ChatGPT crowd
+// photo, via image-to-3D) tiled along each stand's length, replacing a
+// flat crowd-photo-textured box. The model is a single static mesh (no
+// skeleton), so gltf.scene.clone() correctly shares its geometry/material/
+// textures across every tile instead of duplicating them in memory.
+//
+// Scaled uniformly (never stretched non-uniformly) off the model's own
+// real bounding-box height to match STAND_HEIGHT, so its proportions stay
+// true to the source photo -- tiled side by side along the needed length
+// instead, the same way the earlier flat-texture version repeated.
+const STAND_MODEL_BBOX = { w: 1.893912971019745, h: 0.6248829960823059, d: 0.8104550540447235 };
+const STAND_MODEL_SCALE = STAND_HEIGHT / STAND_MODEL_BBOX.h;
+const STAND_MODEL_TILE_LEN = STAND_MODEL_BBOX.w * STAND_MODEL_SCALE;
+
+new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
+  function addTile(x, z, rotationY) {
+    const tile = gltf.scene.clone();
+    tile.scale.setScalar(STAND_MODEL_SCALE);
+    tile.rotation.y = rotationY;
+    tile.position.set(x, 0, z);
+    scene.add(tile);
+  }
+
+  // Side stands: tile along Z (the sideline) to cover the same length the
+  // old box did, facing inward toward the field.
+  const sideZCenter = (NEAR_Z + FAR_Z) / 2;
+  const nSideTiles = Math.ceil(STAND_DEPTH / STAND_MODEL_TILE_LEN);
+  [-1, 1].forEach((side) => {
+    const standX = side * (FIELD_HALF_WIDTH + 6);
+    const facingRotationY = side === -1 ? Math.PI / 2 : -Math.PI / 2;
+    for (let i = 0; i < nSideTiles; i++) {
+      const zOffset = (i - (nSideTiles - 1) / 2) * STAND_MODEL_TILE_LEN;
+      addTile(standX, sideZCenter + zOffset, facingRotationY);
+    }
+  });
+
+  // Back stand: tile along X to cover the width behind the goalpost.
+  const nBackTiles = Math.ceil((FIELD_HALF_WIDTH * 2 + 12) / STAND_MODEL_TILE_LEN);
+  for (let i = 0; i < nBackTiles; i++) {
+    const xOffset = (i - (nBackTiles - 1) / 2) * STAND_MODEL_TILE_LEN;
+    addTile(xOffset, BACK_STAND_Z, 0);
+  }
+}, undefined, (err) => console.error('stadium stand model load failed', err));
 
 // ---- Kick distance positioning ---------------------------------------------
 // Distance now comes from the server (one value per kick, shared by every
