@@ -601,44 +601,57 @@ const STAND_MODEL_TILE_LEN = STAND_MODEL_BBOX.w * STAND_MODEL_SCALE;
 const STAND_MODEL_FRONT_LOCAL_Z = 0.4630330204963684;
 const STAND_MODEL_FRONT_OFFSET = STAND_MODEL_FRONT_LOCAL_Z * STAND_MODEL_SCALE;
 
-new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
-  function addTile(x, z, rotationY) {
-    const tile = gltf.scene.clone();
+// A real, purpose-built curved corner (Rodin-generated: a two-tier
+// grandstand modeled as an actual L-shaped/curved footprint, not a rigid
+// straight tile rotated to approximate one) -- replaces the earlier
+// faceted-rotation approximation, which read as angled straight panels
+// bolted together rather than a genuine bend.
+const CORNER_BBOX_H = 0.6803219318389893;
+const CORNER_SCALE = STAND_HEIGHT / CORNER_BBOX_H;
+
+let straightGltf = null;
+let cornerGltf = null;
+function buildStadiumStands() {
+  if (!straightGltf || !cornerGltf) return;
+
+  function addStraightTile(x, z, rotationY) {
+    const tile = straightGltf.scene.clone();
     tile.scale.setScalar(STAND_MODEL_SCALE);
     tile.rotation.y = rotationY;
     tile.position.set(x, 0, z);
     scene.add(tile);
   }
 
-  // Curved corner behind each end of the goalpost, sweeping into the
-  // sideline stand. A rigid tile has one rotational degree of freedom
-  // (rotationY), which controls BOTH which way it faces (crowd texture
-  // toward the field) and where its edges are (the axis the next tile in
-  // the row sits along). At rotationY=0 a tile faces +Z with its edges
-  // running along X (the back-stand orientation); at rotationY=+-90deg it
-  // faces +-X with its edges running along Z (the side-stand orientation).
-  // Sweeping rotationY smoothly between those IS the curve.
-  //
-  // Each tile's position is derived from where the PREVIOUS tile's actual
-  // outer edge landed after its own rotation -- never by rotating a tile
-  // left at an originally straight-line spacing. That's what guarantees no
-  // gap: rotating a tall tile around its own center pulls its roofline
-  // (far from the rotation axis at the base) apart from its neighbor's
-  // roofline even when the bases still roughly line up. That mistake
-  // shipped a visible gap in production once already (reverted in
-  // f4b2278).
-  //
-  // The chain tracks the tile's FRONT (crowd-facing) edge specifically,
-  // not its centerline. The model has real depth (~13 world units at this
-  // scale) -- at an angled seam, two tiles whose *centerlines* connect
-  // still have front faces that land in different places, because each
-  // tile's depth axis points a different way once rotated. Chaining on the
-  // front edge guarantees the visually-critical seam (the one every camera
-  // in this game actually looks at, from the field side) has no gap; any
-  // slack from the approximation lands on the backside, which no camera
-  // sees.
-  function placeSweptTile(edge, sweepDeg, mirror) {
-    const sweep = THREE.MathUtils.degToRad(sweepDeg);
+  // The corner model's two arms are NOT mirror images of each other in the
+  // source file (it's a single right-handed L), so the left corner needs an
+  // actual mirror (negative X scale), not just a rotation -- a rotation
+  // can't turn a right-handed shape into its left-handed reflection. A
+  // negative scale on one axis flips the mesh's winding order, which would
+  // make it invisible from the "wrong" side under normal backface culling,
+  // so the mirrored copy's materials are set to double-sided.
+  function addCornerTile(x, z, mirror) {
+    const tile = cornerGltf.scene.clone();
+    tile.scale.set(CORNER_SCALE * mirror, CORNER_SCALE, CORNER_SCALE);
+    if (mirror < 0) {
+      tile.traverse((o) => {
+        if (o.isMesh) {
+          o.material = o.material.clone();
+          o.material.side = THREE.DoubleSide;
+        }
+      });
+    }
+    tile.position.set(x, 0, z);
+    scene.add(tile);
+  }
+
+  // Chains a straight tile forward from `edge` (its trailing front-edge
+  // point) by its own front-edge offset -- same technique used to close
+  // the gap between the center tile and the corners: chaining on the
+  // crowd-facing edge, not the centerline, because the model has real
+  // depth and an angled/differently-shaped neighbor's centerline doesn't
+  // predict where its front face actually lands.
+  function addStraightFromEdge(edge, mirror) {
+    const sweep = Math.PI / 2;
     const rotationY = mirror === 1 ? -sweep : sweep;
     const dir = mirror === 1
       ? new THREE.Vector3(Math.cos(sweep), 0, Math.sin(sweep))
@@ -646,39 +659,54 @@ new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
     const front = new THREE.Vector3(Math.sin(rotationY), 0, Math.cos(rotationY));
     const frontEdgeCenter = edge.clone().addScaledVector(dir, STAND_MODEL_TILE_LEN / 2);
     const origin = frontEdgeCenter.clone().addScaledVector(front, -STAND_MODEL_FRONT_OFFSET);
-    addTile(origin.x, origin.z, rotationY);
+    addStraightTile(origin.x, origin.z, rotationY);
     return edge.clone().addScaledVector(dir, STAND_MODEL_TILE_LEN);
   }
 
-  // mirror=+1 builds the right corner (standX positive), -1 the left --
-  // both start from the exact same seam point behind the center of the
-  // goalpost, so the two back tiles are guaranteed to meet there with no
-  // center gap.
-  function addCurvedCorner(mirror) {
-    // A real stand: straight directly behind the endzone, curving only at
-    // the corner where it turns to run down the sideline, then straight
-    // again for the rest of the sideline. Not a curve starting right at
-    // the goalpost -- the flat tile at 0deg is what keeps the section
-    // immediately behind the endzone reading as straight.
-    const RAMP_DEG = [0, 55, 90];
-    let edge = new THREE.Vector3(0, 0, BACK_STAND_Z);
-    RAMP_DEG.forEach((deg) => {
-      edge = placeSweptTile(edge, deg, mirror);
-    });
-    // Continue straight down the sideline (rotationY=+-90, same as the
-    // original flat side stand) until comfortably past the near edge of
-    // the visible field.
-    const targetZ = NEAR_Z + 10;
+  // ONE straight section spanning the width directly behind the endzone
+  // (not two tiles meeting at a center seam) -- the curve starts from ITS
+  // edges, matching a real stadium's layout: straight behind the goalpost,
+  // curving only at the corners, straight again down each sideline.
+  addStraightTile(0, BACK_STAND_Z, 0);
+
+  // Corner placement: tuned by hand against the actual model (its hinge
+  // point isn't exactly at its local origin, and unlike the straight
+  // tiles' bounding box, this one-off asset has no clean formula for it)
+  // so its arm sits flush against the center tile with no gap.
+  const CORNER_X = 12.8;
+  const CORNER_Z = -65.7;
+  addCornerTile(CORNER_X, CORNER_Z, 1);
+  addCornerTile(-CORNER_X, CORNER_Z, -1);
+
+  // The corner's far arm tapers to a narrow tip rather than ending in a
+  // flat cross-section sized to match the straight tiles, so the
+  // continuing sideline run starts from a conservative point well inside
+  // the corner's stable (non-tapered) cross-section -- overlapping the
+  // corner's own tail generously rather than chasing an exact seam.
+  // Overlap is invisible; a gap isn't, and exactly where the sideline
+  // picks up doesn't matter as long as it connects cleanly.
+  const SIDELINE_ANCHOR_X = 16;
+  const SIDELINE_ANCHOR_Z = -70;
+  const targetZ = NEAR_Z + 10;
+
+  [1, -1].forEach((mirror) => {
+    let edge = new THREE.Vector3(SIDELINE_ANCHOR_X * mirror, 0, SIDELINE_ANCHOR_Z);
     let guard = 0;
     while (edge.z < targetZ && guard < 20) {
-      edge = placeSweptTile(edge, 90, mirror);
+      edge = addStraightFromEdge(edge, mirror);
       guard++;
     }
-  }
+  });
+}
 
-  addCurvedCorner(1);
-  addCurvedCorner(-1);
+new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
+  straightGltf = gltf;
+  buildStadiumStands();
 }, undefined, (err) => console.error('stadium stand model load failed', err));
+new GLTFLoader().load('/models/stadium-corner.glb', (gltf) => {
+  cornerGltf = gltf;
+  buildStadiumStands();
+}, undefined, (err) => console.error('stadium corner model load failed', err));
 
 // ---- Kick distance positioning ---------------------------------------------
 // Distance now comes from the server (one value per kick, shared by every
