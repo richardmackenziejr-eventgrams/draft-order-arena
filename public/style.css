@@ -62,6 +62,22 @@ p.lead { color: var(--text-dim); font-size: 1.05rem; line-height: 1.5; }
 
 .panel-2 { background: var(--bg-panel-2); }
 
+/* A real screenshot of the game, bled to the card's edges (negative margin
+   cancels .panel's own padding) instead of sitting inside it like the rest
+   of the card's content. object-position is pulled down from center so the
+   crop favors the actual game view over the page's own header, which sits
+   at a similar height across all four screenshots. */
+.game-thumb {
+  display: block;
+  width: calc(100% + 40px);
+  margin: -20px -20px 14px;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  object-position: center 80%;
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: 1px solid var(--line);
+}
+
 label { display: block; font-size: 0.85rem; color: var(--text-dim); margin: 12px 0 4px; }
 label:first-child { margin-top: 0; }
 
