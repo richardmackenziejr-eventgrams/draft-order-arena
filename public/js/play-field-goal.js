@@ -77,6 +77,20 @@ function stripeTexture() {
   return tex;
 }
 
+// A wide grass apron behind/beside the marked field -- the field plane
+// above only spans the actual playing surface (30 units wide), but the
+// stands sit well outside that (out past x=+-35 once past the curved
+// corners), leaving open ground between the field edge and the stands
+// with nothing drawn there but the sky-color background. This fills that
+// gap with turf instead of a band of "empty sky at ground level".
+const apron = new THREE.Mesh(
+  new THREE.PlaneGeometry(140, (NEAR_Z - FAR_Z) + 50),
+  new THREE.MeshStandardMaterial({ color: 0x2f6b3f, roughness: 0.95 })
+);
+apron.rotation.x = -Math.PI / 2;
+apron.position.set(0, -0.02, (NEAR_Z + FAR_Z) / 2);
+scene.add(apron);
+
 const field = new THREE.Mesh(
   new THREE.PlaneGeometry(FIELD_HALF_WIDTH * 2, NEAR_Z - FAR_Z),
   new THREE.MeshStandardMaterial({ map: stripeTexture(), roughness: 0.95 })
