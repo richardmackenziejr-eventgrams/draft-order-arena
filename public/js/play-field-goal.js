@@ -825,31 +825,105 @@ function tubeFromCurve(curve, tStart, tEnd, radius, color, opacity) {
 // A 3D vertical power bar — a track, a highlighted sweet-spot band, and a
 // sliding marker, built as real boxes with depth and floating in the scene
 // next to the kicker instead of in a side panel.
+//
+// Polish pass: a flat-shaded box per part reads as plastic/blocky no
+// matter how it's lit. The fix isn't better geometry (still just boxes —
+// vendoring a rounded-box geometry for one HUD element isn't worth it) but
+// layering: a metal bezel with a bright inset rim and corner screws behind
+// a near-black track, tick marks and a glass cover on the track's face,
+// and a two-layer marker (dark metal clip + bright colorable core) instead
+// of one flat-colored box. Each decorative piece is added as a CHILD of
+// the part it belongs to (frame/track/marker), so it inherits that part's
+// position and visibility automatically — rebuildPowerMeter() and
+// updatePowerMarkerPosition() below only need to move the four parent
+// meshes, exactly as before.
 const POWER_BAR_HEIGHT = 2.3;
 const POWER_BAR_WIDTH = 0.46;
 const POWER_BAR_DEPTH = 0.14;
-// A light frame sitting just behind the track, a bit larger in width/height
-// — since it's also a bit thinner in depth, the track (thicker, closer to
-// the camera) covers it everywhere except that overhanging border, reading
-// as an actual picture-frame edge around the meter. Light/bright so it
-// reads clearly against grass, not just another dark-on-green shape.
+// A metal frame sitting just behind the track, a bit larger in
+// width/height — since it's also a bit thinner in depth, the track
+// (thicker, closer to the camera) covers it everywhere except that
+// overhanging border, reading as an actual bezel edge around the meter.
 const POWER_FRAME_MARGIN = 0.09;
 const powerFrame = new THREE.Mesh(
   new THREE.BoxGeometry(POWER_BAR_WIDTH + POWER_FRAME_MARGIN * 2, POWER_BAR_HEIGHT + POWER_FRAME_MARGIN * 2, POWER_BAR_DEPTH * 0.6),
-  new THREE.MeshStandardMaterial({ color: 0xeceff1, roughness: 0.45, metalness: 0.2 })
+  new THREE.MeshStandardMaterial({ color: 0x6b7480, roughness: 0.4, metalness: 0.75 })
 );
 scene.add(powerFrame);
+
+// A bright, more polished inset rim between the dark bezel and the track —
+// sized between the two so it shows as a thin lit lip catching the light,
+// the way a real instrument panel's bezel has a highlighted inner edge.
+const powerFrameRim = new THREE.Mesh(
+  new THREE.BoxGeometry(POWER_BAR_WIDTH + POWER_FRAME_MARGIN, POWER_BAR_HEIGHT + POWER_FRAME_MARGIN, POWER_BAR_DEPTH * 0.15),
+  new THREE.MeshStandardMaterial({ color: 0xf3f5f7, roughness: 0.25, metalness: 0.85 })
+);
+powerFrameRim.position.z = POWER_BAR_DEPTH * 0.3 + 0.02;
+powerFrame.add(powerFrameRim);
+
+// Four small dark screw-head accents at the bezel corners — a cheap detail
+// that reads as "a real bolted panel" rather than a plain colored box.
+const powerScrewMat = new THREE.MeshStandardMaterial({ color: 0x2b2f33, roughness: 0.35, metalness: 0.6 });
+const POWER_SCREW_INSET = 0.055;
+[-1, 1].forEach((sx) => {
+  [-1, 1].forEach((sy) => {
+    const screw = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.03, 8), powerScrewMat);
+    screw.rotation.x = Math.PI / 2;
+    screw.position.set(
+      sx * (POWER_BAR_WIDTH / 2 + POWER_FRAME_MARGIN - POWER_SCREW_INSET),
+      sy * (POWER_BAR_HEIGHT / 2 + POWER_FRAME_MARGIN - POWER_SCREW_INSET),
+      POWER_BAR_DEPTH * 0.3 + 0.02
+    );
+    powerFrame.add(screw);
+  });
+});
+
 const powerTrack = new THREE.Mesh(
   new THREE.BoxGeometry(POWER_BAR_WIDTH, POWER_BAR_HEIGHT, POWER_BAR_DEPTH),
-  new THREE.MeshStandardMaterial({ color: 0x14251c, transparent: true, opacity: 0.85, roughness: 0.7 })
+  new THREE.MeshStandardMaterial({ color: 0x0a140f, transparent: true, opacity: 0.9, roughness: 0.55, metalness: 0.1 })
 );
 scene.add(powerTrack);
-const powerMarkerMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.5 });
+
+// Graduation ticks along the track's face — a real gauge has marked
+// increments, not a blank bar, and it's a cheap way to sell "instrument"
+// over "colored rectangle".
+const powerTickMat = new THREE.MeshStandardMaterial({ color: 0xaeb8c2, roughness: 0.5, metalness: 0.3 });
+const POWER_TICK_COUNT = 9;
+for (let i = 0; i < POWER_TICK_COUNT; i++) {
+  const tick = new THREE.Mesh(new THREE.BoxGeometry(POWER_BAR_WIDTH * 0.6, 0.016, 0.01), powerTickMat);
+  tick.position.set(0, (i / (POWER_TICK_COUNT - 1) - 0.5) * POWER_BAR_HEIGHT, POWER_BAR_DEPTH / 2 + 0.006);
+  powerTrack.add(tick);
+}
+
+// A thin glossy "under glass" cover over the whole face — MeshPhysicalMaterial
+// (core three.js, not an addon) gives a real clear-coat highlight instead of
+// the flatter specular a MeshStandardMaterial produces.
+const powerGlass = new THREE.Mesh(
+  new THREE.BoxGeometry(POWER_BAR_WIDTH + 0.02, POWER_BAR_HEIGHT + 0.02, 0.012),
+  new THREE.MeshPhysicalMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.12,
+    roughness: 0.05, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.1,
+  })
+);
+powerGlass.position.z = POWER_BAR_DEPTH / 2 + 0.014;
+powerTrack.add(powerGlass);
+
+const powerMarkerMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.7 });
 const powerMarker = new THREE.Mesh(
-  new THREE.BoxGeometry(POWER_BAR_WIDTH + 0.14, 0.12, POWER_BAR_DEPTH + 0.14),
+  new THREE.BoxGeometry(POWER_BAR_WIDTH - 0.06, 0.07, POWER_BAR_DEPTH + 0.2),
   powerMarkerMat
 );
 scene.add(powerMarker);
+// A dark metal clip behind/around the bright core above — without it the
+// marker was just a flat colored slab; the clip gives it a visible edge
+// and reads as a needle/indicator held in a bracket rather than a sticker.
+const powerMarkerClip = new THREE.Mesh(
+  new THREE.BoxGeometry(POWER_BAR_WIDTH + 0.16, 0.14, POWER_BAR_DEPTH * 0.5),
+  new THREE.MeshStandardMaterial({ color: 0x3a4147, roughness: 0.35, metalness: 0.7 })
+);
+powerMarkerClip.position.z = -0.05;
+powerMarker.add(powerMarkerClip);
+
 let powerSweetMesh = null;
 let powerMeterCenter = new THREE.Vector3();
 
@@ -870,7 +944,13 @@ function rebuildPowerMeter(distanceYards) {
   powerTrack.position.copy(powerMeterCenter);
   powerFrame.position.set(powerMeterCenter.x, powerMeterCenter.y, powerMeterCenter.z - 0.02);
 
-  if (powerSweetMesh) { scene.remove(powerSweetMesh); powerSweetMesh.geometry.dispose(); powerSweetMesh.material.dispose(); }
+  if (powerSweetMesh) {
+    scene.remove(powerSweetMesh);
+    powerSweetMesh.geometry.dispose();
+    powerSweetMesh.material.dispose();
+    const core = powerSweetMesh.children[0];
+    if (core) { core.geometry.dispose(); core.material.dispose(); }
+  }
   const sweetHalf = powerSweetHalfFor(distanceYards);
   // Full frame width (not just the track's own width) and a good deal
   // deeper than the track — at the kick cam's angle, a green band sized to
@@ -882,6 +962,15 @@ function rebuildPowerMeter(distanceYards) {
     new THREE.MeshStandardMaterial({ color: 0x4ade80, emissive: 0x2f7d54, emissiveIntensity: 0.4, roughness: 0.5 })
   );
   powerSweetMesh.position.copy(powerMeterCenter); // sweet spot sits at the bar's vertical center — position 0.5
+  // A brighter, more saturated core stripe down the middle of the band —
+  // a flat green box reads as a colored panel; a brighter inner band on
+  // top of it reads as a lit/neon strip instead.
+  const sweetCore = new THREE.Mesh(
+    new THREE.BoxGeometry(POWER_BAR_WIDTH * 0.5, sweetHalf * 2 * POWER_BAR_HEIGHT, 0.02),
+    new THREE.MeshStandardMaterial({ color: 0x86efac, emissive: 0x86efac, emissiveIntensity: 0.6, roughness: 0.3 })
+  );
+  sweetCore.position.z = (POWER_BAR_DEPTH + 0.16) / 2 + 0.011;
+  powerSweetMesh.add(sweetCore);
   scene.add(powerSweetMesh);
 }
 
