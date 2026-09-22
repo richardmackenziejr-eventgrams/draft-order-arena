@@ -273,6 +273,23 @@ function snapCamera() {
   camera.lookAt(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
 }
 
+// Once the player crosses the goal line, the camera stops rigidly chasing
+// and holds a single wider, slightly higher shot for the rest of the
+// celebration (auto-run into the end zone, the 180 turn, the dance) --
+// framed on where the endzone run actually ends, pulled back further than
+// the tight over-the-shoulder running distance so the whole celebration
+// reads as one held shot instead of the camera staying welded to his back.
+const CELEBRATION_CAM_BACK = CHASE_BACK + 5;
+const CELEBRATION_CAM_HEIGHT = CHASE_HEIGHT + 1.5;
+let celebrationCamFrozen = false;
+function freezeCelebrationCamera() {
+  const finalZ = -(fieldYards + ENDZONE_RUN_YARDS);
+  camera.position.set(RUNNER_GROUP.position.x, CELEBRATION_CAM_HEIGHT, finalZ + CELEBRATION_CAM_BACK);
+  camTarget.set(RUNNER_GROUP.position.x, LOOK_HEIGHT + 0.3, finalZ);
+  camera.lookAt(camTarget);
+  celebrationCamFrozen = true;
+}
+
 // ---- Game loop ------------------------------------------------------------
 let running = false;
 let lastFrameAt = 0;
@@ -344,6 +361,7 @@ function tick(now) {
         document.getElementById('kr3d-overlay-text').textContent = 'TOUCHDOWN!';
         setActiveAction(runAction);
         if (activeAction) activeAction.paused = false;
+        freezeCelebrationCamera();
       }
     } else if (phase === 'endzone') {
       RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
@@ -394,9 +412,14 @@ function tick(now) {
   // reads as the player slowly outrunning the camera until it "catches up"
   // in a jump on any frame-time hiccup. Setting position directly every
   // frame guarantees the camera moves at exactly the runner's own speed.
-  camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
-  camTarget.set(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
-  camera.lookAt(camTarget);
+  // Stops once the touchdown celebration camera takes over (see
+  // freezeCelebrationCamera) so the celebration reads as one held shot
+  // instead of the camera continuing to chase into the end zone.
+  if (!celebrationCamFrozen) {
+    camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
+    camTarget.set(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
+    camera.lookAt(camTarget);
+  }
 
   renderer.render(scene, camera);
   animationHandle = requestAnimationFrame(tick);
@@ -427,6 +450,7 @@ async function startReturn(returnConfig) {
   if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   phase = 'play';
   phaseElapsed = 0;
+  celebrationCamFrozen = false;
   resizeRenderer();
   snapCamera();
   renderer.render(scene, camera);
