@@ -150,7 +150,6 @@ const CHASE_HEIGHT = 3.4;
 const CHASE_BACK = 5.5;
 const LOOK_AHEAD = 10;
 const LOOK_HEIGHT = 1.1;
-const camPos = new THREE.Vector3();
 const camTarget = new THREE.Vector3();
 function snapCamera() {
   camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
@@ -196,9 +195,13 @@ function tick(now) {
     }
   }
 
-  camPos.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
+  // Rigidly locked to the runner (no lerp/smoothing) -- a smoothed follow
+  // camera settles into a constant lag behind steady forward motion, which
+  // reads as the player slowly outrunning the camera until it "catches up"
+  // in a jump on any frame-time hiccup. Setting position directly every
+  // frame guarantees the camera moves at exactly the runner's own speed.
+  camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
   camTarget.set(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
-  camera.position.lerp(camPos, Math.min(1, dt * 6));
   camera.lookAt(camTarget);
 
   renderer.render(scene, camera);
