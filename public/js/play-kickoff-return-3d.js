@@ -184,22 +184,24 @@ function stripRootMotion() {
 }
 
 // ---- Controls: hold forward to run, left/right to steer ------------------
-// heldKeys maps key -> the timestamp it was last confirmed down (from a
-// keydown, including the OS's own key-repeat events, which fire every few
-// tens of ms while a key is genuinely held). A keyup can be lost for all
-// sorts of reasons -- focus loss, a dropped event, a browser/extension
-// quirk -- leaving a key stuck "held" forever (e.g. a stuck ArrowRight
-// banking every forward-only press into the right-turn clip). Rather than
-// chase every individual cause, treat any entry that hasn't been refreshed
-// in a moment as stale and drop it: a real physical hold keeps refreshing
-// well inside that window, so this only ever self-heals a stuck key.
-const heldKeys = new Map();
+// A key is held from its keydown until its matching keyup -- nothing
+// fancier. An earlier version tried to auto-expire "stale" entries using
+// the OS's own key-repeat events as a heartbeat, on the theory that a lost
+// keyup (e.g. from focus loss) needed a self-healing fallback. That was
+// wrong: OS key-repeat commonly only re-fires for the single
+// most-recently-pressed key (not every key still held), and even a solo
+// held key can go quiet for longer than any reasonable staleness window
+// before its first repeat fires. That made the "fix" prune genuinely-held
+// keys mid-play, which is worse than the bug it was chasing. The real fix
+// for lost focus is below: clear on blur/visibilitychange, plus a
+// per-frame document.hasFocus() check in tick() as a backstop for
+// whatever blur doesn't catch.
+const heldKeys = new Set();
 const GAME_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
-const STALE_KEY_MS = 350;
 window.addEventListener('keydown', (e) => {
   if (!GAME_KEYS.has(e.key)) return;
   e.preventDefault(); // arrow keys scroll the page by default -- stop that while playing
-  heldKeys.set(e.key, performance.now());
+  heldKeys.add(e.key);
 });
 window.addEventListener('keyup', (e) => {
   if (!GAME_KEYS.has(e.key)) return;
@@ -209,10 +211,16 @@ window.addEventListener('keyup', (e) => {
 window.addEventListener('blur', () => heldKeys.clear());
 document.addEventListener('visibilitychange', () => { if (document.hidden) heldKeys.clear(); });
 
-function pruneStaleKeys(now) {
-  for (const [key, lastSeen] of heldKeys) {
-    if (now - lastSeen > STALE_KEY_MS) heldKeys.delete(key);
-  }
+// ---- Debug overlay (?debug=1) ---------------------------------------------
+// Shows live held-key/steering/animation state on screen so a reported bug
+// can be diagnosed from what the player actually sees, instead of guessing
+// from a different machine/browser where it may not even reproduce.
+const DEBUG = qs('debug') === '1';
+let debugEl = null;
+if (DEBUG) {
+  debugEl = document.createElement('div');
+  debugEl.style.cssText = 'position:absolute;bottom:6px;left:6px;right:6px;font:11px monospace;color:#0f0;background:#000c;padding:4px 6px;border-radius:4px;white-space:pre;pointer-events:none;z-index:5;';
+  document.getElementById('kr3d-canvas-wrap').appendChild(debugEl);
 }
 
 const FORWARD_SPEED = 8.5; // yards/sec
@@ -241,7 +249,7 @@ function tick(now) {
   lastFrameAt = now;
 
   if (running) {
-    pruneStaleKeys(now);
+    if (!document.hasFocus()) heldKeys.clear(); // backstop for whatever blur doesn't catch
     let lateral = 0;
     if (heldKeys.has('ArrowLeft')) lateral -= 1;
     if (heldKeys.has('ArrowRight')) lateral += 1;
@@ -277,6 +285,11 @@ function tick(now) {
     stripRootMotion();
 
     document.getElementById('kr3d-yards').textContent = `${Math.max(0, Math.round(fieldYards - (-RUNNER_GROUP.position.z)))} yards to go`;
+
+    if (debugEl) {
+      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === stopAction ? 'stop' : 'none';
+      debugEl.textContent = `held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}`;
+    }
 
     if (RUNNER_GROUP.position.z <= -fieldYards) {
       RUNNER_GROUP.position.z = -fieldYards;
