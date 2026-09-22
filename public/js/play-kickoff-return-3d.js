@@ -279,8 +279,8 @@ function snapCamera() {
 // framed on where the endzone run actually ends, pulled back further than
 // the tight over-the-shoulder running distance so the whole celebration
 // reads as one held shot instead of the camera staying welded to his back.
-const CELEBRATION_CAM_BACK = CHASE_BACK + 5;
-const CELEBRATION_CAM_HEIGHT = CHASE_HEIGHT + 1.5;
+const CELEBRATION_CAM_BACK = CHASE_BACK + 2;
+const CELEBRATION_CAM_HEIGHT = CHASE_HEIGHT + 1;
 let celebrationCamFrozen = false;
 function freezeCelebrationCamera() {
   const finalZ = -(fieldYards + ENDZONE_RUN_YARDS);
@@ -301,7 +301,7 @@ let wasMoving = false; // tracks the previous frame's movement state, to catch t
 // 'turn' (spin to face the camera) -> 'dance' (random pick, or skipped
 // straight through if none are loaded yet) -> finalize (submit + show the
 // result panel). Player input is ignored once phase leaves 'play'.
-const ENDZONE_RUN_YARDS = 8;
+const ENDZONE_RUN_YARDS = 3;
 let phase = 'play';
 let phaseElapsed = 0;
 let turnStartYaw = 0;
