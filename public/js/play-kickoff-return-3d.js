@@ -146,18 +146,28 @@ Promise.all([
   stopAction = mixer.clipAction(stopGltf.animations[0]);
   stopAction.setLoop(THREE.LoopOnce);
   stopAction.clampWhenFinished = true; // holds the last frame instead of snapping back to frame 0
-  [runAction, runRightTurnAction, runLeftTurnAction, stopAction].forEach((a) => { a.play(); a.paused = true; });
+  // `paused` only stops an action's own time from advancing -- it does NOT
+  // stop the action from being evaluated by the mixer, so a "paused" clip
+  // still blends its frozen pose into the skeleton alongside whichever
+  // clip is actually active. Only `enabled = false` fully removes an
+  // action from the blend. Without this, the turn/stop clips' poses were
+  // silently bleeding into the straight run the whole time, which is what
+  // was actually behind the persistent "running at an angle" report.
+  [runAction, runRightTurnAction, runLeftTurnAction, stopAction].forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
+  runAction.enabled = true;
   activeAction = runAction;
 });
 
-// Switches which clip is actually advancing -- only one plays at a time
-// (no crossfade yet, just an instant swap) so the mixer doesn't blend two
-// full-body poses together.
+// Switches which clip is actually advancing -- only one is ever enabled at
+// a time (no crossfade yet, just an instant swap) so the mixer never
+// blends two full-body poses together.
 function setActiveAction(next) {
   if (!next || next === activeAction) return;
   activeAction.paused = true;
+  activeAction.enabled = false;
   if (next !== stopAction) next.time = activeAction.time % next.getClip().duration; // keep stride phase roughly continuous across a run<->turn swap; the stop clip always starts from its own frame 0
   else next.time = 0;
+  next.enabled = true;
   next.paused = false;
   activeAction = next;
 }
@@ -331,8 +341,8 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  [runAction, runRightTurnAction, runLeftTurnAction, stopAction].forEach((a) => { if (a) a.paused = true; });
-  if (runAction) { activeAction = runAction; runAction.time = 0; }
+  [runAction, runRightTurnAction, runLeftTurnAction, stopAction].forEach((a) => { if (a) { a.paused = true; a.enabled = false; } });
+  if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   resizeRenderer();
   snapCamera();
   renderer.render(scene, camera);
