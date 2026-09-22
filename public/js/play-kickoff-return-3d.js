@@ -96,71 +96,53 @@ function buildField(lengthYards) {
 // ---- Runner -------------------------------------------------------------
 const RUNNER_GROUP = new THREE.Group();
 scene.add(RUNNER_GROUP);
-let runAnim = null;
 
-function findBone(root, name) {
-  let found = null;
-  root.traverse((o) => { if (o.isBone && o.name === name) found = o; });
-  return found;
-}
+// A real Mixamo "Running" mocap clip (downloaded "without skin" -- it's
+// pure animation data on the standard Mixamo rig, no character mesh of its
+// own) applied directly to the kicker's existing skeleton. This works with
+// no retargeting because both files share the exact same bone names --
+// replaces an earlier procedural (direct bone rotation) attempt that
+// worked but looked stiff next to a real mocap cycle.
+let mixer = null;
+let runAction = null;
+let hipsBone = null;
+let hipsBindPos = null;
 
-new GLTFLoader().load('/models/player-kick.glb', (gltf) => {
-  const model = gltf.scene;
+Promise.all([
+  new Promise((resolve) => new GLTFLoader().load('/models/player-kick.glb', resolve, undefined, (err) => console.error('runner model load failed', err))),
+  new Promise((resolve) => new GLTFLoader().load('/models/running.glb', resolve, undefined, (err) => console.error('running animation load failed', err))),
+]).then(([runnerGltf, animGltf]) => {
+  const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   RUNNER_GROUP.add(model);
 
-  const boneNames = {
-    hips: 'mixamorigHips',
-    leftUpLeg: 'mixamorigLeftUpLeg', rightUpLeg: 'mixamorigRightUpLeg',
-    leftLeg: 'mixamorigLeftLeg', rightLeg: 'mixamorigRightLeg',
-    leftArm: 'mixamorigLeftArm', rightArm: 'mixamorigRightArm',
-    leftForeArm: 'mixamorigLeftForeArm', rightForeArm: 'mixamorigRightForeArm',
-    spine: 'mixamorigSpine',
-  };
-  const bones = {};
-  for (const key in boneNames) bones[key] = findBone(model, boneNames[key]);
-  const binds = {};
-  for (const key in bones) if (bones[key]) binds[key] = bones[key].rotation.clone();
-  const hipsBindY = bones.hips ? bones.hips.position.y : 0;
-  runAnim = { bones, binds, hipsBindY };
-}, undefined, (err) => console.error('runner model load failed', err));
+  model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') hipsBone = o; });
+  hipsBindPos = hipsBone ? hipsBone.position.clone() : null;
 
-// Procedural run cycle -- same technique as the referee's arm-signal
-// animation (direct bone rotation, no baked clip): legs swing opposite
-// each other, knees bend more during forward recovery than plant, arms
-// counter-swing opposite their same-side leg.
-const STRIDE_HZ = 1.55;
-const THIGH_SWING = 0.62;
-const KNEE_BEND = 1.0;
-const ARM_SWING = 0.55;
-const ELBOW_BEND = 0.35;
-const SPINE_LEAN = 0.12;
-const BOB_AMP = 0.045;
-let gaitPhase = 0;
+  mixer = new THREE.AnimationMixer(model);
+  runAction = mixer.clipAction(animGltf.animations[0]);
+  runAction.play();
+  runAction.paused = true; // only advances while actually running forward -- see tick()
+});
 
-function applyRunCycle() {
-  if (!runAnim) return;
-  const { bones, binds, hipsBindY } = runAnim;
-  const p = gaitPhase;
-  if (bones.leftUpLeg) bones.leftUpLeg.rotation.x = binds.leftUpLeg.x + Math.sin(p) * THIGH_SWING;
-  if (bones.rightUpLeg) bones.rightUpLeg.rotation.x = binds.rightUpLeg.x + Math.sin(p + Math.PI) * THIGH_SWING;
-  if (bones.leftLeg) bones.leftLeg.rotation.x = binds.leftLeg.x + Math.max(0, Math.sin(p + Math.PI * 0.5)) * KNEE_BEND;
-  if (bones.rightLeg) bones.rightLeg.rotation.x = binds.rightLeg.x + Math.max(0, Math.sin(p + Math.PI * 1.5)) * KNEE_BEND;
-  if (bones.leftArm) bones.leftArm.rotation.x = binds.leftArm.x + Math.sin(p + Math.PI) * ARM_SWING;
-  if (bones.rightArm) bones.rightArm.rotation.x = binds.rightArm.x + Math.sin(p) * ARM_SWING;
-  if (bones.leftForeArm) bones.leftForeArm.rotation.x = binds.leftForeArm.x - Math.max(0, Math.sin(p + Math.PI)) * ELBOW_BEND;
-  if (bones.rightForeArm) bones.rightForeArm.rotation.x = binds.rightForeArm.x - Math.max(0, Math.sin(p)) * ELBOW_BEND;
-  if (bones.spine) bones.spine.rotation.x = binds.spine.x + SPINE_LEAN;
-  if (bones.hips) bones.hips.position.y = hipsBindY + Math.abs(Math.sin(p)) * BOB_AMP;
+// The clip has real baked root motion (the hips bone actually translates
+// forward each stride, same as the kicker's own kick clip) -- stripped out
+// every frame below so it only articulates limbs; actual world movement is
+// driven by the game loop, not the animation.
+function stripRootMotion() {
+  if (!hipsBone || !hipsBindPos) return;
+  hipsBone.position.x = hipsBindPos.x;
+  hipsBone.position.z = hipsBindPos.z;
 }
 
-// ---- Controls: arrow keys steer laterally, forward speed is automatic --
+// ---- Controls: hold forward to run, left/right to steer ------------------
 const heldKeys = new Set();
 window.addEventListener('keydown', (e) => heldKeys.add(e.key));
 window.addEventListener('keyup', (e) => heldKeys.delete(e.key));
 
 const FORWARD_SPEED = 8.5; // yards/sec
+const BACKWARD_SPEED = 4; // yards/sec
 const LATERAL_SPEED = 6.5; // yards/sec
 
 // ---- Chase camera ---------------------------------------------------------
@@ -188,15 +170,22 @@ function tick(now) {
     let lateral = 0;
     if (heldKeys.has('ArrowLeft')) lateral -= 1;
     if (heldKeys.has('ArrowRight')) lateral += 1;
+    const movingForward = heldKeys.has('ArrowUp');
+    const movingBackward = !movingForward && heldKeys.has('ArrowDown');
     const lateralLimit = FIELD_WIDTH / 2 - 1.5;
 
-    RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
+    if (movingForward) RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
+    else if (movingBackward) RUNNER_GROUP.position.z = Math.min(0, RUNNER_GROUP.position.z + BACKWARD_SPEED * dt);
     RUNNER_GROUP.position.x = THREE.MathUtils.clamp(RUNNER_GROUP.position.x + lateral * LATERAL_SPEED * dt, -lateralLimit, lateralLimit);
     const targetYaw = lateral * 0.25;
     RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
 
-    gaitPhase += dt * STRIDE_HZ * Math.PI * 2;
-    applyRunCycle();
+    // The run cycle only plays while actually moving -- standing still (or
+    // only side-stepping with no forward/back held) freezes on whatever
+    // frame it's on rather than running in place.
+    if (runAction) runAction.paused = !(movingForward || movingBackward);
+    if (mixer) mixer.update(dt);
+    stripRootMotion();
 
     document.getElementById('kr3d-yards').textContent = `${Math.max(0, Math.round(fieldYards - (-RUNNER_GROUP.position.z)))} yards to go`;
 
@@ -231,7 +220,6 @@ async function startReturn(returnConfig) {
   buildField(fieldYards);
   RUNNER_GROUP.position.set(0, 0, 0);
   RUNNER_GROUP.rotation.y = 0;
-  gaitPhase = 0;
   resizeRenderer();
   snapCamera();
   renderer.render(scene, camera);
