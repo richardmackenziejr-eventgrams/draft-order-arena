@@ -97,21 +97,35 @@ function buildField(lengthYards) {
 const RUNNER_GROUP = new THREE.Group();
 scene.add(RUNNER_GROUP);
 
-// A real Mixamo "Running" mocap clip (downloaded "without skin" -- it's
-// pure animation data on the standard Mixamo rig, no character mesh of its
-// own) applied directly to the kicker's existing skeleton. This works with
-// no retargeting because both files share the exact same bone names --
+// Real Mixamo mocap clips (downloaded "without skin" -- pure animation
+// data on the standard Mixamo rig, no character mesh of its own) applied
+// directly to the kicker's existing skeleton. This works with no
+// retargeting because all these files share the exact same bone names --
 // replaces an earlier procedural (direct bone rotation) attempt that
-// worked but looked stiff next to a real mocap cycle.
+// worked but looked stiff next to real mocap.
+//
+// Three clips: a straight run, a dedicated "running right turn" used while
+// holding forward+right so a turn actually looks like banking into one
+// instead of the straight-run cycle playing under a yaw twist, and a
+// one-shot "run to stop" played when the player releases every movement
+// key after running, instead of just freezing mid-stride. There's no
+// left-turn clip yet (only "Running Right Turn" was downloaded so far) --
+// forward+left falls back to the straight run for now. A matching
+// "Running Left Turn" download would let this mirror cleanly.
 let mixer = null;
 let runAction = null;
+let runRightTurnAction = null;
+let stopAction = null;
+let activeAction = null;
 let hipsBone = null;
 let hipsBindPos = null;
 
 Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/player-kick.glb', resolve, undefined, (err) => console.error('runner model load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/running.glb', resolve, undefined, (err) => console.error('running animation load failed', err))),
-]).then(([runnerGltf, animGltf]) => {
+  new Promise((resolve) => new GLTFLoader().load('/models/running-right-turn.glb', resolve, undefined, (err) => console.error('running-right-turn animation load failed', err))),
+  new Promise((resolve) => new GLTFLoader().load('/models/run-to-stop.glb', resolve, undefined, (err) => console.error('run-to-stop animation load failed', err))),
+]).then(([runnerGltf, runGltf, rightTurnGltf, stopGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -121,10 +135,26 @@ Promise.all([
   hipsBindPos = hipsBone ? hipsBone.position.clone() : null;
 
   mixer = new THREE.AnimationMixer(model);
-  runAction = mixer.clipAction(animGltf.animations[0]);
-  runAction.play();
-  runAction.paused = true; // only advances while actually running forward -- see tick()
+  runAction = mixer.clipAction(runGltf.animations[0]);
+  runRightTurnAction = mixer.clipAction(rightTurnGltf.animations[0]);
+  stopAction = mixer.clipAction(stopGltf.animations[0]);
+  stopAction.setLoop(THREE.LoopOnce);
+  stopAction.clampWhenFinished = true; // holds the last frame instead of snapping back to frame 0
+  [runAction, runRightTurnAction, stopAction].forEach((a) => { a.play(); a.paused = true; });
+  activeAction = runAction;
 });
+
+// Switches which clip is actually advancing -- only one plays at a time
+// (no crossfade yet, just an instant swap) so the mixer doesn't blend two
+// full-body poses together.
+function setActiveAction(next) {
+  if (!next || next === activeAction) return;
+  activeAction.paused = true;
+  if (next !== stopAction) next.time = activeAction.time % next.getClip().duration; // keep stride phase roughly continuous across a run<->turn swap; the stop clip always starts from its own frame 0
+  else next.time = 0;
+  next.paused = false;
+  activeAction = next;
+}
 
 // The clip has real baked root motion (the hips bone actually translates
 // each stride, same as the kicker's own kick clip) -- reset to the bind
@@ -180,6 +210,7 @@ function snapCamera() {
 let running = false;
 let lastFrameAt = 0;
 let animationHandle = null;
+let wasMoving = false; // tracks the previous frame's movement state, to catch the exact moment it stops
 
 function tick(now) {
   const dt = Math.min(0.05, (now - lastFrameAt) / 1000);
@@ -199,10 +230,23 @@ function tick(now) {
     const targetYaw = lateral * 0.25;
     RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
 
-    // The run cycle only plays while actually moving -- standing still (or
-    // only side-stepping with no forward/back held) freezes on whatever
-    // frame it's on rather than running in place.
-    if (runAction) runAction.paused = !(movingForward || movingBackward);
+    // Forward+right uses the dedicated turn clip; everything else moving
+    // (straight forward, forward+left, backward) uses the straight run.
+    // The exact frame movement stops (was moving, now nothing/no longer
+    // forward-or-back held) plays the one-shot "run to stop" clip instead
+    // of just freezing mid-stride; it holds its own last frame afterward
+    // (clampWhenFinished), so nothing needs to keep re-triggering it while
+    // the player stays stopped. Pressing a movement key again immediately
+    // switches back to the run, interrupting the stop clip if still mid-play.
+    const isMoving = movingForward || movingBackward;
+    if (isMoving) {
+      if (runRightTurnAction && movingForward && lateral > 0) setActiveAction(runRightTurnAction);
+      else setActiveAction(runAction);
+      if (activeAction) activeAction.paused = false;
+    } else if (wasMoving && stopAction) {
+      setActiveAction(stopAction);
+    }
+    wasMoving = isMoving;
     if (mixer) mixer.update(dt);
     stripRootMotion();
 
@@ -243,6 +287,12 @@ async function startReturn(returnConfig) {
   buildField(fieldYards);
   RUNNER_GROUP.position.set(0, 0, 0);
   RUNNER_GROUP.rotation.y = 0;
+  wasMoving = false;
+  // Reset directly rather than through setActiveAction() -- that always
+  // unpauses whatever it switches to, which would start the run cycle
+  // animating before the player has pressed anything.
+  [runAction, runRightTurnAction, stopAction].forEach((a) => { if (a) a.paused = true; });
+  if (runAction) { activeAction = runAction; runAction.time = 0; }
   resizeRenderer();
   snapCamera();
   renderer.render(scene, camera);
