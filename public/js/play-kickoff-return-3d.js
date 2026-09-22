@@ -120,9 +120,22 @@ let runAction = null;
 let runRightTurnAction = null;
 let runLeftTurnAction = null;
 let stopAction = null;
+let turn180Action = null;
 let activeAction = null;
 let hipsBone = null;
 let hipsBindPos = null;
+
+// Celebration clips, played after crossing the goal line: a one-shot 180
+// spin, then a randomly-picked dance loop. Each entry is { name, action }
+// so a debug readout or future UI can show which dance got picked.
+const DANCE_MODEL_PATHS = [
+  '/models/hip-hop-dancing.glb',
+  '/models/hip-hop-dancing-2.glb',
+  '/models/robot-hip-hop-dance.glb',
+  '/models/shuffling.glb',
+  '/models/slide-hip-hop-dance.glb',
+];
+let danceActions = [];
 
 Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/player-kick.glb', resolve, undefined, (err) => console.error('runner model load failed', err))),
@@ -130,7 +143,9 @@ Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/running-right-turn.glb', resolve, undefined, (err) => console.error('running-right-turn animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/running-left-turn.glb', resolve, undefined, (err) => console.error('running-left-turn animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/run-to-stop.glb', resolve, undefined, (err) => console.error('run-to-stop animation load failed', err))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf]) => {
+  new Promise((resolve) => new GLTFLoader().load('/models/running-turn-180.glb', resolve, undefined, (err) => console.error('running-turn-180 animation load failed', err))),
+  Promise.all(DANCE_MODEL_PATHS.map((path) => new Promise((resolve) => new GLTFLoader().load(path, resolve, undefined, (err) => { console.error(`dance clip load failed: ${path}`, err); resolve(null); })))),
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, danceGltfs]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -146,6 +161,15 @@ Promise.all([
   stopAction = mixer.clipAction(stopGltf.animations[0]);
   stopAction.setLoop(THREE.LoopOnce);
   stopAction.clampWhenFinished = true; // holds the last frame instead of snapping back to frame 0
+  turn180Action = mixer.clipAction(turn180Gltf.animations[0]);
+  turn180Action.setLoop(THREE.LoopOnce);
+  turn180Action.clampWhenFinished = true;
+
+  danceActions = danceGltfs
+    .map((gltf, i) => (gltf ? { name: DANCE_MODEL_PATHS[i], action: mixer.clipAction(gltf.animations[0]) } : null))
+    .filter(Boolean);
+  danceActions.forEach(({ action }) => action.setLoop(THREE.LoopRepeat));
+
   // `paused` only stops an action's own time from advancing -- it does NOT
   // stop the action from being evaluated by the mixer, so a "paused" clip
   // still blends its frozen pose into the skeleton alongside whichever
@@ -153,7 +177,8 @@ Promise.all([
   // action from the blend. Without this, the turn/stop clips' poses were
   // silently bleeding into the straight run the whole time, which is what
   // was actually behind the persistent "running at an angle" report.
-  [runAction, runRightTurnAction, runLeftTurnAction, stopAction].forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  allActions.forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
   runAction.enabled = true;
   activeAction = runAction;
 });
@@ -254,57 +279,113 @@ let lastFrameAt = 0;
 let animationHandle = null;
 let wasMoving = false; // tracks the previous frame's movement state, to catch the exact moment it stops
 
+// ---- Touchdown celebration -------------------------------------------------
+// 'play' (player-controlled) -> 'endzone' (auto-run a bit further in) ->
+// 'turn' (spin to face the camera) -> 'dance' (random pick, or skipped
+// straight through if none are loaded yet) -> finalize (submit + show the
+// result panel). Player input is ignored once phase leaves 'play'.
+const ENDZONE_RUN_YARDS = 8;
+let phase = 'play';
+let phaseElapsed = 0;
+let turnStartYaw = 0;
+
+function easeOutCubic(t) {
+  return 1 - Math.pow(1 - t, 3);
+}
+
 function tick(now) {
   const dt = Math.min(0.05, (now - lastFrameAt) / 1000);
   lastFrameAt = now;
 
   if (running) {
     if (!document.hasFocus()) heldKeys.clear(); // backstop for whatever blur doesn't catch
-    let lateral = 0;
-    if (heldKeys.has('ArrowLeft')) lateral -= 1;
-    if (heldKeys.has('ArrowRight')) lateral += 1;
-    const movingForward = heldKeys.has('ArrowUp');
-    const movingBackward = !movingForward && heldKeys.has('ArrowDown');
-    const lateralLimit = FIELD_WIDTH / 2 - 1.5;
+    phaseElapsed += dt;
+    let lateral = 0, movingForward = false, movingBackward = false;
 
-    if (movingForward) RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
-    else if (movingBackward) RUNNER_GROUP.position.z = Math.min(0, RUNNER_GROUP.position.z + BACKWARD_SPEED * dt);
-    RUNNER_GROUP.position.x = THREE.MathUtils.clamp(RUNNER_GROUP.position.x + lateral * LATERAL_SPEED * dt, -lateralLimit, lateralLimit);
-    const targetYaw = lateral * 0.25;
-    RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
+    if (phase === 'play') {
+      if (heldKeys.has('ArrowLeft')) lateral -= 1;
+      if (heldKeys.has('ArrowRight')) lateral += 1;
+      movingForward = heldKeys.has('ArrowUp');
+      movingBackward = !movingForward && heldKeys.has('ArrowDown');
+      const lateralLimit = FIELD_WIDTH / 2 - 1.5;
 
-    // Forward+right/forward+left use their dedicated turn clips; straight
-    // forward and backward use the straight run. The exact frame movement
-    // stops (was moving, now nothing/no longer forward-or-back held) plays
-    // the one-shot "run to stop" clip instead of just freezing mid-stride;
-    // it holds its own last frame afterward (clampWhenFinished), so nothing
-    // needs to keep re-triggering it while the player stays stopped.
-    // Pressing a movement key again immediately switches back to the run,
-    // interrupting the stop clip if still mid-play.
-    const isMoving = movingForward || movingBackward;
-    if (isMoving) {
-      if (runRightTurnAction && movingForward && lateral > 0) setActiveAction(runRightTurnAction);
-      else if (runLeftTurnAction && movingForward && lateral < 0) setActiveAction(runLeftTurnAction);
-      else setActiveAction(runAction);
-      if (activeAction) activeAction.paused = false;
-    } else if (wasMoving && stopAction) {
-      setActiveAction(stopAction);
+      if (movingForward) RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
+      else if (movingBackward) RUNNER_GROUP.position.z = Math.min(0, RUNNER_GROUP.position.z + BACKWARD_SPEED * dt);
+      RUNNER_GROUP.position.x = THREE.MathUtils.clamp(RUNNER_GROUP.position.x + lateral * LATERAL_SPEED * dt, -lateralLimit, lateralLimit);
+      const targetYaw = lateral * 0.25;
+      RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
+
+      // Forward+right/forward+left use their dedicated turn clips; straight
+      // forward and backward use the straight run. The exact frame movement
+      // stops (was moving, now nothing/no longer forward-or-back held) plays
+      // the one-shot "run to stop" clip instead of just freezing mid-stride;
+      // it holds its own last frame afterward (clampWhenFinished), so nothing
+      // needs to keep re-triggering it while the player stays stopped.
+      // Pressing a movement key again immediately switches back to the run,
+      // interrupting the stop clip if still mid-play.
+      const isMoving = movingForward || movingBackward;
+      if (isMoving) {
+        if (runRightTurnAction && movingForward && lateral > 0) setActiveAction(runRightTurnAction);
+        else if (runLeftTurnAction && movingForward && lateral < 0) setActiveAction(runLeftTurnAction);
+        else setActiveAction(runAction);
+        if (activeAction) activeAction.paused = false;
+      } else if (wasMoving && stopAction) {
+        setActiveAction(stopAction);
+      }
+      wasMoving = isMoving;
+
+      if (RUNNER_GROUP.position.z <= -fieldYards) {
+        // Don't stop dead on the goal line -- keep auto-running a bit
+        // further into the end zone, then spin to face the camera, then
+        // (once some exist) a random celebration dance. See the phase
+        // machine comment above.
+        phase = 'endzone';
+        phaseElapsed = 0;
+        document.getElementById('kr3d-overlay-text').textContent = 'TOUCHDOWN!';
+        setActiveAction(runAction);
+        if (activeAction) activeAction.paused = false;
+      }
+    } else if (phase === 'endzone') {
+      RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
+      if (RUNNER_GROUP.position.z <= -(fieldYards + ENDZONE_RUN_YARDS)) {
+        phase = 'turn';
+        phaseElapsed = 0;
+        turnStartYaw = RUNNER_GROUP.rotation.y;
+        if (turn180Action) {
+          setActiveAction(turn180Action);
+          activeAction.paused = false;
+        }
+      }
+    } else if (phase === 'turn') {
+      // The clip's own hip rotation only carries the animation part-way
+      // around and drifts back toward 0 by its end (verified by sampling
+      // it directly -- it peaks around 80 degrees, not a full 180), so the
+      // actual about-face is driven explicitly here rather than trusted to
+      // the clip. The clip still supplies the leg/arm motion underneath.
+      const dur = turn180Action ? turn180Action.getClip().duration : 0.7;
+      const t = Math.min(1, phaseElapsed / dur);
+      RUNNER_GROUP.rotation.y = turnStartYaw + Math.PI * easeOutCubic(t);
+      if (t >= 1) {
+        phase = 'dance';
+        phaseElapsed = 0;
+        startDancePhase();
+      }
     }
-    wasMoving = isMoving;
+    // 'dance' phase has nothing to drive here -- it just holds until
+    // startDancePhase()'s own completion path (a timer for now, a
+    // mixer 'finished' listener once real dance clips exist) calls
+    // finalizeCelebration().
+
     if (mixer) mixer.update(dt);
     stripRootMotion();
 
-    document.getElementById('kr3d-yards').textContent = `${Math.max(0, Math.round(fieldYards - (-RUNNER_GROUP.position.z)))} yards to go`;
-
-    if (debugEl) {
-      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === stopAction ? 'stop' : 'none';
-      debugEl.textContent = `held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}`;
+    if (phase === 'play') {
+      document.getElementById('kr3d-yards').textContent = `${Math.max(0, Math.round(fieldYards - (-RUNNER_GROUP.position.z)))} yards to go`;
     }
 
-    if (RUNNER_GROUP.position.z <= -fieldYards) {
-      RUNNER_GROUP.position.z = -fieldYards;
-      running = false;
-      finishReturn();
+    if (debugEl) {
+      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
+      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}`;
     }
   }
 
@@ -341,8 +422,11 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  [runAction, runRightTurnAction, runLeftTurnAction, stopAction].forEach((a) => { if (a) { a.paused = true; a.enabled = false; } });
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; } });
   if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
+  phase = 'play';
+  phaseElapsed = 0;
   resizeRenderer();
   snapCamera();
   renderer.render(scene, camera);
@@ -363,13 +447,28 @@ async function startReturn(returnConfig) {
   animationHandle = requestAnimationFrame(tick);
 }
 
-async function finishReturn() {
+// Picks a random dance and lets it loop for a few seconds before wrapping
+// up. If no dance clips loaded (DANCE_MODEL_PATHS empty), skips straight to
+// finalizing -- the 'turn' phase's about-face is still a complete-feeling
+// celebration on its own.
+const DANCE_HOLD_MS = 3200;
+function startDancePhase() {
+  if (danceActions.length === 0) {
+    finalizeCelebration();
+    return;
+  }
+  const pick = danceActions[Math.floor(Math.random() * danceActions.length)];
+  setActiveAction(pick.action);
+  activeAction.paused = false;
+  wait(DANCE_HOLD_MS).then(finalizeCelebration);
+}
+
+async function finalizeCelebration() {
   stopLoop();
+  running = false;
   const yardsGained = fieldYards; // no defenders yet -- every return reaches the end zone
   const touchdown = true;
 
-  document.getElementById('kr3d-overlay-text').textContent = 'TOUCHDOWN!';
-  await wait(1200);
   document.getElementById('kr3d-overlay-text').textContent = '';
 
   try {
