@@ -184,24 +184,36 @@ function stripRootMotion() {
 }
 
 // ---- Controls: hold forward to run, left/right to steer ------------------
-const heldKeys = new Set();
+// heldKeys maps key -> the timestamp it was last confirmed down (from a
+// keydown, including the OS's own key-repeat events, which fire every few
+// tens of ms while a key is genuinely held). A keyup can be lost for all
+// sorts of reasons -- focus loss, a dropped event, a browser/extension
+// quirk -- leaving a key stuck "held" forever (e.g. a stuck ArrowRight
+// banking every forward-only press into the right-turn clip). Rather than
+// chase every individual cause, treat any entry that hasn't been refreshed
+// in a moment as stale and drop it: a real physical hold keeps refreshing
+// well inside that window, so this only ever self-heals a stuck key.
+const heldKeys = new Map();
 const GAME_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+const STALE_KEY_MS = 350;
 window.addEventListener('keydown', (e) => {
   if (!GAME_KEYS.has(e.key)) return;
   e.preventDefault(); // arrow keys scroll the page by default -- stop that while playing
-  heldKeys.add(e.key);
+  heldKeys.set(e.key, performance.now());
 });
 window.addEventListener('keyup', (e) => {
   if (!GAME_KEYS.has(e.key)) return;
   e.preventDefault();
   heldKeys.delete(e.key);
 });
-// If the tab loses focus while a key is physically held (alt-tab, clicking
-// another window), the browser never fires keyup, so that key stays stuck
-// "held" forever -- e.g. a stuck ArrowRight makes forward-only presses keep
-// banking into the right-turn clip. Clear everything on any focus loss.
 window.addEventListener('blur', () => heldKeys.clear());
 document.addEventListener('visibilitychange', () => { if (document.hidden) heldKeys.clear(); });
+
+function pruneStaleKeys(now) {
+  for (const [key, lastSeen] of heldKeys) {
+    if (now - lastSeen > STALE_KEY_MS) heldKeys.delete(key);
+  }
+}
 
 const FORWARD_SPEED = 8.5; // yards/sec
 const BACKWARD_SPEED = 4; // yards/sec
@@ -229,6 +241,7 @@ function tick(now) {
   lastFrameAt = now;
 
   if (running) {
+    pruneStaleKeys(now);
     let lateral = 0;
     if (heldKeys.has('ArrowLeft')) lateral -= 1;
     if (heldKeys.has('ArrowRight')) lateral += 1;
@@ -301,6 +314,7 @@ async function startReturn(returnConfig) {
   RUNNER_GROUP.position.set(0, 0, 0);
   RUNNER_GROUP.rotation.y = 0;
   wasMoving = false;
+  heldKeys.clear();
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
