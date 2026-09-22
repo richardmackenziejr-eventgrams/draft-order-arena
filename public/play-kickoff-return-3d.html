@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kickoff Return (3D preview) — Draft Order Arena</title>
+<link rel="stylesheet" href="/style.css" />
+<style>
+  #kr3d-canvas-wrap { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius); overflow: hidden; background: #8ec9f0; }
+  #kr3d-canvas-wrap canvas { display: block; width: 100%; height: 100%; }
+  #kr3d-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  #kr3d-overlay-text { font: 700 28px/1.2 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #eaf3ec; text-shadow: 0 2px 8px rgba(0,0,0,0.6); text-align: center; }
+  #kr3d-hud { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; font: 700 14px/1.2 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #eaf3ec; text-shadow: 0 1px 4px rgba(0,0,0,0.7); pointer-events: none; }
+</style>
+</head>
+<body>
+<header class="site">
+  <a class="logo" href="/">Draft Order <span>Arena</span></a>
+</header>
+<main class="kr-page">
+  <h1>Kickoff Return <span class="pill">3D preview</span></h1>
+  <p class="lead" id="status-line">Loading…</p>
+  <p class="lead" style="font-size:0.9rem">Movement/camera preview only — no defenders yet, every return is a touchdown. Not linked from the site yet.</p>
+
+  <div class="panel" id="game-panel" style="display:none">
+    <p class="kr-return-info" id="return-info"></p>
+    <div id="kr3d-canvas-wrap">
+      <div id="kr3d-hud">
+        <span id="kr3d-yards"></span>
+        <span id="kr3d-goal">GOAL &rarr;</span>
+      </div>
+      <div id="kr3d-overlay"><div id="kr3d-overlay-text"></div></div>
+    </div>
+    <div class="kr-controls-row">
+      <p class="kr-hint"><strong>&larr; &rarr;</strong> steer</p>
+      <div class="kr-action-row">
+        <button id="start-return-btn" class="btn" style="display:none">Start Return &rarr;</button>
+        <button id="next-return-btn" class="btn" style="display:none">Next Return &rarr;</button>
+      </div>
+    </div>
+    <p id="kr-result"></p>
+  </div>
+
+  <div class="panel" id="done-panel" style="display:none">
+    <p id="done-message"></p>
+  </div>
+
+  <p><a class="btn secondary" id="back-link" href="/" style="display:none">Home</a></p>
+</main>
+<footer class="site">Draft Order Arena — prototype</footer>
+<script src="/js/common.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three/build/three.module.js",
+    "three/addons/": "/vendor/three/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="/js/play-kickoff-return-3d.js"></script>
+</body>
+</html>
