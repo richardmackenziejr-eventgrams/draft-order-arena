@@ -190,6 +190,12 @@ window.addEventListener('keyup', (e) => {
   e.preventDefault();
   heldKeys.delete(e.key);
 });
+// If the tab loses focus while a key is physically held (alt-tab, clicking
+// another window), the browser never fires keyup, so that key stays stuck
+// "held" forever -- e.g. a stuck ArrowRight makes forward-only presses keep
+// banking into the right-turn clip. Clear everything on any focus loss.
+window.addEventListener('blur', () => heldKeys.clear());
+document.addEventListener('visibilitychange', () => { if (document.hidden) heldKeys.clear(); });
 
 const FORWARD_SPEED = 8.5; // yards/sec
 const BACKWARD_SPEED = 4; // yards/sec
