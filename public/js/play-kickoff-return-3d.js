@@ -501,7 +501,9 @@ async function finalizeCelebration() {
   const yardsGained = fieldYards; // no defenders yet -- every return reaches the end zone
   const touchdown = true;
 
-  document.getElementById('kr3d-overlay-text').textContent = '';
+  // "TOUCHDOWN!" stays up through the whole celebration now -- it only
+  // gets overwritten when the next return's "Kickoff..." message shows
+  // (see startReturn()), not cleared here.
 
   try {
     const { outcome } = await api('POST', `/api/game-instances/${instanceId}/kickoff-return/submit`, { memberId, yardsGained, touchdown });
