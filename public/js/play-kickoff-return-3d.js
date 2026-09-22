@@ -149,8 +149,17 @@ function stripRootMotion() {
 
 // ---- Controls: hold forward to run, left/right to steer ------------------
 const heldKeys = new Set();
-window.addEventListener('keydown', (e) => heldKeys.add(e.key));
-window.addEventListener('keyup', (e) => heldKeys.delete(e.key));
+const GAME_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+window.addEventListener('keydown', (e) => {
+  if (!GAME_KEYS.has(e.key)) return;
+  e.preventDefault(); // arrow keys scroll the page by default -- stop that while playing
+  heldKeys.add(e.key);
+});
+window.addEventListener('keyup', (e) => {
+  if (!GAME_KEYS.has(e.key)) return;
+  e.preventDefault();
+  heldKeys.delete(e.key);
+});
 
 const FORWARD_SPEED = 8.5; // yards/sec
 const BACKWARD_SPEED = 4; // yards/sec
