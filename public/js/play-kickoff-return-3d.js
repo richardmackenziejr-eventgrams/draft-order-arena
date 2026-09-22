@@ -104,17 +104,21 @@ scene.add(RUNNER_GROUP);
 // replaces an earlier procedural (direct bone rotation) attempt that
 // worked but looked stiff next to real mocap.
 //
-// Three clips: a straight run, a dedicated "running right turn" used while
-// holding forward+right so a turn actually looks like banking into one
-// instead of the straight-run cycle playing under a yaw twist, and a
-// one-shot "run to stop" played when the player releases every movement
-// key after running, instead of just freezing mid-stride. There's no
-// left-turn clip yet (only "Running Right Turn" was downloaded so far) --
-// forward+left falls back to the straight run for now. A matching
-// "Running Left Turn" download would let this mirror cleanly.
+// Four clips: a straight run, dedicated "running right/left turn" clips
+// used while holding forward+right or forward+left so a turn actually
+// looks like banking into one instead of the straight-run cycle playing
+// under a yaw twist, and a one-shot "run to stop" played when the player
+// releases every movement key after running, instead of just freezing
+// mid-stride. Mixamo has no "Running Left Turn" download, so the left
+// clip is a programmatic mirror of the right-turn clip (swap each
+// Left/Right bone pair's rotation track and negate the Y/Z quaternion
+// components -- see scratchpad mirror_animation.py) -- verified visually
+// frame-by-frame before shipping since a sign error there produces a
+// silently broken-looking animation, not an error.
 let mixer = null;
 let runAction = null;
 let runRightTurnAction = null;
+let runLeftTurnAction = null;
 let stopAction = null;
 let activeAction = null;
 let hipsBone = null;
@@ -124,8 +128,9 @@ Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/player-kick.glb', resolve, undefined, (err) => console.error('runner model load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/running.glb', resolve, undefined, (err) => console.error('running animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/running-right-turn.glb', resolve, undefined, (err) => console.error('running-right-turn animation load failed', err))),
+  new Promise((resolve) => new GLTFLoader().load('/models/running-left-turn.glb', resolve, undefined, (err) => console.error('running-left-turn animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/run-to-stop.glb', resolve, undefined, (err) => console.error('run-to-stop animation load failed', err))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, stopGltf]) => {
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -137,10 +142,11 @@ Promise.all([
   mixer = new THREE.AnimationMixer(model);
   runAction = mixer.clipAction(runGltf.animations[0]);
   runRightTurnAction = mixer.clipAction(rightTurnGltf.animations[0]);
+  runLeftTurnAction = mixer.clipAction(leftTurnGltf.animations[0]);
   stopAction = mixer.clipAction(stopGltf.animations[0]);
   stopAction.setLoop(THREE.LoopOnce);
   stopAction.clampWhenFinished = true; // holds the last frame instead of snapping back to frame 0
-  [runAction, runRightTurnAction, stopAction].forEach((a) => { a.play(); a.paused = true; });
+  [runAction, runRightTurnAction, runLeftTurnAction, stopAction].forEach((a) => { a.play(); a.paused = true; });
   activeAction = runAction;
 });
 
@@ -236,17 +242,18 @@ function tick(now) {
     const targetYaw = lateral * 0.25;
     RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
 
-    // Forward+right uses the dedicated turn clip; everything else moving
-    // (straight forward, forward+left, backward) uses the straight run.
-    // The exact frame movement stops (was moving, now nothing/no longer
-    // forward-or-back held) plays the one-shot "run to stop" clip instead
-    // of just freezing mid-stride; it holds its own last frame afterward
-    // (clampWhenFinished), so nothing needs to keep re-triggering it while
-    // the player stays stopped. Pressing a movement key again immediately
-    // switches back to the run, interrupting the stop clip if still mid-play.
+    // Forward+right/forward+left use their dedicated turn clips; straight
+    // forward and backward use the straight run. The exact frame movement
+    // stops (was moving, now nothing/no longer forward-or-back held) plays
+    // the one-shot "run to stop" clip instead of just freezing mid-stride;
+    // it holds its own last frame afterward (clampWhenFinished), so nothing
+    // needs to keep re-triggering it while the player stays stopped.
+    // Pressing a movement key again immediately switches back to the run,
+    // interrupting the stop clip if still mid-play.
     const isMoving = movingForward || movingBackward;
     if (isMoving) {
       if (runRightTurnAction && movingForward && lateral > 0) setActiveAction(runRightTurnAction);
+      else if (runLeftTurnAction && movingForward && lateral < 0) setActiveAction(runLeftTurnAction);
       else setActiveAction(runAction);
       if (activeAction) activeAction.paused = false;
     } else if (wasMoving && stopAction) {
@@ -297,7 +304,7 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  [runAction, runRightTurnAction, stopAction].forEach((a) => { if (a) a.paused = true; });
+  [runAction, runRightTurnAction, runLeftTurnAction, stopAction].forEach((a) => { if (a) a.paused = true; });
   if (runAction) { activeAction = runAction; runAction.time = 0; }
   resizeRenderer();
   snapCamera();
