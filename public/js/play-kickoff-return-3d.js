@@ -127,13 +127,24 @@ Promise.all([
 });
 
 // The clip has real baked root motion (the hips bone actually translates
-// forward each stride, same as the kicker's own kick clip) -- stripped out
-// every frame below so it only articulates limbs; actual world movement is
-// driven by the game loop, not the animation.
+// each stride, same as the kicker's own kick clip) -- reset to the bind
+// pose every frame below so it only articulates limbs; actual world
+// movement is driven by the game loop, not the animation.
+//
+// Resets ALL THREE axes, not just the horizontal X/Z (an earlier version
+// preserved Y for a "natural" vertical bob). This clip's translation data
+// turned out to be in a different unit scale than our model -- Y alone
+// swings from ~0.5 to ~378 across one loop, versus the model's own
+// ~1.8-unit total height -- a leftover from converting the standalone
+// Mixamo download through Blender with no scale correction. That's not
+// just an oversized bob: at that scale it flings the whole character up
+// off-camera and snaps it back every loop, which is what actually looked
+// like a camera jump. Discarding all three axes and relying purely on the
+// rotation tracks (unaffected by any scale mismatch) for the visible
+// running motion sidesteps the bad data entirely.
 function stripRootMotion() {
   if (!hipsBone || !hipsBindPos) return;
-  hipsBone.position.x = hipsBindPos.x;
-  hipsBone.position.z = hipsBindPos.z;
+  hipsBone.position.copy(hipsBindPos);
 }
 
 // ---- Controls: hold forward to run, left/right to steer ------------------
