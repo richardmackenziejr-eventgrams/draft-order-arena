@@ -348,9 +348,10 @@ let turnStartYaw = 0;
 
 // Pure-backward turnaround: holding only ArrowDown (no forward, no
 // lateral) spins the runner 180 to face his own goal line and then runs
-// "forward" in that direction, reusing the same turn180Action used for
-// the touchdown celebration, instead of visibly running forward while
-// drifting backward.
+// "forward" in that direction, instead of visibly running forward while
+// drifting backward. Fast and clip-independent -- see the comment at the
+// trigger site for why this doesn't reuse the celebration's turn180Action.
+const BACKWARD_TURN_DURATION = 0.2;
 let facingBackward = false;
 let turningAround = false;
 let turnFromYaw = 0;
@@ -377,12 +378,21 @@ function tick(now) {
       movingBackward = !movingForward && heldKeys.has('ArrowDown');
       const lateralLimit = FIELD_WIDTH / 2 - 1.5;
 
-      // Pure backward (no forward, no lateral) triggers a 180 spin to
+      // Pure backward (no forward, no lateral) triggers a quick spin to
       // face his own goal line, then runs "forward" in that direction --
       // otherwise he visibly runs forward while drifting backward, the
       // same class of mismatch fixed for pure-lateral movement earlier,
       // just on the Z axis. Any OTHER combination (forward, or backward
       // with lateral) keeps the existing behavior untouched.
+      //
+      // Deliberately NOT turn180Action here (that's the touchdown
+      // celebration's clip) -- it's a real ~0.7s captured performance
+      // that lunges to one side as part of its own choreography, which
+      // read as sluggish and lurchy for a gameplay direction change once
+      // it always started from frame 0 (a prior fix). This is a pure
+      // rotation instead, fast and clip-independent, with the run clip
+      // already animating throughout so his legs don't pause either --
+      // a snappy "spin move" rather than a stylized turn.
       const wantsBackward = movingBackward && lateral === 0;
       if (!turningAround && wantsBackward !== facingBackward) {
         turningAround = true;
@@ -390,16 +400,16 @@ function tick(now) {
         turnToYaw = wantsBackward ? Math.PI : 0;
         facingBackward = wantsBackward;
         turnAroundElapsed = 0;
-        if (turn180Action) { setActiveAction(turn180Action); activeAction.paused = false; }
+        setActiveAction(runAction);
+        if (activeAction) activeAction.paused = false;
       }
 
       if (turningAround) {
-        // Movement pauses for the ~0.7s spin, same as the celebration's
-        // turn phase -- a committed action, not something you can cancel
-        // mid-spin by tapping a different key.
+        // Position stays put for this brief window (a committed action,
+        // not cancelable mid-spin by tapping a different key) but it's
+        // short enough now to barely register as a pause.
         turnAroundElapsed += dt;
-        const dur = turn180Action ? turn180Action.getClip().duration : 0.7;
-        const t = Math.min(1, turnAroundElapsed / dur);
+        const t = Math.min(1, turnAroundElapsed / BACKWARD_TURN_DURATION);
         RUNNER_GROUP.rotation.y = turnFromYaw + (turnToYaw - turnFromYaw) * easeOutCubic(t);
         if (t >= 1) turningAround = false;
       } else {
