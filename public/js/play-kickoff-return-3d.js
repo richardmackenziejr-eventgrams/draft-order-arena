@@ -124,6 +124,9 @@ let turn180Action = null;
 let activeAction = null;
 let hipsBone = null;
 let hipsBindPos = null;
+let hipsBindQuat = null;
+let spineBone = null;
+let spineBindQuat = null;
 
 // Celebration clips, played after crossing the goal line: a one-shot 180
 // spin, then a randomly-picked dance loop. Each entry is { name, action }
@@ -151,8 +154,13 @@ Promise.all([
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   RUNNER_GROUP.add(model);
 
-  model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') hipsBone = o; });
+  model.traverse((o) => {
+    if (o.isBone && o.name === 'mixamorigHips') hipsBone = o;
+    if (o.isBone && o.name === 'mixamorigSpine') spineBone = o;
+  });
   hipsBindPos = hipsBone ? hipsBone.position.clone() : null;
+  hipsBindQuat = hipsBone ? hipsBone.quaternion.clone() : null;
+  spineBindQuat = spineBone ? spineBone.quaternion.clone() : null;
 
   mixer = new THREE.AnimationMixer(model);
   runAction = mixer.clipAction(runGltf.animations[0]);
@@ -216,6 +224,20 @@ function setActiveAction(next) {
 function stripRootMotion() {
   if (!hipsBone || !hipsBindPos) return;
   hipsBone.position.copy(hipsBindPos);
+}
+
+// The real "Running Right/Left Turn" mocap clips bank the whole torso
+// hard into the turn (a real sprinter cutting sharply does lean that far)
+// -- looks fine in isolation, but next to the shallow RUNNER_GROUP yaw
+// turn below, it read as leaning without actually turning. Pull the
+// hips/spine rotation partway back toward their bind pose every frame
+// while a turn clip is active, damping the lean without touching the
+// leg/arm swing (which is what actually sells "turning stride" and comes
+// from other bones untouched here).
+const TURN_LEAN_KEEP = 0.45; // fraction of the clip's own lean to keep; rest blends back to upright
+function dampTurnLean() {
+  if (hipsBone && hipsBindQuat) hipsBone.quaternion.slerp(hipsBindQuat, 1 - TURN_LEAN_KEEP);
+  if (spineBone && spineBindQuat) spineBone.quaternion.slerp(spineBindQuat, 1 - TURN_LEAN_KEEP);
 }
 
 // ---- Controls: hold forward to run, left/right to steer ------------------
@@ -329,7 +351,7 @@ function tick(now) {
       if (movingForward) RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
       else if (movingBackward) RUNNER_GROUP.position.z = Math.min(0, RUNNER_GROUP.position.z + BACKWARD_SPEED * dt);
       RUNNER_GROUP.position.x = THREE.MathUtils.clamp(RUNNER_GROUP.position.x + lateral * LATERAL_SPEED * dt, -lateralLimit, lateralLimit);
-      const targetYaw = lateral * 0.25;
+      const targetYaw = lateral * 0.45; // how far the whole body visibly turns to face the run direction
       RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
 
       // Forward+right/forward+left use their dedicated turn clips; straight
@@ -396,6 +418,7 @@ function tick(now) {
 
     if (mixer) mixer.update(dt);
     stripRootMotion();
+    if (activeAction === runRightTurnAction || activeAction === runLeftTurnAction) dampTurnLean();
 
     if (phase === 'play') {
       document.getElementById('kr3d-yards').textContent = `${Math.max(0, Math.round(fieldYards - (-RUNNER_GROUP.position.z)))} yards to go`;
