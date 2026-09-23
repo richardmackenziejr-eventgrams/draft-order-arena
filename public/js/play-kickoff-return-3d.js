@@ -119,6 +119,8 @@ let mixer = null;
 let runAction = null;
 let runRightTurnAction = null;
 let runLeftTurnAction = null;
+let rightStrafeAction = null;
+let leftStrafeAction = null;
 let stopAction = null;
 let turn180Action = null;
 let activeAction = null;
@@ -147,8 +149,10 @@ Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/running-left-turn.glb', resolve, undefined, (err) => console.error('running-left-turn animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/run-to-stop.glb', resolve, undefined, (err) => console.error('run-to-stop animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/running-turn-180.glb', resolve, undefined, (err) => console.error('running-turn-180 animation load failed', err))),
+  new Promise((resolve) => new GLTFLoader().load('/models/right-strafe.glb', resolve, undefined, (err) => console.error('right-strafe animation load failed', err))),
+  new Promise((resolve) => new GLTFLoader().load('/models/left-strafe.glb', resolve, undefined, (err) => console.error('left-strafe animation load failed', err))),
   Promise.all(DANCE_MODEL_PATHS.map((path) => new Promise((resolve) => new GLTFLoader().load(path, resolve, undefined, (err) => { console.error(`dance clip load failed: ${path}`, err); resolve(null); })))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, danceGltfs]) => {
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, danceGltfs]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -172,6 +176,8 @@ Promise.all([
   turn180Action = mixer.clipAction(turn180Gltf.animations[0]);
   turn180Action.setLoop(THREE.LoopOnce);
   turn180Action.clampWhenFinished = true;
+  rightStrafeAction = mixer.clipAction(rightStrafeGltf.animations[0]);
+  leftStrafeAction = mixer.clipAction(leftStrafeGltf.animations[0]);
 
   danceActions = danceGltfs
     .map((gltf, i) => (gltf ? { name: DANCE_MODEL_PATHS[i], action: mixer.clipAction(gltf.animations[0]) } : null))
@@ -185,7 +191,7 @@ Promise.all([
   // action from the blend. Without this, the turn/stop clips' poses were
   // silently bleeding into the straight run the whole time, which is what
   // was actually behind the persistent "running at an angle" report.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
   allActions.forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
   runAction.enabled = true;
   activeAction = runAction;
@@ -375,10 +381,16 @@ function tick(now) {
       // while the player stays stopped. Pressing a movement key again
       // immediately switches back to the run, interrupting the stop clip
       // if still mid-play.
+      // Forward+turn uses the running-turn clips (banking into a turn
+      // while sprinting); lateral-only or backward+lateral uses the
+      // dedicated strafe clips instead -- a forward-run turn clip looks
+      // wrong when he isn't actually running forward.
       const isMoving = movingForward || movingBackward || lateral !== 0;
       if (isMoving) {
-        if (runRightTurnAction && lateral > 0) setActiveAction(runRightTurnAction);
-        else if (runLeftTurnAction && lateral < 0) setActiveAction(runLeftTurnAction);
+        if (movingForward && runRightTurnAction && lateral > 0) setActiveAction(runRightTurnAction);
+        else if (movingForward && runLeftTurnAction && lateral < 0) setActiveAction(runLeftTurnAction);
+        else if (rightStrafeAction && lateral > 0) setActiveAction(rightStrafeAction);
+        else if (leftStrafeAction && lateral < 0) setActiveAction(leftStrafeAction);
         else setActiveAction(runAction);
         if (activeAction) activeAction.paused = false;
       } else if (wasMoving && stopAction) {
@@ -438,7 +450,7 @@ function tick(now) {
     }
 
     if (debugEl) {
-      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
+      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
       debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}`;
     }
   }
@@ -481,7 +493,7 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
   allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; } });
   if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   phase = 'play';
