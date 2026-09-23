@@ -362,18 +362,23 @@ function tick(now) {
       const targetYaw = -lateral * 0.32; // how far the whole body visibly turns to face the run direction
       RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
 
-      // Forward+right/forward+left use their dedicated turn clips; straight
-      // forward and backward use the straight run. The exact frame movement
-      // stops (was moving, now nothing/no longer forward-or-back held) plays
-      // the one-shot "run to stop" clip instead of just freezing mid-stride;
-      // it holds its own last frame afterward (clampWhenFinished), so nothing
-      // needs to keep re-triggering it while the player stays stopped.
-      // Pressing a movement key again immediately switches back to the run,
-      // interrupting the stop clip if still mid-play.
-      const isMoving = movingForward || movingBackward;
+      // Right/left (with or without forward) use their dedicated turn
+      // clips; forward-only and backward use the straight run. Lateral
+      // position already moved regardless of whether forward/backward was
+      // also held (see position.x above), so isMoving has to include
+      // lateral-only input too -- otherwise the position slides but no
+      // clip plays, which is what read as sliding without actually
+      // running. The exact frame movement stops (was moving, now nothing
+      // held at all) plays the one-shot "run to stop" clip instead of
+      // just freezing mid-stride; it holds its own last frame afterward
+      // (clampWhenFinished), so nothing needs to keep re-triggering it
+      // while the player stays stopped. Pressing a movement key again
+      // immediately switches back to the run, interrupting the stop clip
+      // if still mid-play.
+      const isMoving = movingForward || movingBackward || lateral !== 0;
       if (isMoving) {
-        if (runRightTurnAction && movingForward && lateral > 0) setActiveAction(runRightTurnAction);
-        else if (runLeftTurnAction && movingForward && lateral < 0) setActiveAction(runLeftTurnAction);
+        if (runRightTurnAction && lateral > 0) setActiveAction(runRightTurnAction);
+        else if (runLeftTurnAction && lateral < 0) setActiveAction(runLeftTurnAction);
         else setActiveAction(runAction);
         if (activeAction) activeAction.paused = false;
       } else if (wasMoving && stopAction) {
