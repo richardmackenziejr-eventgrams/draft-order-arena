@@ -351,7 +351,15 @@ function tick(now) {
       if (movingForward) RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
       else if (movingBackward) RUNNER_GROUP.position.z = Math.min(0, RUNNER_GROUP.position.z + BACKWARD_SPEED * dt);
       RUNNER_GROUP.position.x = THREE.MathUtils.clamp(RUNNER_GROUP.position.x + lateral * LATERAL_SPEED * dt, -lateralLimit, lateralLimit);
-      const targetYaw = lateral * 0.32; // how far the whole body visibly turns to face the run direction -- 0.45 turned the silhouette too far toward profile view, making the leg swing read ambiguously (forward vs backward)
+      // Negative sign is deliberate and confirmed via Three.js's own
+      // getWorldDirection(), not a guess: the model carries a base
+      // rotation.y = Math.PI (needed so it faces away from camera at
+      // yaw=0), and composing that with a POSITIVE steering yaw rotates
+      // the facing direction toward -X -- opposite the +X the character
+      // is actually moving toward when lateral > 0 (ArrowRight). Without
+      // this negation the body visibly faces away from its own direction
+      // of travel, which is what read as "legs running the wrong way."
+      const targetYaw = -lateral * 0.32; // how far the whole body visibly turns to face the run direction
       RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
 
       // Forward+right/forward+left use their dedicated turn clips; straight
