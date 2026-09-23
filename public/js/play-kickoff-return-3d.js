@@ -334,6 +334,17 @@ let phase = 'play';
 let phaseElapsed = 0;
 let turnStartYaw = 0;
 
+// Pure-backward turnaround: holding only ArrowDown (no forward, no
+// lateral) spins the runner 180 to face his own goal line and then runs
+// "forward" in that direction, reusing the same turn180Action used for
+// the touchdown celebration, instead of visibly running forward while
+// drifting backward.
+let facingBackward = false;
+let turningAround = false;
+let turnFromYaw = 0;
+let turnToYaw = 0;
+let turnAroundElapsed = 0;
+
 function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
 }
@@ -354,49 +365,86 @@ function tick(now) {
       movingBackward = !movingForward && heldKeys.has('ArrowDown');
       const lateralLimit = FIELD_WIDTH / 2 - 1.5;
 
-      if (movingForward) RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
-      else if (movingBackward) RUNNER_GROUP.position.z = Math.min(0, RUNNER_GROUP.position.z + BACKWARD_SPEED * dt);
-      RUNNER_GROUP.position.x = THREE.MathUtils.clamp(RUNNER_GROUP.position.x + lateral * LATERAL_SPEED * dt, -lateralLimit, lateralLimit);
-      // Negative sign is deliberate and confirmed via Three.js's own
-      // getWorldDirection(), not a guess: the model carries a base
-      // rotation.y = Math.PI (needed so it faces away from camera at
-      // yaw=0), and composing that with a POSITIVE steering yaw rotates
-      // the facing direction toward -X -- opposite the +X the character
-      // is actually moving toward when lateral > 0 (ArrowRight). Without
-      // this negation the body visibly faces away from its own direction
-      // of travel, which is what read as "legs running the wrong way."
-      const targetYaw = -lateral * 0.32; // how far the whole body visibly turns to face the run direction
-      RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
-
-      // Right/left (with or without forward) use their dedicated turn
-      // clips; forward-only and backward use the straight run. Lateral
-      // position already moved regardless of whether forward/backward was
-      // also held (see position.x above), so isMoving has to include
-      // lateral-only input too -- otherwise the position slides but no
-      // clip plays, which is what read as sliding without actually
-      // running. The exact frame movement stops (was moving, now nothing
-      // held at all) plays the one-shot "run to stop" clip instead of
-      // just freezing mid-stride; it holds its own last frame afterward
-      // (clampWhenFinished), so nothing needs to keep re-triggering it
-      // while the player stays stopped. Pressing a movement key again
-      // immediately switches back to the run, interrupting the stop clip
-      // if still mid-play.
-      // Forward+turn uses the running-turn clips (banking into a turn
-      // while sprinting); lateral-only or backward+lateral uses the
-      // dedicated strafe clips instead -- a forward-run turn clip looks
-      // wrong when he isn't actually running forward.
-      const isMoving = movingForward || movingBackward || lateral !== 0;
-      if (isMoving) {
-        if (movingForward && runRightTurnAction && lateral > 0) setActiveAction(runRightTurnAction);
-        else if (movingForward && runLeftTurnAction && lateral < 0) setActiveAction(runLeftTurnAction);
-        else if (rightStrafeAction && lateral > 0) setActiveAction(rightStrafeAction);
-        else if (leftStrafeAction && lateral < 0) setActiveAction(leftStrafeAction);
-        else setActiveAction(runAction);
-        if (activeAction) activeAction.paused = false;
-      } else if (wasMoving && stopAction) {
-        setActiveAction(stopAction);
+      // Pure backward (no forward, no lateral) triggers a 180 spin to
+      // face his own goal line, then runs "forward" in that direction --
+      // otherwise he visibly runs forward while drifting backward, the
+      // same class of mismatch fixed for pure-lateral movement earlier,
+      // just on the Z axis. Any OTHER combination (forward, or backward
+      // with lateral) keeps the existing behavior untouched.
+      const wantsBackward = movingBackward && lateral === 0;
+      if (!turningAround && wantsBackward !== facingBackward) {
+        turningAround = true;
+        turnFromYaw = facingBackward ? Math.PI : 0;
+        turnToYaw = wantsBackward ? Math.PI : 0;
+        facingBackward = wantsBackward;
+        turnAroundElapsed = 0;
+        if (turn180Action) { setActiveAction(turn180Action); activeAction.paused = false; }
       }
-      wasMoving = isMoving;
+
+      if (turningAround) {
+        // Movement pauses for the ~0.7s spin, same as the celebration's
+        // turn phase -- a committed action, not something you can cancel
+        // mid-spin by tapping a different key.
+        turnAroundElapsed += dt;
+        const dur = turn180Action ? turn180Action.getClip().duration : 0.7;
+        const t = Math.min(1, turnAroundElapsed / dur);
+        RUNNER_GROUP.rotation.y = turnFromYaw + (turnToYaw - turnFromYaw) * easeOutCubic(t);
+        if (t >= 1) turningAround = false;
+      } else {
+        if (facingBackward) {
+          // Turned around -- this is now his "forward": full running
+          // speed and the normal run clip, not the slower backward
+          // shuffle used when backward is combined with lateral input.
+          RUNNER_GROUP.position.z = Math.min(0, RUNNER_GROUP.position.z + FORWARD_SPEED * dt);
+        } else if (movingForward) {
+          RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
+        } else if (movingBackward) {
+          RUNNER_GROUP.position.z = Math.min(0, RUNNER_GROUP.position.z + BACKWARD_SPEED * dt);
+        }
+        RUNNER_GROUP.position.x = THREE.MathUtils.clamp(RUNNER_GROUP.position.x + lateral * LATERAL_SPEED * dt, -lateralLimit, lateralLimit);
+        // Negative sign is deliberate and confirmed via Three.js's own
+        // getWorldDirection(), not a guess: the model carries a base
+        // rotation.y = Math.PI (needed so it faces away from camera at
+        // yaw=0), and composing that with a POSITIVE steering yaw rotates
+        // the facing direction toward -X -- opposite the +X the character
+        // is actually moving toward when lateral > 0 (ArrowRight). Without
+        // this negation the body visibly faces away from its own direction
+        // of travel, which is what read as "legs running the wrong way."
+        const baseYaw = facingBackward ? Math.PI : 0;
+        const targetYaw = baseYaw + -lateral * 0.32; // how far the whole body visibly turns to face the run direction
+        RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
+
+        // Right/left (with or without forward) use their dedicated turn
+        // clips; forward-only and backward use the straight run. Lateral
+        // position already moved regardless of whether forward/backward
+        // was also held (see position.x above), so isMoving has to
+        // include lateral-only input too -- otherwise the position
+        // slides but no clip plays, which is what read as sliding
+        // without actually running. The exact frame movement stops (was
+        // moving, now nothing held at all) plays the one-shot "run to
+        // stop" clip instead of just freezing mid-stride; it holds its
+        // own last frame afterward (clampWhenFinished), so nothing needs
+        // to keep re-triggering it while the player stays stopped.
+        // Pressing a movement key again immediately switches back to the
+        // run, interrupting the stop clip if still mid-play.
+        // Forward+turn uses the running-turn clips (banking into a turn
+        // while sprinting); lateral-only or backward+lateral uses the
+        // dedicated strafe clips instead -- a forward-run turn clip looks
+        // wrong when he isn't actually running forward.
+        const isMoving = movingForward || movingBackward || lateral !== 0;
+        if (isMoving) {
+          if (facingBackward) setActiveAction(runAction);
+          else if (movingForward && runRightTurnAction && lateral > 0) setActiveAction(runRightTurnAction);
+          else if (movingForward && runLeftTurnAction && lateral < 0) setActiveAction(runLeftTurnAction);
+          else if (rightStrafeAction && lateral > 0) setActiveAction(rightStrafeAction);
+          else if (leftStrafeAction && lateral < 0) setActiveAction(leftStrafeAction);
+          else setActiveAction(runAction);
+          if (activeAction) activeAction.paused = false;
+        } else if (wasMoving && stopAction) {
+          setActiveAction(stopAction);
+        }
+        wasMoving = isMoving;
+      }
 
       if (RUNNER_GROUP.position.z <= -fieldYards) {
         // Don't stop dead on the goal line -- keep auto-running a bit
@@ -451,7 +499,7 @@ function tick(now) {
 
     if (debugEl) {
       const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
-      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}`;
+      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}`;
     }
   }
 
@@ -499,6 +547,8 @@ async function startReturn(returnConfig) {
   phase = 'play';
   phaseElapsed = 0;
   celebrationCamFrozen = false;
+  facingBackward = false;
+  turningAround = false;
   resizeRenderer();
   snapCamera();
   renderer.render(scene, camera);
