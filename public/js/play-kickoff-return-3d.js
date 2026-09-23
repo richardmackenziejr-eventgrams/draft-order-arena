@@ -351,7 +351,7 @@ function tick(now) {
       if (movingForward) RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
       else if (movingBackward) RUNNER_GROUP.position.z = Math.min(0, RUNNER_GROUP.position.z + BACKWARD_SPEED * dt);
       RUNNER_GROUP.position.x = THREE.MathUtils.clamp(RUNNER_GROUP.position.x + lateral * LATERAL_SPEED * dt, -lateralLimit, lateralLimit);
-      const targetYaw = lateral * 0.45; // how far the whole body visibly turns to face the run direction
+      const targetYaw = lateral * 0.32; // how far the whole body visibly turns to face the run direction -- 0.45 turned the silhouette too far toward profile view, making the leg swing read ambiguously (forward vs backward)
       RUNNER_GROUP.rotation.y += (targetYaw - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 8);
 
       // Forward+right/forward+left use their dedicated turn clips; straight
