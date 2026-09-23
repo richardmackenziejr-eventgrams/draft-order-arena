@@ -178,6 +178,7 @@ Promise.all([
   turn180Action.clampWhenFinished = true;
   rightStrafeAction = mixer.clipAction(rightStrafeGltf.animations[0]);
   leftStrafeAction = mixer.clipAction(leftStrafeGltf.animations[0]);
+  ONE_SHOT_ACTIONS.add(stopAction).add(turn180Action);
 
   danceActions = danceGltfs
     .map((gltf, i) => (gltf ? { name: DANCE_MODEL_PATHS[i], action: mixer.clipAction(gltf.animations[0]) } : null))
@@ -200,12 +201,23 @@ Promise.all([
 // Switches which clip is actually advancing -- only one is ever enabled at
 // a time (no crossfade yet, just an instant swap) so the mixer never
 // blends two full-body poses together.
+// Phase-continuity (carrying the previous clip's stride time over) only
+// makes sense between the cyclical gait clips (run/right-turn/left-turn/
+// strafes), which share a similar-length loop -- it's what keeps a
+// run<->turn swap from popping mid-stride. stopAction and turn180Action
+// are one-shot choreographed clips, not gait loops: starting turn180Action
+// from a carried-over, effectively random mid-clip time made it begin
+// from a jarring wrong pose AND finish its own animation early (since our
+// separately-computed rotation eases over the clip's FULL duration while
+// the clip itself only had the remaining fraction left to play), leaving
+// him frozen mid-limb-pose while still visibly rotating for the rest of
+// the turn -- this is what read as "a weird move before turning around."
+const ONE_SHOT_ACTIONS = new Set();
 function setActiveAction(next) {
   if (!next || next === activeAction) return;
   activeAction.paused = true;
   activeAction.enabled = false;
-  if (next !== stopAction) next.time = activeAction.time % next.getClip().duration; // keep stride phase roughly continuous across a run<->turn swap; the stop clip always starts from its own frame 0
-  else next.time = 0;
+  next.time = ONE_SHOT_ACTIONS.has(next) ? 0 : activeAction.time % next.getClip().duration;
   next.enabled = true;
   next.paused = false;
   activeAction = next;
