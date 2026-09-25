@@ -121,6 +121,8 @@ let runRightTurnAction = null;
 let runLeftTurnAction = null;
 let rightStrafeAction = null;
 let leftStrafeAction = null;
+let spinLeftAction = null;
+let spinRightAction = null;
 let stopAction = null;
 let turn180Action = null;
 let activeAction = null;
@@ -129,6 +131,14 @@ let hipsBindPos = null;
 let hipsBindQuat = null;
 let spineBone = null;
 let spineBindQuat = null;
+
+// The spin clips are JSON, not GLB: quaternion tracks retargeted offline
+// (see the DeepMotion capture notes) onto this model's Mixamo bone names.
+const SPIN_TIME_SCALE = 2.6; // captured at coaching speed (~1.8s); played faster so a spin is a quick move
+function clipFromJson(j) {
+  const tracks = Object.entries(j.tracks).map(([bone, vals]) => new THREE.QuaternionKeyframeTrack(`${bone}.quaternion`, j.times, vals));
+  return new THREE.AnimationClip(j.name, j.duration, tracks);
+}
 
 // Celebration clips, played after crossing the goal line: a one-shot 180
 // spin, then a randomly-picked dance loop. Each entry is { name, action }
@@ -151,8 +161,10 @@ Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/running-turn-180.glb', resolve, undefined, (err) => console.error('running-turn-180 animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/right-strafe.glb', resolve, undefined, (err) => console.error('right-strafe animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/left-strafe.glb', resolve, undefined, (err) => console.error('left-strafe animation load failed', err))),
+  fetch('/models/spin-left.json').then((r) => r.json()),
+  fetch('/models/spin-right.json').then((r) => r.json()),
   Promise.all(DANCE_MODEL_PATHS.map((path) => new Promise((resolve) => new GLTFLoader().load(path, resolve, undefined, (err) => { console.error(`dance clip load failed: ${path}`, err); resolve(null); })))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, danceGltfs]) => {
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, spinLeftJson, spinRightJson, danceGltfs]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -178,7 +190,10 @@ Promise.all([
   turn180Action.clampWhenFinished = true;
   rightStrafeAction = mixer.clipAction(rightStrafeGltf.animations[0]);
   leftStrafeAction = mixer.clipAction(leftStrafeGltf.animations[0]);
-  ONE_SHOT_ACTIONS.add(stopAction).add(turn180Action);
+  spinLeftAction = mixer.clipAction(clipFromJson(spinLeftJson));
+  spinRightAction = mixer.clipAction(clipFromJson(spinRightJson));
+  [spinLeftAction, spinRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(SPIN_TIME_SCALE); });
+  ONE_SHOT_ACTIONS.add(stopAction).add(turn180Action).add(spinLeftAction).add(spinRightAction);
 
   danceActions = danceGltfs
     .map((gltf, i) => (gltf ? { name: DANCE_MODEL_PATHS[i], action: mixer.clipAction(gltf.animations[0]) } : null))
@@ -192,7 +207,7 @@ Promise.all([
   // action from the blend. Without this, the turn/stop clips' poses were
   // silently bleeding into the straight run the whole time, which is what
   // was actually behind the persistent "running at an angle" report.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
   allActions.forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
   runAction.enabled = true;
   activeAction = runAction;
@@ -213,8 +228,45 @@ Promise.all([
 // him frozen mid-limb-pose while still visibly rotating for the rest of
 // the turn -- this is what read as "a weird move before turning around."
 const ONE_SHOT_ACTIONS = new Set();
+// Short crossfade, used only for the spin's entry and exit: its captured
+// pose differs enough from the run cycle that an instant swap visibly pops.
+// Weights are driven by hand (not three's fade helpers) so the
+// enabled/paused bookkeeping in setActiveAction stays the single source of
+// truth; any later setActiveAction() call simply snaps a blend to done.
+let blend = null; // { from, to, elapsed, dur }
+function finishBlend() {
+  if (!blend) return;
+  blend.from.enabled = false;
+  blend.from.paused = true;
+  blend.from.weight = 1;
+  blend.to.weight = 1;
+  blend = null;
+}
+function blendToAction(next, dur) {
+  if (!next || next === activeAction) return;
+  finishBlend();
+  const prev = activeAction;
+  next.time = 0;
+  next.weight = 0;
+  next.enabled = true;
+  next.paused = false;
+  prev.weight = 1;
+  prev.paused = false; // keeps advancing while it fades out
+  blend = { from: prev, to: next, elapsed: 0, dur };
+  activeAction = next;
+}
+function updateBlend(dt) {
+  if (!blend) return;
+  blend.elapsed += dt;
+  const t = Math.min(1, blend.elapsed / blend.dur);
+  blend.from.weight = 1 - t;
+  blend.to.weight = t;
+  if (t >= 1) finishBlend();
+}
+
 function setActiveAction(next) {
   if (!next || next === activeAction) return;
+  finishBlend();
   activeAction.paused = true;
   activeAction.enabled = false;
   next.time = ONE_SHOT_ACTIONS.has(next) ? 0 : activeAction.time % next.getClip().duration;
@@ -274,6 +326,7 @@ function dampTurnLean() {
 const heldKeys = new Set();
 const GAME_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 window.addEventListener('keydown', (e) => {
+  if ((e.key === 's' || e.key === 'S') && !e.repeat) { spinQueued = true; return; }
   if (!GAME_KEYS.has(e.key)) return;
   e.preventDefault(); // arrow keys scroll the page by default -- stop that while playing
   heldKeys.add(e.key);
@@ -358,6 +411,32 @@ let turnFromYaw = 0;
 let turnToYaw = 0;
 let turnAroundElapsed = 0;
 
+// Spin move (S). Goes opposite to whichever way he's traveling laterally; run
+// straight and it goes opposite the nearest defender -- there are no defenders
+// yet, so straight-ahead spins just alternate sides for now.
+const SPIN_COOLDOWN = 0.5;
+const SPIN_FORWARD_FACTOR = 0.65; // fraction of run speed kept while spinning (if he was running forward)
+const SPIN_LATERAL_SPEED = 7;     // yards/sec sideways burst, easing out over the spin
+const SPIN_BLEND = 0.12;
+let spin = null; // { dir: -1 left / +1 right, action, elapsed, dur, forward }
+let spinCooldown = 0;
+let spinQueued = false;
+let lastSpinDir = 1;
+function nearestDefenderSide() { return 0; } // -1 / +1 = which side the closest defender is on; 0 = none (no defenders exist yet)
+function chooseSpinDir(lateral) {
+  if (lateral !== 0) return -Math.sign(lateral);
+  const side = nearestDefenderSide();
+  if (side !== 0) return -side;
+  return -lastSpinDir;
+}
+function locomotionAction(lateral, movingForward) {
+  if (movingForward && runRightTurnAction && lateral > 0) return runRightTurnAction;
+  if (movingForward && runLeftTurnAction && lateral < 0) return runLeftTurnAction;
+  if (rightStrafeAction && lateral > 0) return rightStrafeAction;
+  if (leftStrafeAction && lateral < 0) return leftStrafeAction;
+  return runAction;
+}
+
 function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
 }
@@ -370,6 +449,8 @@ function tick(now) {
     if (!document.hasFocus()) heldKeys.clear(); // backstop for whatever blur doesn't catch
     phaseElapsed += dt;
     let lateral = 0, movingForward = false, movingBackward = false;
+    const wantSpin = spinQueued; // consumed (or dropped) every frame -- no buffering
+    spinQueued = false;
 
     if (phase === 'play') {
       if (heldKeys.has('ArrowLeft')) lateral -= 1;
@@ -393,8 +474,19 @@ function tick(now) {
       // rotation instead, fast and clip-independent, with the run clip
       // already animating throughout so his legs don't pause either --
       // a snappy "spin move" rather than a stylized turn.
+      if (spinCooldown > 0) spinCooldown -= dt;
+      if (wantSpin && !spin && spinCooldown <= 0 && !turningAround && !facingBackward) {
+        const dir = chooseSpinDir(lateral);
+        const action = dir < 0 ? spinLeftAction : spinRightAction;
+        if (action) {
+          lastSpinDir = dir;
+          spin = { dir, action, elapsed: 0, dur: action.getClip().duration / SPIN_TIME_SCALE, forward: movingForward ? SPIN_FORWARD_FACTOR : 0 };
+          blendToAction(action, SPIN_BLEND);
+        }
+      }
+
       const wantsBackward = movingBackward && lateral === 0;
-      if (!turningAround && wantsBackward !== facingBackward) {
+      if (!spin && !turningAround && wantsBackward !== facingBackward) {
         turningAround = true;
         turnFromYaw = facingBackward ? Math.PI : 0;
         turnToYaw = wantsBackward ? Math.PI : 0;
@@ -404,7 +496,23 @@ function tick(now) {
         if (activeAction) activeAction.paused = false;
       }
 
-      if (turningAround) {
+      if (spin) {
+        // Committed move: steering input is ignored, he keeps drifting
+        // forward (if he was running) and bursts sideways in the spin
+        // direction, easing out as the rotation finishes.
+        spin.elapsed += dt;
+        const t = Math.min(1, spin.elapsed / spin.dur);
+        RUNNER_GROUP.position.z -= FORWARD_SPEED * spin.forward * dt;
+        RUNNER_GROUP.position.x = THREE.MathUtils.clamp(RUNNER_GROUP.position.x + spin.dir * SPIN_LATERAL_SPEED * (1 - t) * dt, -lateralLimit, lateralLimit);
+        RUNNER_GROUP.rotation.y += (0 - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 10); // fade out any steering lean
+        if (t >= 1) {
+          spin = null;
+          spinCooldown = SPIN_COOLDOWN;
+          const stillMoving = movingForward || movingBackward || lateral !== 0;
+          blendToAction(stillMoving ? locomotionAction(lateral, movingForward) : stopAction, SPIN_BLEND);
+          wasMoving = stillMoving;
+        }
+      } else if (turningAround) {
         // Position stays put for this brief window (a committed action,
         // not cancelable mid-spin by tapping a different key) but it's
         // short enough now to barely register as a pause.
@@ -456,11 +564,7 @@ function tick(now) {
         const isMoving = movingForward || movingBackward || lateral !== 0;
         if (isMoving) {
           if (facingBackward) setActiveAction(runAction);
-          else if (movingForward && runRightTurnAction && lateral > 0) setActiveAction(runRightTurnAction);
-          else if (movingForward && runLeftTurnAction && lateral < 0) setActiveAction(runLeftTurnAction);
-          else if (rightStrafeAction && lateral > 0) setActiveAction(rightStrafeAction);
-          else if (leftStrafeAction && lateral < 0) setActiveAction(leftStrafeAction);
-          else setActiveAction(runAction);
+          else setActiveAction(locomotionAction(lateral, movingForward));
           if (activeAction) activeAction.paused = false;
         } else if (wasMoving && stopAction) {
           setActiveAction(stopAction);
@@ -478,6 +582,7 @@ function tick(now) {
         document.getElementById('kr3d-overlay-text').textContent = 'TOUCHDOWN!';
         setActiveAction(runAction);
         if (activeAction) activeAction.paused = false;
+        spin = null;
         freezeCelebrationCamera();
       }
     } else if (phase === 'endzone') {
@@ -511,6 +616,7 @@ function tick(now) {
     // mixer 'finished' listener once real dance clips exist) calls
     // finalizeCelebration().
 
+    updateBlend(dt);
     if (mixer) mixer.update(dt);
     stripRootMotion();
     if (activeAction === runRightTurnAction || activeAction === runLeftTurnAction) dampTurnLean();
@@ -520,8 +626,8 @@ function tick(now) {
     }
 
     if (debugEl) {
-      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
-      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}`;
+      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === spinLeftAction ? 'spinLeft' : activeAction === spinRightAction ? 'spinRight' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
+      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}`;
     }
   }
 
@@ -563,8 +669,12 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
-  allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; } });
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  finishBlend();
+  spin = null;
+  spinCooldown = 0;
+  spinQueued = false;
+  allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; a.weight = 1; } });
   if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   phase = 'play';
   phaseElapsed = 0;
