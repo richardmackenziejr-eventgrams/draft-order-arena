@@ -384,6 +384,8 @@ const camTarget = new THREE.Vector3();
 // play (unchanged feel), but eased during a committed move so the runner
 // visibly separates from center before the camera catches back up.
 let camX = 0;
+const DODGE_SETTLE_TIME = 0.35; // seconds of eased catch-up kept alive after a spin/jump-cut ends
+let dodgeSettle = 0;
 function snapCamera() {
   camX = RUNNER_GROUP.position.x;
   camera.position.set(camX, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
@@ -727,8 +729,19 @@ function tick(now) {
   // invisible on screen regardless of the burst's size. Normal steering
   // still snaps instantly (dodging === true only during spin/jumpCut), so
   // this doesn't touch the deliberately-immediate steering feel above.
-  const dodging = !!(spin || jumpCut);
-  camX += (RUNNER_GROUP.position.x - camX) * (dodging ? Math.min(1, dt * 3) : 1);
+  // The eased catch-up has to keep running for a moment AFTER the move ends
+  // too, not just snap back to dodging===false the instant spin/jumpCut
+  // clears -- otherwise the very last frame of the move re-locks the camera
+  // to the runner's now-fully-shifted position in one single frame, which
+  // visibly pops him back toward screen-center all at once. That single-
+  // frame pop is what reads as "he goes back to his original spot" even
+  // though his actual world position never moved -- only the camera did,
+  // abruptly. Extending the ease for a short settle window turns that pop
+  // into a smooth catch-up instead.
+  if (spin || jumpCut) dodgeSettle = DODGE_SETTLE_TIME;
+  else if (dodgeSettle > 0) dodgeSettle -= dt;
+  const easeCam = !!(spin || jumpCut) || dodgeSettle > 0;
+  camX += (RUNNER_GROUP.position.x - camX) * (easeCam ? Math.min(1, dt * 3) : 1);
   if (!celebrationCamFrozen) {
     camera.position.set(camX, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
     camTarget.set(camX, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
@@ -767,6 +780,7 @@ async function startReturn(returnConfig) {
   jumpCut = null;
   jumpCutCooldown = 0;
   jumpCutQueued = false;
+  dodgeSettle = 0;
   allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; a.weight = 1; } });
   if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   phase = 'play';
