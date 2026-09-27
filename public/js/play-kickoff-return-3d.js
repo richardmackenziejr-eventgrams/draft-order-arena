@@ -91,6 +91,34 @@ function buildField(lengthYards) {
   goalLine.rotation.x = -Math.PI / 2;
   goalLine.position.set(0, 0.011, -lengthYards);
   scene.add(goalLine);
+
+  // Hash marks (standard NFL spacing/offset: short ticks every yard, ~3.1
+  // yards either side of the center). The yard-line stripes alone give no
+  // LATERAL reference at all -- they're horizontal bands, identical no
+  // matter how far the camera/runner shift sideways -- which is why a
+  // spin/jump-cut's sideways burst read as invisible even once the camera
+  // and position math were both confirmed correct. These are what actually
+  // let a player see sideways movement, the same way they do on a real
+  // broadcast, without needing any camera trickery to sell it.
+  // One InstancedMesh rather than a mesh per tick (there's one every yard
+  // for the whole field length, both sides -- a plain Mesh each would be a
+  // couple hundred extra draw calls for no reason).
+  const HASH_OFFSET = 3.1;
+  const hashGeo = new THREE.PlaneGeometry(0.15, 0.7); // narrow laterally, long down-field -- real hash marks, not fat blobs
+  const tickCount = Math.floor(lengthYards) * 2;
+  const hashMesh = new THREE.InstancedMesh(hashGeo, lineMat, tickCount);
+  hashMesh.rotation.x = -Math.PI / 2;
+  const m = new THREE.Matrix4();
+  let idx = 0;
+  for (let z = 0; z > -lengthYards; z -= 1) {
+    for (const x of [-HASH_OFFSET, HASH_OFFSET]) {
+      // rotation.x above is on the whole InstancedMesh, so instance
+      // transforms stay in the mesh's own (unrotated) local XY plane
+      m.makeTranslation(x, -z, 0.01);
+      hashMesh.setMatrixAt(idx++, m);
+    }
+  }
+  scene.add(hashMesh);
 }
 
 // ---- Runner -------------------------------------------------------------
@@ -372,24 +400,21 @@ const CHASE_BACK = 5.5;
 const LOOK_AHEAD = 10;
 const LOOK_HEIGHT = 1.1;
 const camTarget = new THREE.Vector3();
-// The camera normally snaps its X to the runner's every frame (see the main
-// loop below) -- zero lag, deliberately, so steering feels immediate. But
-// that same zero-lag tracking silently CANCELS OUT the spin/jump-cut lateral
-// burst on screen: if the camera moves sideways in lockstep with the runner,
-// he stays perfectly centered in frame and the burst is invisible no matter
-// how big it is (this is what "he doesn't move laterally" during a jump cut
-// was actually about, and almost certainly what the earlier "just spins in a
-// circle" spin feedback was too, not a magnitude problem in either case).
-// camX below is the camera's own tracked X: snapped instantly during normal
-// play (unchanged feel), but eased during a committed move so the runner
-// visibly separates from center before the camera catches back up.
-let camX = 0;
-const DODGE_SETTLE_TIME = 0.35; // seconds of eased catch-up kept alive after a spin/jump-cut ends
-let dodgeSettle = 0;
+// Tried lagging/easing the camera's X during a spin/jump-cut so the burst
+// would separate the runner from screen-center. Dropped it: any lag has to
+// be paid back afterward, and the camera re-centering itself reads as the
+// runner sliding backward toward where he started, whether that catch-up is
+// instant (a visible pop) or eased (a slower slide) -- same complaint either
+// way, just paced differently. The camera now always tracks the runner's X
+// with zero lag, like it always did for steering. What actually makes the
+// burst visible is the hash marks added to the field in buildField() -- a
+// real lateral reference the yard-line stripes never provided (they're
+// horizontal bands, identical no matter how far you shift sideways), the
+// same way a real broadcast lets you see a cut via the hash marks/sideline,
+// not via the camera doing anything unusual.
 function snapCamera() {
-  camX = RUNNER_GROUP.position.x;
-  camera.position.set(camX, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
-  camera.lookAt(camX, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
+  camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
+  camera.lookAt(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
 }
 
 // Once the player crosses the goal line, the camera stops rigidly chasing
@@ -708,43 +733,23 @@ function tick(now) {
 
     if (debugEl) {
       const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === spinLeftAction ? 'spinLeft' : activeAction === spinRightAction ? 'spinRight' : activeAction === jumpCutLeftAction ? 'jumpCutLeft' : activeAction === jumpCutRightAction ? 'jumpCutRight' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
-      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}  jumpCut: ${jumpCut ? jumpCut.dir : '-'}`;
+      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}  jumpCut: ${jumpCut ? jumpCut.dir : '-'}\npos: x=${RUNNER_GROUP.position.x.toFixed(3)} z=${RUNNER_GROUP.position.z.toFixed(3)}`;
     }
   }
 
-  // Rigidly locked to the runner's Z (no lerp/smoothing) -- a smoothed follow
+  // Rigidly locked to the runner (no lerp/smoothing) -- a smoothed follow
   // camera settles into a constant lag behind steady forward motion, which
   // reads as the player slowly outrunning the camera until it "catches up"
   // in a jump on any frame-time hiccup. Setting position directly every
-  // frame guarantees the camera moves at exactly the runner's own speed.
+  // frame guarantees the camera moves at exactly the runner's own speed --
+  // in X too (see the comment above snapCamera() for why X lag was tried
+  // and dropped: any catch-up it owes back reads as him sliding backward).
   // Stops once the touchdown celebration camera takes over (see
   // freezeCelebrationCamera) so the celebration reads as one held shot
   // instead of the camera continuing to chase into the end zone.
-  //
-  // X is the one exception: during a committed spin/jump-cut, easing camX
-  // toward the runner instead of snapping it every frame is what makes the
-  // lateral burst actually visible. A zero-lag X (matching the Z above)
-  // moves the camera sideways in perfect lockstep with the runner, which
-  // keeps him dead-centered in frame no matter how far he bursts --
-  // invisible on screen regardless of the burst's size. Normal steering
-  // still snaps instantly (dodging === true only during spin/jumpCut), so
-  // this doesn't touch the deliberately-immediate steering feel above.
-  // The eased catch-up has to keep running for a moment AFTER the move ends
-  // too, not just snap back to dodging===false the instant spin/jumpCut
-  // clears -- otherwise the very last frame of the move re-locks the camera
-  // to the runner's now-fully-shifted position in one single frame, which
-  // visibly pops him back toward screen-center all at once. That single-
-  // frame pop is what reads as "he goes back to his original spot" even
-  // though his actual world position never moved -- only the camera did,
-  // abruptly. Extending the ease for a short settle window turns that pop
-  // into a smooth catch-up instead.
-  if (spin || jumpCut) dodgeSettle = DODGE_SETTLE_TIME;
-  else if (dodgeSettle > 0) dodgeSettle -= dt;
-  const easeCam = !!(spin || jumpCut) || dodgeSettle > 0;
-  camX += (RUNNER_GROUP.position.x - camX) * (easeCam ? Math.min(1, dt * 3) : 1);
   if (!celebrationCamFrozen) {
-    camera.position.set(camX, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
-    camTarget.set(camX, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
+    camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
+    camTarget.set(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
     camera.lookAt(camTarget);
   }
 
@@ -780,7 +785,6 @@ async function startReturn(returnConfig) {
   jumpCut = null;
   jumpCutCooldown = 0;
   jumpCutQueued = false;
-  dodgeSettle = 0;
   allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; a.weight = 1; } });
   if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   phase = 'play';
