@@ -202,7 +202,7 @@ Promise.all([
   // compensate for like the spin clips need.
   jumpCutLeftAction = mixer.clipAction(clipFromJson(jumpCutLeftJson));
   jumpCutRightAction = mixer.clipAction(clipFromJson(jumpCutRightJson));
-  [jumpCutLeftAction, jumpCutRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; });
+  [jumpCutLeftAction, jumpCutRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(JUMPCUT_TIME_SCALE); });
   ONE_SHOT_ACTIONS.add(stopAction).add(turn180Action).add(spinLeftAction).add(spinRightAction).add(jumpCutLeftAction).add(jumpCutRightAction);
 
   danceActions = danceGltfs
@@ -372,9 +372,22 @@ const CHASE_BACK = 5.5;
 const LOOK_AHEAD = 10;
 const LOOK_HEIGHT = 1.1;
 const camTarget = new THREE.Vector3();
+// The camera normally snaps its X to the runner's every frame (see the main
+// loop below) -- zero lag, deliberately, so steering feels immediate. But
+// that same zero-lag tracking silently CANCELS OUT the spin/jump-cut lateral
+// burst on screen: if the camera moves sideways in lockstep with the runner,
+// he stays perfectly centered in frame and the burst is invisible no matter
+// how big it is (this is what "he doesn't move laterally" during a jump cut
+// was actually about, and almost certainly what the earlier "just spins in a
+// circle" spin feedback was too, not a magnitude problem in either case).
+// camX below is the camera's own tracked X: snapped instantly during normal
+// play (unchanged feel), but eased during a committed move so the runner
+// visibly separates from center before the camera catches back up.
+let camX = 0;
 function snapCamera() {
-  camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
-  camera.lookAt(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
+  camX = RUNNER_GROUP.position.x;
+  camera.position.set(camX, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
+  camera.lookAt(camX, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
 }
 
 // Once the player crosses the goal line, the camera stops rigidly chasing
@@ -445,10 +458,13 @@ function chooseSpinDir(lateral) {
 // direction he's already drifting -- not a full reversal -- so it shares the
 // spin's cooldown/commit shape but never negates the chosen side. Running
 // straight alternates sides the same way spin does until defenders exist to
-// actually pick a side from.
+// actually pick a side from. He plants and stops his forward progress for
+// the move (a real cut is a dead-stop weight transfer, not a stride) --
+// FORWARD_FACTOR 0, not partial like the spin.
 const JUMPCUT_COOLDOWN = 0.5;
-const JUMPCUT_FORWARD_FACTOR = 1; // a cut keeps full speed, unlike the slower spin
-const JUMPCUT_LATERAL_SPEED = 7;
+const JUMPCUT_FORWARD_FACTOR = 0; // plants -- no forward progress during the cut itself
+const JUMPCUT_LATERAL_SPEED = 12; // higher than spin's -- same move now plays out over a shorter clip (see JUMPCUT_TIME_SCALE), so speed has to carry more of the total distance
+const JUMPCUT_TIME_SCALE = 2.2; // the raw Cascadeur clip reads as sluggish for a gameplay cut at its captured speed
 const JUMPCUT_BLEND = 0.12;
 let jumpCut = null; // { dir, action, elapsed, dur, forward }
 let jumpCutCooldown = 0;
@@ -524,7 +540,7 @@ function tick(now) {
         const action = dir < 0 ? jumpCutLeftAction : jumpCutRightAction;
         if (action) {
           lastJumpCutDir = dir;
-          jumpCut = { dir, action, elapsed: 0, dur: action.getClip().duration, forward: JUMPCUT_FORWARD_FACTOR };
+          jumpCut = { dir, action, elapsed: 0, dur: action.getClip().duration / JUMPCUT_TIME_SCALE, forward: JUMPCUT_FORWARD_FACTOR };
           blendToAction(action, JUMPCUT_BLEND);
         }
       }
@@ -557,9 +573,11 @@ function tick(now) {
           wasMoving = stillMoving;
         }
       } else if (jumpCut) {
-        // Same committed-move shape as spin: steering ignored, forward speed
-        // kept (a cut is a plant-and-go, not a slowdown), lateral burst in
-        // the SAME direction he picked, easing out as the clip finishes.
+        // Same committed-move shape as spin: steering ignored, lateral burst
+        // in the SAME direction he picked (not reversed, unlike spin),
+        // easing out as the clip finishes. Forward progress stops for the
+        // move (JUMPCUT_FORWARD_FACTOR is 0) -- a cut is a plant, not a
+        // stride, unlike the spin which keeps drifting forward.
         jumpCut.elapsed += dt;
         const t = Math.min(1, jumpCut.elapsed / jumpCut.dur);
         RUNNER_GROUP.position.z -= FORWARD_SPEED * jumpCut.forward * dt;
@@ -692,7 +710,7 @@ function tick(now) {
     }
   }
 
-  // Rigidly locked to the runner (no lerp/smoothing) -- a smoothed follow
+  // Rigidly locked to the runner's Z (no lerp/smoothing) -- a smoothed follow
   // camera settles into a constant lag behind steady forward motion, which
   // reads as the player slowly outrunning the camera until it "catches up"
   // in a jump on any frame-time hiccup. Setting position directly every
@@ -700,9 +718,20 @@ function tick(now) {
   // Stops once the touchdown celebration camera takes over (see
   // freezeCelebrationCamera) so the celebration reads as one held shot
   // instead of the camera continuing to chase into the end zone.
+  //
+  // X is the one exception: during a committed spin/jump-cut, easing camX
+  // toward the runner instead of snapping it every frame is what makes the
+  // lateral burst actually visible. A zero-lag X (matching the Z above)
+  // moves the camera sideways in perfect lockstep with the runner, which
+  // keeps him dead-centered in frame no matter how far he bursts --
+  // invisible on screen regardless of the burst's size. Normal steering
+  // still snaps instantly (dodging === true only during spin/jumpCut), so
+  // this doesn't touch the deliberately-immediate steering feel above.
+  const dodging = !!(spin || jumpCut);
+  camX += (RUNNER_GROUP.position.x - camX) * (dodging ? Math.min(1, dt * 3) : 1);
   if (!celebrationCamFrozen) {
-    camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
-    camTarget.set(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
+    camera.position.set(camX, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
+    camTarget.set(camX, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
     camera.lookAt(camTarget);
   }
 
