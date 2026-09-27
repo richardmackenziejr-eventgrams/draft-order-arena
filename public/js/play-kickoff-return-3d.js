@@ -123,6 +123,8 @@ let rightStrafeAction = null;
 let leftStrafeAction = null;
 let spinLeftAction = null;
 let spinRightAction = null;
+let jumpCutLeftAction = null;
+let jumpCutRightAction = null;
 let stopAction = null;
 let turn180Action = null;
 let activeAction = null;
@@ -163,8 +165,10 @@ Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/left-strafe.glb', resolve, undefined, (err) => console.error('left-strafe animation load failed', err))),
   fetch('/models/spin-left.json').then((r) => r.json()),
   fetch('/models/spin-right.json').then((r) => r.json()),
+  fetch('/models/jump-cut-left.json').then((r) => r.json()),
+  fetch('/models/jump-cut-right.json').then((r) => r.json()),
   Promise.all(DANCE_MODEL_PATHS.map((path) => new Promise((resolve) => new GLTFLoader().load(path, resolve, undefined, (err) => { console.error(`dance clip load failed: ${path}`, err); resolve(null); })))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, spinLeftJson, spinRightJson, danceGltfs]) => {
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -193,7 +197,13 @@ Promise.all([
   spinLeftAction = mixer.clipAction(clipFromJson(spinLeftJson));
   spinRightAction = mixer.clipAction(clipFromJson(spinRightJson));
   [spinLeftAction, spinRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(SPIN_TIME_SCALE); });
-  ONE_SHOT_ACTIONS.add(stopAction).add(turn180Action).add(spinLeftAction).add(spinRightAction);
+  // Cascadeur-authored (real performer footage will replace these later) --
+  // already captured at normal speed, no coaching-footage slowdown to
+  // compensate for like the spin clips need.
+  jumpCutLeftAction = mixer.clipAction(clipFromJson(jumpCutLeftJson));
+  jumpCutRightAction = mixer.clipAction(clipFromJson(jumpCutRightJson));
+  [jumpCutLeftAction, jumpCutRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; });
+  ONE_SHOT_ACTIONS.add(stopAction).add(turn180Action).add(spinLeftAction).add(spinRightAction).add(jumpCutLeftAction).add(jumpCutRightAction);
 
   danceActions = danceGltfs
     .map((gltf, i) => (gltf ? { name: DANCE_MODEL_PATHS[i], action: mixer.clipAction(gltf.animations[0]) } : null))
@@ -207,7 +217,7 @@ Promise.all([
   // action from the blend. Without this, the turn/stop clips' poses were
   // silently bleeding into the straight run the whole time, which is what
   // was actually behind the persistent "running at an angle" report.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
   allActions.forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
   runAction.enabled = true;
   activeAction = runAction;
@@ -327,6 +337,7 @@ const heldKeys = new Set();
 const GAME_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 window.addEventListener('keydown', (e) => {
   if ((e.key === 's' || e.key === 'S') && !e.repeat) { spinQueued = true; return; }
+  if ((e.key === 'a' || e.key === 'A') && !e.repeat) { jumpCutQueued = true; return; }
   if (!GAME_KEYS.has(e.key)) return;
   e.preventDefault(); // arrow keys scroll the page by default -- stop that while playing
   heldKeys.add(e.key);
@@ -429,6 +440,26 @@ function chooseSpinDir(lateral) {
   if (side !== 0) return -side;
   return -lastSpinDir;
 }
+
+// Jump cut (A). Unlike the spin, a cut is a hard plant-and-go in the SAME
+// direction he's already drifting -- not a full reversal -- so it shares the
+// spin's cooldown/commit shape but never negates the chosen side. Running
+// straight alternates sides the same way spin does until defenders exist to
+// actually pick a side from.
+const JUMPCUT_COOLDOWN = 0.5;
+const JUMPCUT_FORWARD_FACTOR = 1; // a cut keeps full speed, unlike the slower spin
+const JUMPCUT_LATERAL_SPEED = 7;
+const JUMPCUT_BLEND = 0.12;
+let jumpCut = null; // { dir, action, elapsed, dur, forward }
+let jumpCutCooldown = 0;
+let jumpCutQueued = false;
+let lastJumpCutDir = 1;
+function chooseJumpCutDir(lateral) {
+  if (lateral !== 0) return Math.sign(lateral);
+  const side = nearestDefenderSide();
+  if (side !== 0) return side;
+  return -lastJumpCutDir;
+}
 function locomotionAction(lateral, movingForward) {
   if (movingForward && runRightTurnAction && lateral > 0) return runRightTurnAction;
   if (movingForward && runLeftTurnAction && lateral < 0) return runLeftTurnAction;
@@ -451,6 +482,8 @@ function tick(now) {
     let lateral = 0, movingForward = false, movingBackward = false;
     const wantSpin = spinQueued; // consumed (or dropped) every frame -- no buffering
     spinQueued = false;
+    const wantJumpCut = jumpCutQueued;
+    jumpCutQueued = false;
 
     if (phase === 'play') {
       if (heldKeys.has('ArrowLeft')) lateral -= 1;
@@ -475,7 +508,7 @@ function tick(now) {
       // already animating throughout so his legs don't pause either --
       // a snappy "spin move" rather than a stylized turn.
       if (spinCooldown > 0) spinCooldown -= dt;
-      if (wantSpin && !spin && spinCooldown <= 0 && !turningAround && !facingBackward) {
+      if (wantSpin && !spin && !jumpCut && spinCooldown <= 0 && !turningAround && !facingBackward) {
         const dir = chooseSpinDir(lateral);
         const action = dir < 0 ? spinLeftAction : spinRightAction;
         if (action) {
@@ -485,8 +518,19 @@ function tick(now) {
         }
       }
 
+      if (jumpCutCooldown > 0) jumpCutCooldown -= dt;
+      if (wantJumpCut && !jumpCut && !spin && jumpCutCooldown <= 0 && !turningAround && !facingBackward) {
+        const dir = chooseJumpCutDir(lateral);
+        const action = dir < 0 ? jumpCutLeftAction : jumpCutRightAction;
+        if (action) {
+          lastJumpCutDir = dir;
+          jumpCut = { dir, action, elapsed: 0, dur: action.getClip().duration, forward: JUMPCUT_FORWARD_FACTOR };
+          blendToAction(action, JUMPCUT_BLEND);
+        }
+      }
+
       const wantsBackward = movingBackward && lateral === 0;
-      if (!spin && !turningAround && wantsBackward !== facingBackward) {
+      if (!spin && !jumpCut && !turningAround && wantsBackward !== facingBackward) {
         turningAround = true;
         turnFromYaw = facingBackward ? Math.PI : 0;
         turnToYaw = wantsBackward ? Math.PI : 0;
@@ -510,6 +554,22 @@ function tick(now) {
           spinCooldown = SPIN_COOLDOWN;
           const stillMoving = movingForward || movingBackward || lateral !== 0;
           blendToAction(stillMoving ? locomotionAction(lateral, movingForward) : stopAction, SPIN_BLEND);
+          wasMoving = stillMoving;
+        }
+      } else if (jumpCut) {
+        // Same committed-move shape as spin: steering ignored, forward speed
+        // kept (a cut is a plant-and-go, not a slowdown), lateral burst in
+        // the SAME direction he picked, easing out as the clip finishes.
+        jumpCut.elapsed += dt;
+        const t = Math.min(1, jumpCut.elapsed / jumpCut.dur);
+        RUNNER_GROUP.position.z -= FORWARD_SPEED * jumpCut.forward * dt;
+        RUNNER_GROUP.position.x = THREE.MathUtils.clamp(RUNNER_GROUP.position.x + jumpCut.dir * JUMPCUT_LATERAL_SPEED * (1 - t) * dt, -lateralLimit, lateralLimit);
+        RUNNER_GROUP.rotation.y += (0 - RUNNER_GROUP.rotation.y) * Math.min(1, dt * 10);
+        if (t >= 1) {
+          jumpCut = null;
+          jumpCutCooldown = JUMPCUT_COOLDOWN;
+          const stillMoving = movingForward || movingBackward || lateral !== 0;
+          blendToAction(stillMoving ? locomotionAction(lateral, movingForward) : stopAction, JUMPCUT_BLEND);
           wasMoving = stillMoving;
         }
       } else if (turningAround) {
@@ -583,6 +643,7 @@ function tick(now) {
         setActiveAction(runAction);
         if (activeAction) activeAction.paused = false;
         spin = null;
+        jumpCut = null;
         freezeCelebrationCamera();
       }
     } else if (phase === 'endzone') {
@@ -626,8 +687,8 @@ function tick(now) {
     }
 
     if (debugEl) {
-      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === spinLeftAction ? 'spinLeft' : activeAction === spinRightAction ? 'spinRight' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
-      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}`;
+      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === spinLeftAction ? 'spinLeft' : activeAction === spinRightAction ? 'spinRight' : activeAction === jumpCutLeftAction ? 'jumpCutLeft' : activeAction === jumpCutRightAction ? 'jumpCutRight' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
+      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}  jumpCut: ${jumpCut ? jumpCut.dir : '-'}`;
     }
   }
 
@@ -669,11 +730,14 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
   finishBlend();
   spin = null;
   spinCooldown = 0;
   spinQueued = false;
+  jumpCut = null;
+  jumpCutCooldown = 0;
+  jumpCutQueued = false;
   allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; a.weight = 1; } });
   if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   phase = 'play';
