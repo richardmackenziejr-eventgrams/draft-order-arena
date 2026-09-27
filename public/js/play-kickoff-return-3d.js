@@ -490,8 +490,8 @@ function chooseSpinDir(lateral) {
 // FORWARD_FACTOR 0, not partial like the spin.
 const JUMPCUT_COOLDOWN = 0.5;
 const JUMPCUT_FORWARD_FACTOR = 0; // plants -- no forward progress during the cut itself
-const JUMPCUT_LATERAL_SPEED = 12; // higher than spin's -- same move now plays out over a shorter clip (see JUMPCUT_TIME_SCALE), so speed has to carry more of the total distance
-const JUMPCUT_TIME_SCALE = 2.2; // the raw Cascadeur clip reads as sluggish for a gameplay cut at its captured speed
+const JUMPCUT_LATERAL_SPEED = 13.5; // higher than spin's -- same move now plays out over a shorter clip (see JUMPCUT_TIME_SCALE), so speed has to carry more of the total distance
+const JUMPCUT_TIME_SCALE = 2.5; // the raw Cascadeur clip reads as sluggish for a gameplay cut at its captured speed
 const JUMPCUT_BLEND = 0.12;
 let jumpCut = null; // { dir, action, elapsed, dur, forward }
 let jumpCutCooldown = 0;
