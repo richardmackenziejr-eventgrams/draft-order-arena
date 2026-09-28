@@ -472,7 +472,7 @@ let turnAroundElapsed = 0;
 // yet, so straight-ahead spins just alternate sides for now.
 const SPIN_COOLDOWN = 0.5;
 const SPIN_FORWARD_FACTOR = 0.65; // fraction of run speed kept while spinning (if he was running forward)
-const SPIN_LATERAL_SPEED = 7;     // yards/sec sideways burst, easing out over the spin
+const SPIN_LATERAL_SPEED = 10;    // yards/sec sideways burst, easing out over the spin
 const SPIN_BLEND = 0.12;
 let spin = null; // { dir: -1 left / +1 right, action, elapsed, dur, forward }
 let spinCooldown = 0;
