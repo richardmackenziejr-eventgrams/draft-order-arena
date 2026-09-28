@@ -594,7 +594,7 @@ function spawnDefenders(count, speedMultiplier) {
   clearDefenders();
   for (let i = 0; i < count; i++) {
     const group = new THREE.Group();
-    let model, mixer = null;
+    let model, mixer = null, hipsBoneD = null, hipsBindPosD = null;
     if (defenderTemplate) {
       // A plain .clone() does not correctly share/duplicate a SkinnedMesh's
       // skeleton -- SkeletonUtils.clone() is the standard three.js pattern
@@ -603,6 +603,14 @@ function spawnDefenders(count, speedMultiplier) {
       model.rotation.y = Math.PI; // same base-facing correction as the runner's own model
       mixer = new THREE.AnimationMixer(model);
       mixer.clipAction(defenderRunClip).play();
+      // Same real baked root motion as the runner's own running clip (it's
+      // the exact same clip -- see stripRootMotion()'s comment for why):
+      // without resetting the hips bone every frame, each loop snaps the
+      // mesh through the clip's full translation swing, which is what read
+      // as "runs forward then glitches backwards, disappears and reappears
+      // behind where it was."
+      model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') hipsBoneD = o; });
+      hipsBindPosD = hipsBoneD ? hipsBoneD.position.clone() : null;
     } else {
       // Fallback if defender.glb fails to load for some reason (network
       // hiccup, file missing) -- the real Rodin/Mixamo model above is what
@@ -623,7 +631,7 @@ function spawnDefenders(count, speedMultiplier) {
     group.position.set(spawnX, 0, spawnZ);
 
     defenders.push({
-      group, mixer,
+      group, mixer, hipsBone: hipsBoneD, hipsBindPos: hipsBindPosD,
       speed: DEFENDER_BASE_SPEED * speedMultiplier,
       state: 'chasing', // 'chasing' | 'lunging' | 'recovering' | 'done'
       lungeElapsed: 0, lungeTargetX: 0, lungeTargetZ: 0,
@@ -684,6 +692,7 @@ function updateDefenders(dt) {
       if (d.recoverElapsed >= DEFENDER_RECOVER_DURATION) d.state = 'chasing';
     }
     if (d.mixer) d.mixer.update(dt);
+    if (d.hipsBone && d.hipsBindPos) d.hipsBone.position.copy(d.hipsBindPos);
   }
 }
 
