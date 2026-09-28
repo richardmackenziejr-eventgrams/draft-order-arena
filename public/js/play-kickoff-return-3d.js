@@ -197,6 +197,28 @@ const DANCE_MODEL_PATHS = [
 ];
 let danceActions = [];
 
+// A transient network hiccup on one file shouldn't strand a whole session on
+// the placeholder capsules -- retries once (with a short pause) before
+// actually giving up. Used for defender.glb specifically: it's by far the
+// biggest single asset here (~5MB, loaded alongside a dozen others at once),
+// so it's the one most exposed to exactly this kind of one-off failure.
+function loadGltfWithRetry(url, retries = 1) {
+  return new Promise((resolve) => {
+    const attempt = (retriesLeft) => {
+      new GLTFLoader().load(url, resolve, undefined, (err) => {
+        if (retriesLeft > 0) {
+          console.warn(`${url} load failed, retrying...`, err);
+          setTimeout(() => attempt(retriesLeft - 1), 500);
+        } else {
+          console.error(`${url} load failed -- falling back to placeholder capsules`, err);
+          resolve(null);
+        }
+      });
+    };
+    attempt(retries);
+  });
+}
+
 Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/player-kick.glb', resolve, undefined, (err) => console.error('runner model load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/running.glb', resolve, undefined, (err) => console.error('running animation load failed', err))),
@@ -219,7 +241,7 @@ Promise.all([
   // runner's naming). Same graceful-miss pattern as the dance clips above
   // (resolve(null) on load failure) as a defense-in-depth fallback to plain
   // capsules, not because this is expected to be missing anymore.
-  new Promise((resolve) => new GLTFLoader().load('/models/defender.glb', resolve, undefined, (err) => { console.error('defender model load failed -- falling back to placeholder capsules', err); resolve(null); })),
+  loadGltfWithRetry('/models/defender.glb'),
   new Promise((resolve) => new GLTFLoader().load('/models/flex.glb', resolve, undefined, (err) => console.error('flex animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/victory.glb', resolve, undefined, (err) => console.error('victory animation load failed', err))),
 ]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf]) => {
