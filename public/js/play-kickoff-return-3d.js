@@ -206,13 +206,13 @@ Promise.all([
   fetch('/models/jump-cut-left.json').then((r) => r.json()),
   fetch('/models/jump-cut-right.json').then((r) => r.json()),
   Promise.all(DANCE_MODEL_PATHS.map((path) => new Promise((resolve) => new GLTFLoader().load(path, resolve, undefined, (err) => { console.error(`dance clip load failed: ${path}`, err); resolve(null); })))),
-  // The real (Rodin-generated, Mixamo-rigged) defender model is still being
-  // made as of this writing -- same graceful-miss pattern as the dance
-  // clips above (resolve(null) on load failure) so the game still starts
-  // and defenders spawn as plain placeholder capsules in the meantime. Once
-  // this file exists, defenders switch to it automatically -- nothing else
-  // about spawnDefenders()/updateDefenders() needs to change.
-  new Promise((resolve) => new GLTFLoader().load('/models/defender.glb', resolve, undefined, () => { console.warn('defender model not available yet -- using placeholder capsules'); resolve(null); })),
+  // Rodin-generated, Mixamo-rigged (33 bones -- a reduced rig, no per-finger
+  // articulation beyond one representative digit each hand, but every bone
+  // the shared running.glb clip actually drives is present and matches the
+  // runner's naming). Same graceful-miss pattern as the dance clips above
+  // (resolve(null) on load failure) as a defense-in-depth fallback to plain
+  // capsules, not because this is expected to be missing anymore.
+  new Promise((resolve) => new GLTFLoader().load('/models/defender.glb', resolve, undefined, (err) => { console.error('defender model load failed -- falling back to placeholder capsules', err); resolve(null); })),
 ]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
@@ -604,11 +604,10 @@ function spawnDefenders(count, speedMultiplier) {
       mixer = new THREE.AnimationMixer(model);
       mixer.clipAction(defenderRunClip).play();
     } else {
-      // Placeholder while the real (Rodin/Mixamo) defender model is still
-      // being made -- lets the AI/tackle logic be built and verified without
-      // waiting on the art pipeline. Swapped automatically the moment
-      // defenderTemplate loads; nothing about a defender's behavior below
-      // depends on which one this is.
+      // Fallback if defender.glb fails to load for some reason (network
+      // hiccup, file missing) -- the real Rodin/Mixamo model above is what
+      // actually ships. Nothing about a defender's behavior below depends
+      // on which one this is.
       model = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 1.2, 4, 8), new THREE.MeshStandardMaterial({ color: 0xc0392b }));
       model.position.y = 1.0;
       model.castShadow = true;
