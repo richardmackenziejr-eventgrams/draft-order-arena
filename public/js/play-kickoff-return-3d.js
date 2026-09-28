@@ -160,6 +160,7 @@ let stopAction = null;
 let turn180Action = null;
 let fallingDownAction = null; // tackled from the front or side
 let fallFlatAction = null; // tackled from behind
+const FALL_TIME_SCALE = 1.6; // the raw Mixamo clips (~2.3-2.5s) read as slow for a tackle -- played faster, same idea as SPIN_TIME_SCALE/JUMPCUT_TIME_SCALE
 let activeAction = null;
 let hipsBone = null;
 let hipsBindPos = null;
@@ -247,7 +248,7 @@ Promise.all([
   leftStrafeAction = mixer.clipAction(leftStrafeGltf.animations[0]);
   fallingDownAction = mixer.clipAction(fallingDownGltf.animations[0]);
   fallFlatAction = mixer.clipAction(fallFlatGltf.animations[0]);
-  [fallingDownAction, fallFlatAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; });
+  [fallingDownAction, fallFlatAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(FALL_TIME_SCALE); });
   spinLeftAction = mixer.clipAction(clipFromJson(spinLeftJson));
   spinRightAction = mixer.clipAction(clipFromJson(spinRightJson));
   [spinLeftAction, spinRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(SPIN_TIME_SCALE); });
@@ -639,6 +640,13 @@ function spawnDefenders(count, speedMultiplier) {
     const spawnZ = Math.max(-(fieldYards - 5), -(8 + i * 9 + Math.random() * 6));
     const spawnX = THREE.MathUtils.clamp((Math.random() * 2 - 1) * (FIELD_WIDTH / 2 - 4), -(FIELD_WIDTH / 2 - 2), FIELD_WIDTH / 2 - 2);
     group.position.set(spawnX, 0, spawnZ);
+    // Face the runner immediately -- otherwise a freshly-spawned defender
+    // defaults to rotation.y=0, which (combined with the model's own base
+    // Math.PI facing correction, same as the runner's) points him DOWNFIELD,
+    // away from the returner, until the first chase-update frame corrects
+    // it. Same atan2 formula the 'chasing' state uses every frame after.
+    const toRunnerX = RUNNER_GROUP.position.x - spawnX, toRunnerZ = RUNNER_GROUP.position.z - spawnZ;
+    group.rotation.y = Math.atan2(toRunnerX, toRunnerZ) + Math.PI;
 
     defenders.push({
       group, mixer, hipsBone: hipsBoneD, hipsBindPos: hipsBindPosD,
@@ -1040,9 +1048,13 @@ function wait(ms) {
 async function startReturn(returnConfig) {
   currentReturnConfig = returnConfig;
   buildField(fieldYards);
-  spawnDefenders(returnConfig.defenderCount ?? 3, returnConfig.defenderSpeed ?? 1); // ?? not || -- a legitimate 0 defenderCount shouldn't get silently overridden to 3
   RUNNER_GROUP.position.set(0, 0, 0);
   RUNNER_GROUP.rotation.y = 0;
+  // Reset BEFORE spawning defenders -- they aim themselves at the runner's
+  // position at spawn time (see spawnDefenders()), so this needs to already
+  // be his real starting spot, not whatever was left over from the end of
+  // the previous return.
+  spawnDefenders(returnConfig.defenderCount ?? 3, returnConfig.defenderSpeed ?? 1); // ?? not || -- a legitimate 0 defenderCount shouldn't get silently overridden to 3
   wasMoving = false;
   heldKeys.clear();
   // Reset directly rather than through setActiveAction() -- that always
