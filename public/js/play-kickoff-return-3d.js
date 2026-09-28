@@ -158,6 +158,8 @@ let jumpCutLeftAction = null;
 let jumpCutRightAction = null;
 let stopAction = null;
 let turn180Action = null;
+let fallingDownAction = null; // tackled from the front or side
+let fallFlatAction = null; // tackled from behind
 let activeAction = null;
 let hipsBone = null;
 let hipsBindPos = null;
@@ -166,6 +168,7 @@ let spineBone = null;
 let spineBindQuat = null;
 let defenderTemplate = null; // the loaded (or null: not ready yet) defender scene -- each defender is its own SkeletonUtils.clone() of this
 let defenderRunClip = null; // same AnimationClip object the runner uses, shared across every defender's own AnimationMixer
+let defenderFlexClip = null; // played by whichever defender actually makes the tackle
 
 // The spin clips are JSON, not GLB: quaternion tracks retargeted offline
 // onto this model's Mixamo bone names. Cascadeur-authored as of 2026-09-27
@@ -201,6 +204,8 @@ Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/running-turn-180.glb', resolve, undefined, (err) => console.error('running-turn-180 animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/right-strafe.glb', resolve, undefined, (err) => console.error('right-strafe animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/left-strafe.glb', resolve, undefined, (err) => console.error('left-strafe animation load failed', err))),
+  new Promise((resolve) => new GLTFLoader().load('/models/falling-down.glb', resolve, undefined, (err) => console.error('falling-down animation load failed', err))),
+  new Promise((resolve) => new GLTFLoader().load('/models/fall-flat.glb', resolve, undefined, (err) => console.error('fall-flat animation load failed', err))),
   fetch('/models/spin-left.json').then((r) => r.json()),
   fetch('/models/spin-right.json').then((r) => r.json()),
   fetch('/models/jump-cut-left.json').then((r) => r.json()),
@@ -213,7 +218,8 @@ Promise.all([
   // (resolve(null) on load failure) as a defense-in-depth fallback to plain
   // capsules, not because this is expected to be missing anymore.
   new Promise((resolve) => new GLTFLoader().load('/models/defender.glb', resolve, undefined, (err) => { console.error('defender model load failed -- falling back to placeholder capsules', err); resolve(null); })),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf]) => {
+  new Promise((resolve) => new GLTFLoader().load('/models/flex.glb', resolve, undefined, (err) => console.error('flex animation load failed', err))),
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -239,6 +245,9 @@ Promise.all([
   turn180Action.clampWhenFinished = true;
   rightStrafeAction = mixer.clipAction(rightStrafeGltf.animations[0]);
   leftStrafeAction = mixer.clipAction(leftStrafeGltf.animations[0]);
+  fallingDownAction = mixer.clipAction(fallingDownGltf.animations[0]);
+  fallFlatAction = mixer.clipAction(fallFlatGltf.animations[0]);
+  [fallingDownAction, fallFlatAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; });
   spinLeftAction = mixer.clipAction(clipFromJson(spinLeftJson));
   spinRightAction = mixer.clipAction(clipFromJson(spinRightJson));
   [spinLeftAction, spinRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(SPIN_TIME_SCALE); });
@@ -248,7 +257,7 @@ Promise.all([
   jumpCutLeftAction = mixer.clipAction(clipFromJson(jumpCutLeftJson));
   jumpCutRightAction = mixer.clipAction(clipFromJson(jumpCutRightJson));
   [jumpCutLeftAction, jumpCutRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(JUMPCUT_TIME_SCALE); });
-  ONE_SHOT_ACTIONS.add(stopAction).add(turn180Action).add(spinLeftAction).add(spinRightAction).add(jumpCutLeftAction).add(jumpCutRightAction);
+  ONE_SHOT_ACTIONS.add(stopAction).add(turn180Action).add(spinLeftAction).add(spinRightAction).add(jumpCutLeftAction).add(jumpCutRightAction).add(fallingDownAction).add(fallFlatAction);
 
   danceActions = danceGltfs
     .map((gltf, i) => (gltf ? { name: DANCE_MODEL_PATHS[i], action: mixer.clipAction(gltf.animations[0]) } : null))
@@ -260,6 +269,7 @@ Promise.all([
     defenderTemplate.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   }
   defenderRunClip = runGltf.animations[0]; // one AnimationClip, reused across every defender's own mixer
+  defenderFlexClip = flexGltf.animations[0];
 
   // `paused` only stops an action's own time from advancing -- it does NOT
   // stop the action from being evaluated by the mixer, so a "paused" clip
@@ -268,7 +278,7 @@ Promise.all([
   // action from the blend. Without this, the turn/stop clips' poses were
   // silently bleeding into the straight run the whole time, which is what
   // was actually behind the persistent "running at an angle" report.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
   allActions.forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
   runAction.enabled = true;
   activeAction = runAction;
@@ -640,6 +650,13 @@ function spawnDefenders(count, speedMultiplier) {
   }
 }
 
+// Chase/lunge/tackle state machine -- called once per frame, only while
+// phase === 'play' (see the call site, which runs before the touchdown
+// check so a same-frame tackle correctly pre-empts it). Animation upkeep
+// (mixer/root-motion) is deliberately NOT in here -- see
+// updateDefenderAnimations() below, called unconditionally every frame
+// regardless of phase, so this function is never called twice in the same
+// frame and mixers never advance by more than one dt.
 function updateDefenders(dt) {
   for (const d of defenders) {
     if (d.state === 'chasing') {
@@ -682,7 +699,7 @@ function updateDefenders(dt) {
       const hitDist = Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z);
       if (hitDist <= DEFENDER_TACKLE_RADIUS) {
         d.state = 'done';
-        triggerTackle();
+        triggerTackle(d);
       } else if (d.lungeElapsed >= DEFENDER_LUNGE_DURATION) {
         d.state = 'recovering';
         d.recoverElapsed = 0;
@@ -691,20 +708,63 @@ function updateDefenders(dt) {
       d.recoverElapsed += dt;
       if (d.recoverElapsed >= DEFENDER_RECOVER_DURATION) d.state = 'chasing';
     }
+  }
+}
+
+// Mixer/root-motion upkeep for every defender, called exactly once per
+// frame regardless of game phase -- unlike updateDefenders() above, this
+// keeps running through the touchdown/tackled celebration so animations
+// don't freeze on their first frame the instant phase leaves 'play'. Most
+// importantly the tackling defender's flex (see triggerTackle()), but also
+// keeps any still-chasing background defenders' run cycles alive rather
+// than statue-freezing mid-stride while the camera holds on the result.
+function updateDefenderAnimations(dt) {
+  for (const d of defenders) {
     if (d.mixer) d.mixer.update(dt);
     if (d.hipsBone && d.hipsBindPos) d.hipsBone.position.copy(d.hipsBindPos);
   }
 }
 
-function triggerTackle() {
+// Which way he goes down depends on where the hit came from, relative to
+// which way he's actually facing/running (RUNNER_GROUP's own local -Z,
+// same "forward = -Z" convention as the rest of this file -- see
+// getWorldDirection() below). 0deg = hit from directly in front, 180deg =
+// hit from directly behind. Front/side (<=90deg, i.e. closer to in-front
+// than to behind) gets the more dynamic "Falling Down"; anything past that,
+// into the back half, gets tripped-from-behind "Fall Flat".
+const TACKLE_ANGLE_FRONT_SIDE_MAX = Math.PI / 2;
+function triggerTackle(defender) {
   if (phase !== 'play') return; // already resolved (e.g. reached the goal line the same frame) -- don't double-fire
   phase = 'tackled';
   phaseElapsed = 0;
   spin = null;
   jumpCut = null;
-  setActiveAction(stopAction);
+
+  const toDefender = new THREE.Vector3(defender.group.position.x - RUNNER_GROUP.position.x, 0, defender.group.position.z - RUNNER_GROUP.position.z);
+  let fallAction = fallingDownAction; // default if either vector degenerates (defender exactly on top of him) -- front/side reads as the more neutral choice
+  if (toDefender.lengthSq() > 1e-6) {
+    toDefender.normalize();
+    // Object3D.getWorldDirection() returns the world-space direction of the
+    // object's local +Z axis -- (0,0,1) at yaw=0, verified empirically, NOT
+    // this file's own "forward = -Z" convention (see the field-setup
+    // comment near the top). Negate it to actually get his facing/travel
+    // direction, or every angle here comes out backwards.
+    const forward = RUNNER_GROUP.getWorldDirection(new THREE.Vector3()).negate();
+    const angle = Math.acos(THREE.MathUtils.clamp(forward.dot(toDefender), -1, 1));
+    fallAction = angle <= TACKLE_ANGLE_FRONT_SIDE_MAX ? fallingDownAction : fallFlatAction;
+  }
+  setActiveAction(fallAction || stopAction); // fall back to stopAction if either clip somehow failed to load
   if (activeAction) activeAction.paused = false;
   document.getElementById('kr3d-overlay-text').textContent = 'TACKLED';
+
+  // The defender that actually made the hit gets his own moment -- swap his
+  // mixer off the run cycle and onto a celebration. Only ever touches this
+  // one defender's OWN mixer (each has its own, per spawnDefenders()), so
+  // the rest keep running/chasing normally in the background.
+  if (defender.mixer && defenderFlexClip) {
+    defender.mixer.stopAllAction();
+    defender.mixer.clipAction(defenderFlexClip).setLoop(THREE.LoopRepeat).play();
+  }
 }
 
 function tick(now) {
@@ -869,7 +929,7 @@ function tick(now) {
         wasMoving = isMoving;
       }
 
-      updateDefenders(dt); // can flip phase to 'tackled' (triggerTackle) -- guard the touchdown check below on phase still being 'play'
+      updateDefenders(dt); // can flip phase to 'tackled' (triggerTackle) -- guard the touchdown check below on phase still being 'play'. Mixer/root-motion upkeep is separate (updateDefenderAnimations(), called unconditionally further down) so it isn't skipped once phase leaves 'play'.
 
       if (phase === 'play' && RUNNER_GROUP.position.z <= -fieldYards) {
         // Don't stop dead on the goal line -- keep auto-running a bit
@@ -928,7 +988,12 @@ function tick(now) {
 
     updateBlend(dt);
     if (mixer) mixer.update(dt);
-    stripRootMotion();
+    updateDefenderAnimations(dt);
+    // Skipped during 'tackled': the fall clips' own baked root motion is
+    // what actually drags him down to the ground -- stripping it every
+    // frame like the run cycle needs would hold him rigidly standing
+    // through the whole animation, defeating the point of playing it.
+    if (phase !== 'tackled') stripRootMotion();
     if (activeAction === runRightTurnAction || activeAction === runLeftTurnAction) dampTurnLean();
 
     if (phase === 'play') {
@@ -936,7 +1001,7 @@ function tick(now) {
     }
 
     if (debugEl) {
-      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === spinLeftAction ? 'spinLeft' : activeAction === spinRightAction ? 'spinRight' : activeAction === jumpCutLeftAction ? 'jumpCutLeft' : activeAction === jumpCutRightAction ? 'jumpCutRight' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
+      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === spinLeftAction ? 'spinLeft' : activeAction === spinRightAction ? 'spinRight' : activeAction === jumpCutLeftAction ? 'jumpCutLeft' : activeAction === jumpCutRightAction ? 'jumpCutRight' : activeAction === fallingDownAction ? 'fallingDown' : activeAction === fallFlatAction ? 'fallFlat' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
       const defSummary = defenders.map((d, i) => `${i}:${d.state}@${Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z).toFixed(1)}yd`).join(' ');
       debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}  jumpCut: ${jumpCut ? jumpCut.dir : '-'}\npos: x=${RUNNER_GROUP.position.x.toFixed(3)} z=${RUNNER_GROUP.position.z.toFixed(3)}\ndefenders: ${defSummary || '(none)'}`;
     }
@@ -983,7 +1048,7 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
   finishBlend();
   spin = null;
   spinCooldown = 0;
