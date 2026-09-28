@@ -170,6 +170,7 @@ let spineBindQuat = null;
 let defenderTemplate = null; // the loaded (or null: not ready yet) defender scene -- each defender is its own SkeletonUtils.clone() of this
 let defenderRunClip = null; // same AnimationClip object the runner uses, shared across every defender's own AnimationMixer
 let defenderFlexClip = null; // played by whichever defender actually makes the tackle
+let defenderVictoryClip = null; // played by every OTHER defender once the play ends -- otherwise they keep looping the run cycle in place, frozen mid-stride, since their position stops updating but their mixer doesn't
 
 // The spin clips are JSON, not GLB: quaternion tracks retargeted offline
 // onto this model's Mixamo bone names. Cascadeur-authored as of 2026-09-27
@@ -220,7 +221,8 @@ Promise.all([
   // capsules, not because this is expected to be missing anymore.
   new Promise((resolve) => new GLTFLoader().load('/models/defender.glb', resolve, undefined, (err) => { console.error('defender model load failed -- falling back to placeholder capsules', err); resolve(null); })),
   new Promise((resolve) => new GLTFLoader().load('/models/flex.glb', resolve, undefined, (err) => console.error('flex animation load failed', err))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf]) => {
+  new Promise((resolve) => new GLTFLoader().load('/models/victory.glb', resolve, undefined, (err) => console.error('victory animation load failed', err))),
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -271,6 +273,7 @@ Promise.all([
   }
   defenderRunClip = runGltf.animations[0]; // one AnimationClip, reused across every defender's own mixer
   defenderFlexClip = flexGltf.animations[0];
+  defenderVictoryClip = victoryGltf.animations[0];
 
   // `paused` only stops an action's own time from advancing -- it does NOT
   // stop the action from being evaluated by the mixer, so a "paused" clip
@@ -767,11 +770,21 @@ function triggerTackle(defender) {
 
   // The defender that actually made the hit gets his own moment -- swap his
   // mixer off the run cycle and onto a celebration. Only ever touches this
-  // one defender's OWN mixer (each has its own, per spawnDefenders()), so
-  // the rest keep running/chasing normally in the background.
+  // one defender's OWN mixer (each has its own, per spawnDefenders()).
   if (defender.mixer && defenderFlexClip) {
     defender.mixer.stopAllAction();
     defender.mixer.clipAction(defenderFlexClip).setLoop(THREE.LoopRepeat).play();
+  }
+
+  // Every OTHER defender's position stops updating the instant phase
+  // leaves 'play' (updateDefenders()'s state machine is gated to it), but
+  // their mixer doesn't -- left alone they'd keep looping the run cycle
+  // frozen in place, stuck mid-stride, which is what read as "running in
+  // place." Switch them to the group celebration instead.
+  for (const d of defenders) {
+    if (d === defender || !d.mixer || !defenderVictoryClip) continue;
+    d.mixer.stopAllAction();
+    d.mixer.clipAction(defenderVictoryClip).setLoop(THREE.LoopRepeat).play();
   }
 }
 
