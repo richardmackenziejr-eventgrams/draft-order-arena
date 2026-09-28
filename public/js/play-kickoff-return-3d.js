@@ -467,9 +467,10 @@ let turnFromYaw = 0;
 let turnToYaw = 0;
 let turnAroundElapsed = 0;
 
-// Spin move (S). Goes opposite to whichever way he's traveling laterally; run
-// straight and it goes opposite the nearest defender -- there are no defenders
-// yet, so straight-ahead spins just alternate sides for now.
+// Spin move (S). Goes the SAME direction he's already traveling laterally
+// (forward+right spins right) -- run straight and it goes opposite the
+// nearest defender -- there are no defenders yet, so straight-ahead spins
+// just alternate sides for now.
 const SPIN_COOLDOWN = 0.5;
 const SPIN_FORWARD_FACTOR = 0.65; // fraction of run speed kept while spinning (if he was running forward)
 const SPIN_LATERAL_SPEED = 10;    // yards/sec sideways burst, easing out over the spin
@@ -480,7 +481,7 @@ let spinQueued = false;
 let lastSpinDir = 1;
 function nearestDefenderSide() { return 0; } // -1 / +1 = which side the closest defender is on; 0 = none (no defenders exist yet)
 function chooseSpinDir(lateral) {
-  if (lateral !== 0) return -Math.sign(lateral);
+  if (lateral !== 0) return Math.sign(lateral);
   const side = nearestDefenderSide();
   if (side !== 0) return -side;
   return -lastSpinDir;
