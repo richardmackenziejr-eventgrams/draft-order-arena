@@ -1089,7 +1089,11 @@ async function startReturn(returnConfig) {
   // position at spawn time (see spawnDefenders()), so this needs to already
   // be his real starting spot, not whatever was left over from the end of
   // the previous return.
-  spawnDefenders(returnConfig.defenderCount ?? 3, returnConfig.defenderSpeed ?? 1); // ?? not || -- a legitimate 0 defenderCount shouldn't get silently overridden to 3
+  // TESTING OVERRIDE: always 4 defenders, ignoring the server's own
+  // difficulty-ladder count -- remove this line (and go back to
+  // `returnConfig.defenderCount ?? 3`) once testing's done.
+  const testDefenderCount = 4;
+  spawnDefenders(testDefenderCount, returnConfig.defenderSpeed ?? 1); // ?? not || -- a legitimate 0 defenderSpeed shouldn't get silently overridden to 1
   wasMoving = false;
   heldKeys.clear();
   // Reset directly rather than through setActiveAction() -- that always
