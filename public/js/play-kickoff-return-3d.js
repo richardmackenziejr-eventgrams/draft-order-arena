@@ -163,8 +163,13 @@ let spineBone = null;
 let spineBindQuat = null;
 
 // The spin clips are JSON, not GLB: quaternion tracks retargeted offline
-// (see the DeepMotion capture notes) onto this model's Mixamo bone names.
-const SPIN_TIME_SCALE = 2.6; // captured at coaching speed (~1.8s); played faster so a spin is a quick move
+// onto this model's Mixamo bone names. Cascadeur-authored as of 2026-09-27
+// (a genuine 360 -- same two-stage retarget pipeline as the jump cut, see
+// [[kickoff-return-3d-controls-and-mocap]] memory), replacing the earlier
+// DeepMotion capture. Right is the recorded clip; left is a programmatic
+// mirror (same technique as the jump cut and the running-turn clips), until
+// a second Cascadeur pass records it directly.
+const SPIN_TIME_SCALE = 2.6; // the raw clip is ~1.17s; played faster so a spin is a quick move
 function clipFromJson(j) {
   const tracks = Object.entries(j.tracks).map(([bone, vals]) => new THREE.QuaternionKeyframeTrack(`${bone}.quaternion`, j.times, vals));
   return new THREE.AnimationClip(j.name, j.duration, tracks);
