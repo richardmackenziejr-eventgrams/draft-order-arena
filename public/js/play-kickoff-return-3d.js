@@ -1,16 +1,19 @@
-// Kickoff Return — 3D movement/camera preview. NOT the real game yet: no
-// defenders, no tackles, every return runs all the way to the end zone.
-// This exists to nail the runner model, running animation, and chase
-// camera in isolation before defenders are layered back in (see
+// Kickoff Return — 3D version. Defenders exist now (see the "Defenders"
+// section below): they chase, commit to a lunge, and can end a return in a
+// tackle instead of always reaching the end zone. Still missing: blockers
+// on the return side (a separate, later phase) and a real tackle/fall
+// animation (v1 just freezes his current pose). See
 // play-kickoff-return.js, the real 2D game, which stays live and untouched
-// until this reaches feature parity with it).
+// independently of this one — the two are permanent, separate games (free
+// "Retro Kick Return" vs. this paid 3D tier), not a replacement in progress.
 //
 // Wired into the REAL server/game engine (same instance/member/API calls
-// as the 2D version) so the difficulty ladder and scoring are already
-// live and correct — only the defender simulation and its "how did this
-// return end" branch are missing.
+// as the 2D version) so the difficulty ladder and scoring were already
+// live and correct before defenders did anything with them --
+// defenderCount/defenderSpeed below come straight off that ladder.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkinnedScene } from 'three/addons/utils/SkeletonUtils.js';
 
 const instanceId = qs('instance');
 const leagueId = qs('league');
@@ -161,6 +164,8 @@ let hipsBindPos = null;
 let hipsBindQuat = null;
 let spineBone = null;
 let spineBindQuat = null;
+let defenderTemplate = null; // the loaded (or null: not ready yet) defender scene -- each defender is its own SkeletonUtils.clone() of this
+let defenderRunClip = null; // same AnimationClip object the runner uses, shared across every defender's own AnimationMixer
 
 // The spin clips are JSON, not GLB: quaternion tracks retargeted offline
 // onto this model's Mixamo bone names. Cascadeur-authored as of 2026-09-27
@@ -201,7 +206,14 @@ Promise.all([
   fetch('/models/jump-cut-left.json').then((r) => r.json()),
   fetch('/models/jump-cut-right.json').then((r) => r.json()),
   Promise.all(DANCE_MODEL_PATHS.map((path) => new Promise((resolve) => new GLTFLoader().load(path, resolve, undefined, (err) => { console.error(`dance clip load failed: ${path}`, err); resolve(null); })))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs]) => {
+  // The real (Rodin-generated, Mixamo-rigged) defender model is still being
+  // made as of this writing -- same graceful-miss pattern as the dance
+  // clips above (resolve(null) on load failure) so the game still starts
+  // and defenders spawn as plain placeholder capsules in the meantime. Once
+  // this file exists, defenders switch to it automatically -- nothing else
+  // about spawnDefenders()/updateDefenders() needs to change.
+  new Promise((resolve) => new GLTFLoader().load('/models/defender.glb', resolve, undefined, () => { console.warn('defender model not available yet -- using placeholder capsules'); resolve(null); })),
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -242,6 +254,12 @@ Promise.all([
     .map((gltf, i) => (gltf ? { name: DANCE_MODEL_PATHS[i], action: mixer.clipAction(gltf.animations[0]) } : null))
     .filter(Boolean);
   danceActions.forEach(({ action }) => action.setLoop(THREE.LoopRepeat));
+
+  if (defenderGltf) {
+    defenderTemplate = defenderGltf.scene;
+    defenderTemplate.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  }
+  defenderRunClip = runGltf.animations[0]; // one AnimationClip, reused across every defender's own mixer
 
   // `paused` only stops an action's own time from advancing -- it does NOT
   // stop the action from being evaluated by the mixer, so a "paused" clip
@@ -479,7 +497,20 @@ let spin = null; // { dir: -1 left / +1 right, action, elapsed, dur, forward }
 let spinCooldown = 0;
 let spinQueued = false;
 let lastSpinDir = 1;
-function nearestDefenderSide() { return 0; } // -1 / +1 = which side the closest defender is on; 0 = none (no defenders exist yet)
+// -1 / +1 = which side the closest defender is on; 0 = none close enough to
+// matter. Ignores 'done' (already-resolved) defenders. A defender further
+// than 15 yards away isn't a real influence on which way to spin/cut.
+function nearestDefenderSide() {
+  let nearest = null, nearestDist = Infinity;
+  for (const d of defenders) {
+    if (d.state === 'done') continue;
+    const dist = Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z);
+    if (dist < nearestDist) { nearestDist = dist; nearest = d; }
+  }
+  if (!nearest || nearestDist > 15) return 0;
+  const dx = nearest.group.position.x - RUNNER_GROUP.position.x;
+  return dx === 0 ? 0 : Math.sign(dx);
+}
 function chooseSpinDir(lateral) {
   if (lateral !== 0) return Math.sign(lateral);
   const side = nearestDefenderSide();
@@ -519,6 +550,153 @@ function locomotionAction(lateral, movingForward) {
 
 function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
+}
+
+// ---- Defenders --------------------------------------------------------
+// Designed fresh for this 3D game rather than porting the 2D game's
+// telegraphed wind-up/lunge/blocker system verbatim (that one's built
+// around a 2D top-down "committed side" abstraction that doesn't map
+// cleanly onto real 3D positions) -- but it keeps that system's one core
+// fairness idea: a defender COMMITS to a target before closing the
+// distance, rather than homing in continuously right up to contact. A pure
+// proximity-triggers-instant-tackle rule would make the spin/jump-cut
+// bursts nearly worthless, since they'd have to already be mid-move before
+// a defender got close enough to matter. With a commit-then-resolve lunge,
+// a burst that fires while a defender is closing is what actually saves
+// the runner -- it physically moves him out of tackle radius before the
+// lunge's target check happens.
+//
+// Each defender: chasing (seeks the runner's CURRENT position) -> once
+// within DEFENDER_TRIGGER_RANGE, lunging (locked onto wherever the runner
+// was the instant the lunge started, not tracking him further) -> resolved
+// after DEFENDER_LUNGE_DURATION by checking the runner's position AT THAT
+// MOMENT against the defender's -> tackle (ends the return) or recovering
+// (a short pause) back to chasing.
+const DEFENDER_BASE_SPEED = 7.5; // yd/s at the server's defenderSpeed multiplier of 1.0 -- a little under the runner's own 8.5 so the easiest level is never helplessly run down
+const DEFENDER_LUNGE_SPEED_MULT = 1.6; // a lunge is a burst, faster than the steady chase speed
+const DEFENDER_TRIGGER_RANGE = 2.5; // yards -- distance at which a chasing defender commits to a lunge
+const DEFENDER_LUNGE_DURATION = 0.3; // seconds -- the commit window
+const DEFENDER_TACKLE_RADIUS = 1.1; // yards -- matches the 2D game's own tackle radius
+const DEFENDER_RECOVER_DURATION = 0.5; // seconds -- pause after a missed lunge before resuming the chase
+const TACKLE_RESULT_DELAY = 0.8; // seconds -- brief beat on "TACKLED" before the result panel shows, same pacing idea as the touchdown celebration
+
+let defenders = [];
+
+function clearDefenders() {
+  defenders.forEach((d) => scene.remove(d.group));
+  defenders = [];
+}
+
+// count/speedMultiplier come straight off the server's difficulty ladder
+// (gi.currentReturn.defenderCount/.defenderSpeed -- already computed and
+// already reaching the client on every return, just unused until now).
+function spawnDefenders(count, speedMultiplier) {
+  clearDefenders();
+  for (let i = 0; i < count; i++) {
+    const group = new THREE.Group();
+    let model, mixer = null;
+    if (defenderTemplate) {
+      // A plain .clone() does not correctly share/duplicate a SkinnedMesh's
+      // skeleton -- SkeletonUtils.clone() is the standard three.js pattern
+      // for multiple independent posed instances of one rigged character.
+      model = cloneSkinnedScene(defenderTemplate);
+      model.rotation.y = Math.PI; // same base-facing correction as the runner's own model
+      mixer = new THREE.AnimationMixer(model);
+      mixer.clipAction(defenderRunClip).play();
+    } else {
+      // Placeholder while the real (Rodin/Mixamo) defender model is still
+      // being made -- lets the AI/tackle logic be built and verified without
+      // waiting on the art pipeline. Swapped automatically the moment
+      // defenderTemplate loads; nothing about a defender's behavior below
+      // depends on which one this is.
+      model = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 1.2, 4, 8), new THREE.MeshStandardMaterial({ color: 0xc0392b }));
+      model.position.y = 1.0;
+      model.castShadow = true;
+    }
+    group.add(model);
+    scene.add(group);
+
+    // Staggered down the field ahead of the runner (not one flat line) with
+    // lateral jitter, clamped so nobody spawns past the goal line on a
+    // short test field.
+    const spawnZ = Math.max(-(fieldYards - 5), -(8 + i * 9 + Math.random() * 6));
+    const spawnX = THREE.MathUtils.clamp((Math.random() * 2 - 1) * (FIELD_WIDTH / 2 - 4), -(FIELD_WIDTH / 2 - 2), FIELD_WIDTH / 2 - 2);
+    group.position.set(spawnX, 0, spawnZ);
+
+    defenders.push({
+      group, mixer,
+      speed: DEFENDER_BASE_SPEED * speedMultiplier,
+      state: 'chasing', // 'chasing' | 'lunging' | 'recovering' | 'done'
+      lungeElapsed: 0, lungeTargetX: 0, lungeTargetZ: 0,
+      recoverElapsed: 0,
+    });
+  }
+}
+
+function updateDefenders(dt) {
+  for (const d of defenders) {
+    if (d.state === 'chasing') {
+      const dx = RUNNER_GROUP.position.x - d.group.position.x;
+      const dz = RUNNER_GROUP.position.z - d.group.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist <= DEFENDER_TRIGGER_RANGE) {
+        // Commit: lock onto where the runner IS right now. Everything from
+        // here plays out against this fixed point, not his live position.
+        d.state = 'lunging';
+        d.lungeElapsed = 0;
+        d.lungeTargetX = RUNNER_GROUP.position.x;
+        d.lungeTargetZ = RUNNER_GROUP.position.z;
+      } else if (dist > 1e-4) {
+        d.group.position.x += (dx / dist) * d.speed * dt;
+        d.group.position.z += (dz / dist) * d.speed * dt;
+        d.group.rotation.y = Math.atan2(dx, dz) + Math.PI; // face travel direction -- same base-yaw convention as the runner's own model
+      }
+    } else if (d.state === 'lunging') {
+      d.lungeElapsed += dt;
+      const dx = d.lungeTargetX - d.group.position.x;
+      const dz = d.lungeTargetZ - d.group.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 1e-4) {
+        const step = Math.min(dist, d.speed * DEFENDER_LUNGE_SPEED_MULT * dt);
+        d.group.position.x += (dx / dist) * step;
+        d.group.position.z += (dz / dist) * step;
+        d.group.rotation.y = Math.atan2(dx, dz) + Math.PI;
+      }
+      // Checked every frame the lunge is active, not just once the fixed
+      // window elapses -- against a defender closing HEAD-ON (they spawn
+      // downfield and run back toward the returner), the closest approach
+      // usually happens mid-lunge as the two paths cross, not at the end of
+      // a fixed duration. Waiting for the window to finish before checking
+      // let a defender who was briefly well inside tackle radius sail on
+      // past and read as a clean miss. Resolved against the runner's
+      // CURRENT position, not the locked target -- this is what a
+      // spin/jump-cut fired during the closing distance actually beats:
+      // he's no longer where the lunge was aimed.
+      const hitDist = Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z);
+      if (hitDist <= DEFENDER_TACKLE_RADIUS) {
+        d.state = 'done';
+        triggerTackle();
+      } else if (d.lungeElapsed >= DEFENDER_LUNGE_DURATION) {
+        d.state = 'recovering';
+        d.recoverElapsed = 0;
+      }
+    } else if (d.state === 'recovering') {
+      d.recoverElapsed += dt;
+      if (d.recoverElapsed >= DEFENDER_RECOVER_DURATION) d.state = 'chasing';
+    }
+    if (d.mixer) d.mixer.update(dt);
+  }
+}
+
+function triggerTackle() {
+  if (phase !== 'play') return; // already resolved (e.g. reached the goal line the same frame) -- don't double-fire
+  phase = 'tackled';
+  phaseElapsed = 0;
+  spin = null;
+  jumpCut = null;
+  setActiveAction(stopAction);
+  if (activeAction) activeAction.paused = false;
+  document.getElementById('kr3d-overlay-text').textContent = 'TACKLED';
 }
 
 function tick(now) {
@@ -683,7 +861,9 @@ function tick(now) {
         wasMoving = isMoving;
       }
 
-      if (RUNNER_GROUP.position.z <= -fieldYards) {
+      updateDefenders(dt); // can flip phase to 'tackled' (triggerTackle) -- guard the touchdown check below on phase still being 'play'
+
+      if (phase === 'play' && RUNNER_GROUP.position.z <= -fieldYards) {
         // Don't stop dead on the goal line -- keep auto-running a bit
         // further into the end zone, then spin to face the camera, then
         // (once some exist) a random celebration dance. See the phase
@@ -722,6 +902,16 @@ function tick(now) {
         phaseElapsed = 0;
         startDancePhase();
       }
+    } else if (phase === 'tackled') {
+      // No celebration for a tackle -- just a brief beat on "TACKLED"
+      // (matching the touchdown path's own pacing idea) before the result
+      // panel shows. Yardage is wherever he actually got to, clamped the
+      // same way the server itself would (defense in depth, even though
+      // the server already re-clamps on submit).
+      if (phaseElapsed >= TACKLE_RESULT_DELAY) {
+        const yardsGained = THREE.MathUtils.clamp(-RUNNER_GROUP.position.z, 0, fieldYards);
+        finalizeCelebration(yardsGained, false);
+      }
     }
     // 'dance' phase has nothing to drive here -- it just holds until
     // startDancePhase()'s own completion path (a timer for now, a
@@ -739,7 +929,8 @@ function tick(now) {
 
     if (debugEl) {
       const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === spinLeftAction ? 'spinLeft' : activeAction === spinRightAction ? 'spinRight' : activeAction === jumpCutLeftAction ? 'jumpCutLeft' : activeAction === jumpCutRightAction ? 'jumpCutRight' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
-      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}  jumpCut: ${jumpCut ? jumpCut.dir : '-'}\npos: x=${RUNNER_GROUP.position.x.toFixed(3)} z=${RUNNER_GROUP.position.z.toFixed(3)}`;
+      const defSummary = defenders.map((d, i) => `${i}:${d.state}@${Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z).toFixed(1)}yd`).join(' ');
+      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}  jumpCut: ${jumpCut ? jumpCut.dir : '-'}\npos: x=${RUNNER_GROUP.position.x.toFixed(3)} z=${RUNNER_GROUP.position.z.toFixed(3)}\ndefenders: ${defSummary || '(none)'}`;
     }
   }
 
@@ -776,6 +967,7 @@ function wait(ms) {
 async function startReturn(returnConfig) {
   currentReturnConfig = returnConfig;
   buildField(fieldYards);
+  spawnDefenders(returnConfig.defenderCount ?? 3, returnConfig.defenderSpeed ?? 1); // ?? not || -- a legitimate 0 defenderCount shouldn't get silently overridden to 3
   RUNNER_GROUP.position.set(0, 0, 0);
   RUNNER_GROUP.rotation.y = 0;
   wasMoving = false;
@@ -832,31 +1024,35 @@ async function startReturn(returnConfig) {
 // celebration on its own.
 function startDancePhase() {
   if (danceActions.length === 0) {
-    finalizeCelebration();
+    finalizeCelebration(fieldYards, true);
     return;
   }
   const pick = danceActions[Math.floor(Math.random() * danceActions.length)];
   setActiveAction(pick.action);
   activeAction.paused = false;
-  wait(600).then(finalizeCelebration);
+  wait(600).then(() => finalizeCelebration(fieldYards, true));
 }
 
-async function finalizeCelebration() {
+// Takes the actual outcome now instead of assuming a touchdown -- the
+// 'tackled' phase branch above calls this too, with wherever he actually
+// got to and touchdown: false. Both paths share the same submit/result-panel
+// plumbing; only the reported outcome and the result text differ.
+async function finalizeCelebration(yardsGained, touchdown) {
   // Deliberately does NOT stopLoop()/set running=false -- if a dance is
   // playing it keeps looping behind the result panel; the loop only
   // actually stops when startReturn() resets things for the next attempt.
-  const yardsGained = fieldYards; // no defenders yet -- every return reaches the end zone
-  const touchdown = true;
 
-  // "TOUCHDOWN!" stays up through the whole celebration now -- it only
-  // gets overwritten when the next return's "Kickoff..." message shows
+  // "TOUCHDOWN!"/"TACKLED" stays up through the whole celebration now -- it
+  // only gets overwritten when the next return's "Kickoff..." message shows
   // (see startReturn()), not cleared here.
 
   try {
     const { outcome } = await api('POST', `/api/game-instances/${instanceId}/kickoff-return/submit`, { memberId, yardsGained, touchdown });
     const resultEl = document.getElementById('kr-result');
-    resultEl.textContent = `Touchdown! ${outcome.yardsGained} yards — +${outcome.points.toFixed(1)} points`;
-    resultEl.style.color = '#4ade80';
+    resultEl.textContent = outcome.touchdown
+      ? `Touchdown! ${outcome.yardsGained} yards — +${outcome.points.toFixed(1)} points`
+      : `Tackled after ${outcome.yardsGained} yards — +${outcome.points.toFixed(1)} points`;
+    resultEl.style.color = outcome.touchdown ? '#4ade80' : '#f87171';
     document.getElementById('next-return-btn').style.display = 'inline-block';
   } catch (err) {
     alert(err.message);
