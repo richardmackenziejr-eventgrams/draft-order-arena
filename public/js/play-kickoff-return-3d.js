@@ -79,8 +79,28 @@ function stripeTexture() {
   return new THREE.CanvasTexture(c);
 }
 
+let groundApron = null;
 let field = null;
 function buildField(lengthYards) {
+  // A flat green ground plane well past the striped field's own edges on
+  // every side -- the striped field mesh is only FIELD_WIDTH wide with no
+  // padding, and the stadium stands sit further out and further back than
+  // that, so without this the gap between the field's edge and the stands
+  // showed raw sky-blue (scene.background) straight through at ground
+  // level. Sits a hair below the striped field (y=-0.05 vs. the field's
+  // own y=0) so it never z-fights with it -- the striped mesh simply
+  // covers it everywhere the striped mesh exists, and the apron only
+  // shows through in the surrounding gap.
+  if (groundApron) scene.remove(groundApron);
+  groundApron = new THREE.Mesh(
+    new THREE.PlaneGeometry(300, lengthYards + 60),
+    new THREE.MeshStandardMaterial({ color: 0x2f6b3f, roughness: 0.95 })
+  );
+  groundApron.rotation.x = -Math.PI / 2;
+  groundApron.position.set(0, -0.05, -lengthYards / 2);
+  groundApron.receiveShadow = true;
+  scene.add(groundApron);
+
   if (field) scene.remove(field);
   field = new THREE.Mesh(
     new THREE.PlaneGeometry(FIELD_WIDTH, lengthYards + 20),
@@ -225,9 +245,21 @@ function buildEndzoneStands(lengthYards) {
   const CORNER_X = 12.8 + STAND_WIDTH_DELTA;
   const SIDELINE_ANCHOR_X = 16 + STAND_WIDTH_DELTA;
 
-  // Far end (opponent's goal line, deep -Z) -- same relative offsets as
-  // Field Goal Kick's own proven far-end setup.
-  const farBackZ = -(lengthYards + 4);
+  // How far behind the actual goal line the stand's crowd-facing edge
+  // should sit -- a real NFL endzone is about this deep, and it keeps the
+  // bowl's structure from visually looming into the playable endzone.
+  // Placing a tile's PIVOT this far back is NOT enough on its own -- the
+  // model's own real depth means its pivot sits mid-depth, not at its
+  // front face, so its front edge lands roughly STAND_MODEL_FRONT_OFFSET
+  // yards closer to the field than the pivot. This bit a live deployed
+  // touchdown screenshot: the far stand's front edge landed ~2.7yd on the
+  // FIELD side of the goal line (pivot placed only 4yd back, depth ~13.4yd)
+  // and visibly cut across the endzone where the celebrating runner
+  // stands. Deriving the pivot from the desired FRONT edge instead of a
+  // flat, depth-blind margin fixes it for any future depth/scale change.
+  const ENDZONE_STAND_SETBACK = 10;
+  const farFrontZ = -(lengthYards + ENDZONE_STAND_SETBACK);
+  const farBackZ = farFrontZ - STAND_MODEL_FRONT_OFFSET;
   addStandStraightTile(0, farBackZ, 0);
   addStandCornerTile(CORNER_X, farBackZ + 0.3, 1, false);
   addStandCornerTile(-CORNER_X, farBackZ + 0.3, -1, false);
@@ -244,7 +276,8 @@ function buildEndzoneStands(lengthYards) {
   // pass -- and a real bug this same pass caught: the corner tile's own
   // position was never actually applied at all for a while, which made
   // every earlier "looks right" read on this section worthless).
-  const nearBackZ = 14;
+  const nearFrontZ = ENDZONE_STAND_SETBACK;
+  const nearBackZ = nearFrontZ + STAND_MODEL_FRONT_OFFSET;
   addStandStraightTile(0, nearBackZ, Math.PI);
   addStandCornerTile(CORNER_X, nearBackZ - 0.3, -1, true);
   addStandCornerTile(-CORNER_X, nearBackZ - 0.3, 1, true);
