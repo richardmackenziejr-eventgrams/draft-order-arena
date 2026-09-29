@@ -130,7 +130,149 @@ function buildField(lengthYards) {
     }
   }
   scene.add(hashMesh);
+
+  buildEndzoneStands(lengthYards);
 }
+
+// ---- Stadium: crowd stand model + 90-degree corners --------------------
+// Same Rodin-generated stand/corner models used for Field Goal Kick's own
+// stadium (public/models/stadium-stand.glb / stadium-corner.glb, see
+// play-field-goal.js) -- reused as-is rather than building anything new.
+// Two differences from that game's own build: this field is much longer
+// (100+ yards vs. Field Goal Kick's ~80-yard visible span), so the
+// sideline chain has to run much further; and BOTH ends need to be closed
+// off, not just the one behind the goalpost -- a return can end in either
+// direction's view (the kickoff camera starts near the kicking team's own
+// end, a touchdown run reaches the far end), unlike a field-goal kick
+// which only ever looks toward the goalpost.
+const STAND_HEIGHT = 8;
+const STAND_MODEL_BBOX = { w: 1.8945350050926208, h: 0.5554050207138062, d: 0.9296950101852417 };
+const STAND_MODEL_SCALE = STAND_HEIGHT / STAND_MODEL_BBOX.h;
+const STAND_MODEL_TILE_LEN = STAND_MODEL_BBOX.w * STAND_MODEL_SCALE;
+// Local-Z offset from the model's pivot to its crowd-facing (front) edge --
+// used below to chain tiles by their front edge instead of their
+// centerline (an angled/differently-shaped neighbor's centerline doesn't
+// predict where its front face actually lands).
+const STAND_MODEL_FRONT_LOCAL_Z = 0.4630330204963684;
+const STAND_MODEL_FRONT_OFFSET = STAND_MODEL_FRONT_LOCAL_Z * STAND_MODEL_SCALE;
+
+const CORNER_BBOX_H = 0.6803219318389893;
+const CORNER_SCALE = STAND_HEIGHT / CORNER_BBOX_H;
+
+// Field Goal Kick's own field is half as wide (FIELD_HALF_WIDTH=15 there)
+// as this one (FIELD_WIDTH/2 ≈ 26.65) -- shift every corner/sideline X
+// offset outward by the difference so the same, physically-fixed-size
+// model sits the same real distance off the sideline instead of clipping
+// this wider field.
+const STAND_WIDTH_DELTA = (FIELD_WIDTH / 2) - 15;
+
+let standStraightGltf = null;
+let standCornerGltf = null;
+const standGroup = new THREE.Group();
+scene.add(standGroup);
+
+function addStandStraightTile(x, z, rotationY) {
+  const tile = standStraightGltf.scene.clone();
+  tile.scale.setScalar(STAND_MODEL_SCALE);
+  tile.rotation.y = rotationY;
+  tile.position.set(x, 0, z);
+  standGroup.add(tile);
+}
+
+// `flip` is for the near (returner's own) end's corners, which need the
+// whole assembly turned 180 to face back toward the field -- the far
+// end's corners (Field Goal Kick's own, proven orientation) pass false.
+function addStandCornerTile(x, z, mirror, flip) {
+  const tile = standCornerGltf.scene.clone();
+  tile.scale.set(CORNER_SCALE * mirror, CORNER_SCALE, CORNER_SCALE);
+  if (flip) tile.rotation.y = Math.PI;
+  if (mirror < 0) {
+    // The corner model's two arms are NOT mirror images of each other in
+    // the source file (it's a single right-handed L), so the left corner
+    // needs an actual mirror (negative X scale), not just a rotation -- a
+    // rotation can't turn a right-handed shape into its left-handed
+    // reflection. Negative scale flips winding order, so the mirrored
+    // copy needs double-sided materials or it goes invisible from the
+    // "wrong" side.
+    tile.traverse((o) => {
+      if (o.isMesh) {
+        o.material = o.material.clone();
+        o.material.side = THREE.DoubleSide;
+      }
+    });
+  }
+  tile.position.set(x, 0, z);
+  standGroup.add(tile);
+}
+
+function addStandStraightFromEdge(edge, mirror) {
+  const sweep = Math.PI / 2;
+  const rotationY = mirror === 1 ? -sweep : sweep;
+  const dir = mirror === 1
+    ? new THREE.Vector3(Math.cos(sweep), 0, Math.sin(sweep))
+    : new THREE.Vector3(-Math.cos(sweep), 0, Math.sin(sweep));
+  const front = new THREE.Vector3(Math.sin(rotationY), 0, Math.cos(rotationY));
+  const frontEdgeCenter = edge.clone().addScaledVector(dir, STAND_MODEL_TILE_LEN / 2);
+  const origin = frontEdgeCenter.clone().addScaledVector(front, -STAND_MODEL_FRONT_OFFSET);
+  addStandStraightTile(origin.x, origin.z, rotationY);
+  return edge.clone().addScaledVector(dir, STAND_MODEL_TILE_LEN);
+}
+
+function buildEndzoneStands(lengthYards) {
+  if (!standStraightGltf || !standCornerGltf) return;
+  standGroup.clear();
+
+  const CORNER_X = 12.8 + STAND_WIDTH_DELTA;
+  const SIDELINE_ANCHOR_X = 16 + STAND_WIDTH_DELTA;
+
+  // Far end (opponent's goal line, deep -Z) -- same relative offsets as
+  // Field Goal Kick's own proven far-end setup.
+  const farBackZ = -(lengthYards + 4);
+  addStandStraightTile(0, farBackZ, 0);
+  addStandCornerTile(CORNER_X, farBackZ + 0.3, 1, false);
+  addStandCornerTile(-CORNER_X, farBackZ + 0.3, -1, false);
+
+  // Near end (the returner's own goal line, +Z) -- a mirror of the far
+  // end: the whole assembly turned 180 so it faces back toward the field
+  // instead of away from it. The 180 flips BOTH local axes, not just the
+  // one facing the field -- the corner's own back-arm (the one that
+  // reaches toward the center back-stand along X) flips its X-direction
+  // too, so the left/right mirror sign is swapped here to compensate,
+  // keeping each arm reaching toward the back stand the way it did
+  // unrotated. Verified gap-free at all 4 corners with this combination
+  // (see the stadium build entry in memory for the full verification
+  // pass -- and a real bug this same pass caught: the corner tile's own
+  // position was never actually applied at all for a while, which made
+  // every earlier "looks right" read on this section worthless).
+  const nearBackZ = 14;
+  addStandStraightTile(0, nearBackZ, Math.PI);
+  addStandCornerTile(CORNER_X, nearBackZ - 0.3, -1, true);
+  addStandCornerTile(-CORNER_X, nearBackZ - 0.3, 1, true);
+
+  // One long straight-tile chain per sideline, running the FULL length
+  // between the two ends' corners (Field Goal Kick's own chain only ever
+  // needed to close one end) -- same generous-overlap philosophy at both
+  // anchor points, no exact seam-chasing.
+  const farAnchorZ = farBackZ - 4;
+  const nearAnchorZ = nearBackZ + 4;
+  [1, -1].forEach((mirror) => {
+    let edge = new THREE.Vector3(SIDELINE_ANCHOR_X * mirror, 0, farAnchorZ);
+    let guard = 0;
+    while (edge.z < nearAnchorZ && guard < 200) {
+      edge = addStandStraightFromEdge(edge, mirror);
+      guard++;
+    }
+  });
+}
+
+new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
+  standStraightGltf = gltf;
+  buildEndzoneStands(fieldYards);
+}, undefined, (err) => console.error('stadium stand model load failed', err));
+new GLTFLoader().load('/models/stadium-corner.glb', (gltf) => {
+  standCornerGltf = gltf;
+  buildEndzoneStands(fieldYards);
+}, undefined, (err) => console.error('stadium corner model load failed', err));
 
 // ---- Runner -------------------------------------------------------------
 const RUNNER_GROUP = new THREE.Group();
