@@ -272,6 +272,17 @@ const STAND_MODEL_FRONT_OFFSET = STAND_MODEL_FRONT_LOCAL_Z * STAND_MODEL_SCALE;
 
 const CORNER_BBOX_H = 0.6803219318389893;
 const CORNER_SCALE = STAND_HEIGHT / CORNER_BBOX_H;
+// Yards from the corner tile's own pivot to its own crowd-facing front
+// edge -- measured the same way STAND_MODEL_FRONT_OFFSET was (a Box3 on a
+// placed, unrotated, mirror=1 instance). Notably bigger than the straight
+// tile's own ~6.67yd offset: using the STRAIGHT tile's offset for the
+// corners too (an earlier version of this code did) placed the corners'
+// pivots close enough that their own, bigger front-reach stuck out well
+// past the straight tile's front edge -- invisible while everything sat
+// close to the field, but once both were pushed back for real endzone
+// clearance it read as the corners "encroaching" past a visibly-recessed
+// center section, with a gap/notch of sky between them.
+const CORNER_FRONT_OFFSET = 11.17;
 
 // Field Goal Kick's own field is half as wide (FIELD_HALF_WIDTH=15 there)
 // as this one (FIELD_WIDTH/2 ≈ 26.65) -- shift every corner/sideline X
@@ -289,6 +300,25 @@ const CORNER_SCALE = STAND_HEIGHT / CORNER_BBOX_H;
 const SIDELINE_RUNOFF = 5;
 const STAND_WIDTH_DELTA = (FIELD_WIDTH / 2) - 15 + SIDELINE_RUNOFF;
 
+// Real stadium stands sit on a raised concrete base, not flush with the
+// field -- the source model itself is built to sit AT ground level
+// (y=0), so simply lifting it left a visible gap of green field showing
+// underneath, floating. RISER_MAT/addRiser() fill that gap with a plain,
+// unadorned concrete-colored box (same color Field Goal Kick's own
+// concreteMat uses) under every tile -- doesn't need to match each
+// tile's exact footprint (an irregular corner's silhouette isn't a
+// rectangle anyway), just wide/deep enough that the visible gap is fully
+// covered; a riser reading slightly WIDER than the seating above is if
+// anything more realistic, not less.
+const STAND_ELEVATION = 2;
+const RISER_MAT = new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.95 });
+function addRiser(x, z, width, depth) {
+  const riser = new THREE.Mesh(new THREE.BoxGeometry(width, STAND_ELEVATION, depth), RISER_MAT);
+  riser.position.set(x, STAND_ELEVATION / 2, z);
+  riser.receiveShadow = true;
+  standGroup.add(riser);
+}
+
 let standStraightGltf = null;
 let standCornerGltf = null;
 const standGroup = new THREE.Group();
@@ -298,8 +328,9 @@ function addStandStraightTile(x, z, rotationY) {
   const tile = standStraightGltf.scene.clone();
   tile.scale.setScalar(STAND_MODEL_SCALE);
   tile.rotation.y = rotationY;
-  tile.position.set(x, 0, z);
+  tile.position.set(x, STAND_ELEVATION, z);
   standGroup.add(tile);
+  addRiser(x, z, STAND_MODEL_TILE_LEN, STAND_MODEL_BBOX.d * STAND_MODEL_SCALE);
 }
 
 // `flip` is for the near (returner's own) end's corners, which need the
@@ -308,6 +339,7 @@ function addStandStraightTile(x, z, rotationY) {
 function addStandCornerTile(x, z, mirror, flip) {
   const tile = standCornerGltf.scene.clone();
   tile.scale.set(CORNER_SCALE * mirror, CORNER_SCALE, CORNER_SCALE);
+  addRiser(x, z, CORNER_FRONT_OFFSET * 2.2, CORNER_FRONT_OFFSET * 2.2); // generous square footprint -- the corner's own silhouette isn't a rectangle, this just needs to cover under it
   if (flip) tile.rotation.y = Math.PI;
   if (mirror < 0) {
     // The corner model's two arms are NOT mirror images of each other in
@@ -324,7 +356,7 @@ function addStandCornerTile(x, z, mirror, flip) {
       }
     });
   }
-  tile.position.set(x, 0, z);
+  tile.position.set(x, STAND_ELEVATION, z);
   standGroup.add(tile);
 }
 
@@ -373,18 +405,6 @@ function buildEndzoneStands(lengthYards) {
 
   const CORNER_X = 12.8 + STAND_WIDTH_DELTA;
   const SIDELINE_ANCHOR_X = 16 + STAND_WIDTH_DELTA;
-
-  // Yards from the corner tile's own pivot to its own crowd-facing front
-  // edge -- measured the same way STAND_MODEL_FRONT_OFFSET was (a Box3 on
-  // a placed, unrotated, mirror=1 instance). Notably bigger than the
-  // straight tile's own ~6.67yd offset: using the STRAIGHT tile's offset
-  // for the corners too (an earlier version of this code did) placed the
-  // corners' pivots close enough that their own, bigger front-reach stuck
-  // out well past the straight tile's front edge -- invisible while
-  // everything sat close to the field, but once both were pushed back for
-  // real endzone clearance it read as the corners "encroaching" past a
-  // visibly-recessed center section, with a gap/notch of sky between them.
-  const CORNER_FRONT_OFFSET = 11.17;
 
   // How far behind the actual goal line each element's own crowd-facing
   // edge should sit -- a real NFL endzone is about this deep, giving
