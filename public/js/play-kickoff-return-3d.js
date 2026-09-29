@@ -1032,7 +1032,7 @@ const HANG_TIME = 4.0; // seconds the ball is airborne
 const CAMERA_PAN_DURATION = 2.8; // seconds -- the camera arrives at the returner well before the ball lands, same idea as a broadcast cutting to the return side early rather than panning for the whole flight
 const BALL_PEAK_HEIGHT = 15; // yards -- how high the flight arc peaks
 const CATCH_HEIGHT = 1.3; // yards -- roughly chest/hands height, where the ball "arrives" for the catch
-const CATCH_ANTICIPATION = 0.9; // seconds before the ball actually arrives that the catch animation starts -- otherwise his hands only start rising AFTER the ball has already "landed" at his position, which read as catching something already in his hands rather than actually catching it. Tuned twice by feel: 0.6s read as too late, 1.3s read as too early (catching before the ball got there) -- splitting the difference.
+const CATCH_ANTICIPATION = 0.8; // seconds before the ball actually arrives that the catch animation starts -- otherwise his hands only start rising AFTER the ball has already "landed" at his position, which read as catching something already in his hands rather than actually catching it. Tuned by feel: 0.6s too late, 1.3s too early, 0.9s still slightly early.
 
 let kicker = null; // THREE.Group, recreated each return -- see spawnKicker()
 let kickerMixer = null;
