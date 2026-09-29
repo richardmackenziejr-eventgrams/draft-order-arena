@@ -283,8 +283,21 @@ function buildEndzoneStands(lengthYards) {
   // corners land their front edges at the SAME place instead of one
   // sticking out past the other.
   const ENDZONE_STAND_SETBACK = 20;
+  // CORNER_FRONT_OFFSET above is measured off the corner's OVERALL
+  // bounding box, which is dominated by the tip of its outer, tapering
+  // arm (the one curving away toward the sideline) -- not by the flat
+  // inner edge that's actually supposed to mate with the center tile.
+  // Matching bounding-box fronts (both at the same Z) therefore left the
+  // center tile reading as visibly RECESSED behind the corners from any
+  // real gameplay camera angle (confirmed against the actual
+  // freezeCelebrationCamera() framing, not just a generic overview shot)
+  // -- exactly what a live "push the center forward, corners should be
+  // flush with it" report caught. Nudging the center tile forward by this
+  // much (found by eye, same as Field Goal Kick's own corner tuning) is
+  // what actually reads flush; the corners' own position is unchanged.
+  const CENTER_FLUSH_NUDGE = 5;
   const farFrontZ = -(lengthYards + ENDZONE_STAND_SETBACK);
-  const farBackZ = farFrontZ - STAND_MODEL_FRONT_OFFSET;
+  const farBackZ = farFrontZ - STAND_MODEL_FRONT_OFFSET + CENTER_FLUSH_NUDGE;
   const farCornerZ = farFrontZ - CORNER_FRONT_OFFSET;
   addStandStraightTile(0, farBackZ, 0);
   addStandCornerTile(CORNER_X, farCornerZ, 1, false);
@@ -303,7 +316,7 @@ function buildEndzoneStands(lengthYards) {
   // position was never actually applied at all for a while, which made
   // every earlier "looks right" read on this section worthless).
   const nearFrontZ = ENDZONE_STAND_SETBACK;
-  const nearBackZ = nearFrontZ + STAND_MODEL_FRONT_OFFSET;
+  const nearBackZ = nearFrontZ + STAND_MODEL_FRONT_OFFSET - CENTER_FLUSH_NUDGE;
   const nearCornerZ = nearFrontZ + CORNER_FRONT_OFFSET;
   addStandStraightTile(0, nearBackZ, Math.PI);
   addStandCornerTile(CORNER_X, nearCornerZ, -1, true);
