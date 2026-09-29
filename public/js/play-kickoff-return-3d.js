@@ -131,6 +131,20 @@ function buildField(lengthYards) {
   goalLine.position.set(0, 0.011, -lengthYards);
   scene.add(goalLine);
 
+  // Sideline boundary lines -- the yard-line stripes above only ever ran
+  // ACROSS the field, so the two long edges (what actually makes an
+  // out-of-bounds catch/step read as a real sideline instead of just an
+  // arbitrary spot on green turf) were bare grass. Same inset from the
+  // true edge as the yard lines/hash marks already use elsewhere.
+  const SIDELINE_INSET = 1;
+  const sidelineGeo = new THREE.PlaneGeometry(0.3, lengthYards);
+  [-1, 1].forEach((side) => {
+    const sideline = new THREE.Mesh(sidelineGeo, lineMat);
+    sideline.rotation.x = -Math.PI / 2;
+    sideline.position.set(side * (FIELD_WIDTH / 2 - SIDELINE_INSET), 0.01, -lengthYards / 2);
+    scene.add(sideline);
+  });
+
   // Hash marks (standard NFL spacing/offset: short ticks every yard, ~3.1
   // yards either side of the center). The yard-line stripes alone give no
   // LATERAL reference at all -- they're horizontal bands, identical no
@@ -160,6 +174,58 @@ function buildField(lengthYards) {
   scene.add(hashMesh);
 
   buildEndzoneStands(lengthYards);
+  buildGoalposts(lengthYards);
+}
+
+// ---- Goalposts -----------------------------------------------------------
+// Same real-world dimensions/geometry as Field Goal Kick's own goalpost
+// (public/js/play-field-goal.js) -- these are absolute units (a real
+// upright's height/width doesn't scale with field width), so reused
+// as-is rather than re-deriving. One at each end, a few yards behind each
+// goal line -- this game's own "endzone" is only ENDZONE_RUN_YARDS (1)
+// deep for gameplay purposes, so GOALPOST_SETBACK is a purely visual
+// stand-in for a real endzone's ~10yd depth, picked to read right without
+// crowding the goal line or reaching the stadium stands (which sit much
+// further back, at ENDZONE_STAND_SETBACK -- see buildEndzoneStands()).
+let goalpostGroup = null;
+function buildGoalposts(lengthYards) {
+  if (goalpostGroup) scene.remove(goalpostGroup);
+  goalpostGroup = new THREE.Group();
+
+  const postMat = new THREE.MeshStandardMaterial({ color: 0xffd400, roughness: 0.4, metalness: 0.2 });
+  const CROSSBAR_Y = 3.05;
+  const UPRIGHT_TOP_Y = 8.5;
+  const UPRIGHT_HALF_SPAN = 2.82;
+  const GOALPOST_SETBACK = 18;
+
+  function addGoalpost(z) {
+    const post = new THREE.Group();
+    const basePole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, CROSSBAR_Y, 12), postMat);
+    basePole.position.y = CROSSBAR_Y / 2;
+    basePole.castShadow = true;
+    post.add(basePole);
+
+    const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, UPRIGHT_HALF_SPAN * 2, 12), postMat);
+    crossbar.rotation.z = Math.PI / 2;
+    crossbar.position.y = CROSSBAR_Y;
+    crossbar.castShadow = true;
+    post.add(crossbar);
+
+    [-1, 1].forEach((side) => {
+      const upright = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, UPRIGHT_TOP_Y - CROSSBAR_Y, 12), postMat);
+      upright.position.set(side * UPRIGHT_HALF_SPAN, (CROSSBAR_Y + UPRIGHT_TOP_Y) / 2, 0);
+      upright.castShadow = true;
+      post.add(upright);
+    });
+
+    post.position.set(0, 0, z);
+    goalpostGroup.add(post);
+  }
+
+  addGoalpost(GOALPOST_SETBACK); // behind the returner's own goal line (z=0)
+  addGoalpost(-(lengthYards + GOALPOST_SETBACK)); // behind the opponent's goal line (z=-lengthYards)
+
+  scene.add(goalpostGroup);
 }
 
 // ---- Stadium: crowd stand model + 90-degree corners --------------------
