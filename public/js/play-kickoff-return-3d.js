@@ -1,8 +1,8 @@
-// Kickoff Return — 3D version. Defenders exist now (see the "Defenders"
-// section below): they chase, commit to a lunge, and can end a return in a
-// tackle instead of always reaching the end zone. Still missing: blockers
-// on the return side (a separate, later phase) and a real tackle/fall
-// animation (v1 just freezes his current pose). See
+// Kickoff Return — 3D version. Defenders (see the "Defenders" section
+// below) chase, commit to a lunge, and tackle -- the tackler plays a Push
+// clip then a Flex celebration, everyone else plays Victory. Blockers (see
+// the "Blockers" section) engage a chasing/lunging defender and hold it in
+// place for a few seconds before it resumes the chase. See
 // play-kickoff-return.js, the real 2D game, which stays live and untouched
 // independently of this one — the two are permanent, separate games (free
 // "Retro Kick Return" vs. this paid 3D tier), not a replacement in progress.
@@ -169,8 +169,10 @@ let spineBone = null;
 let spineBindQuat = null;
 let defenderTemplate = null; // the loaded (or null: not ready yet) defender scene -- each defender is its own SkeletonUtils.clone() of this
 let defenderRunClip = null; // same AnimationClip object the runner uses, shared across every defender's own AnimationMixer
+let defenderPushClip = null; // played by the tackler first, at the moment of impact, before the flex celebration -- see triggerTackle()
 let defenderFlexClip = null; // played by whichever defender actually makes the tackle
 let defenderVictoryClip = null; // played by every OTHER defender once the play ends -- otherwise they keep looping the run cycle in place, frozen mid-stride, since their position stops updating but their mixer doesn't
+let blockerTemplate = null; // the loaded (or null: not ready yet) blocker scene -- same SkeletonUtils.clone() pattern as defenderTemplate
 
 // The spin clips are JSON, not GLB: quaternion tracks retargeted offline
 // onto this model's Mixamo bone names. Cascadeur-authored as of 2026-09-27
@@ -244,7 +246,13 @@ Promise.all([
   loadGltfWithRetry('/models/defender.glb'),
   new Promise((resolve) => new GLTFLoader().load('/models/flex.glb', resolve, undefined, (err) => console.error('flex animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/victory.glb', resolve, undefined, (err) => console.error('victory animation load failed', err))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf]) => {
+  new Promise((resolve) => new GLTFLoader().load('/models/push.glb', resolve, undefined, (err) => console.error('push animation load failed', err))),
+  // Blocker character: not shipped yet (blue-jersey Mixamo character still
+  // needs a rigging pass) -- loadGltfWithRetry's resolve(null)-on-failure
+  // path means this gracefully falls back to placeholder capsules exactly
+  // like the defender model did before its own real model existed.
+  loadGltfWithRetry('/models/blocker.glb'),
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -293,9 +301,15 @@ Promise.all([
     defenderTemplate = defenderGltf.scene;
     defenderTemplate.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   }
-  defenderRunClip = runGltf.animations[0]; // one AnimationClip, reused across every defender's own mixer
+  defenderRunClip = runGltf.animations[0]; // one AnimationClip, reused across every defender's AND blocker's own mixer
   defenderFlexClip = flexGltf.animations[0];
   defenderVictoryClip = victoryGltf.animations[0];
+  defenderPushClip = pushGltf.animations[0];
+
+  if (blockerGltf) {
+    blockerTemplate = blockerGltf.scene;
+    blockerTemplate.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  }
 
   // `paused` only stops an action's own time from advancing -- it does NOT
   // stop the action from being evaluated by the mixer, so a "paused" clip
@@ -539,7 +553,7 @@ let lastSpinDir = 1;
 function nearestDefenderSide() {
   let nearest = null, nearestDist = Infinity;
   for (const d of defenders) {
-    if (d.state === 'done') continue;
+    if (d.state === 'done' || d.state === 'blocked') continue; // held by a blocker -- not a real threat right now
     const dist = Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z);
     if (dist < nearestDist) { nearestDist = dist; nearest = d; }
   }
@@ -618,6 +632,167 @@ const TACKLE_RESULT_DELAY = 0.8; // seconds -- brief beat on "TACKLED" before th
 
 let defenders = [];
 
+// ---- Blockers -----------------------------------------------------------
+// Return-team players. Keeps the 2D game's one core fairness idea for a
+// block -- the held defender's entire approach/lunge machinery stops dead,
+// not just a cosmetic tackle-radius reduction -- without porting its
+// full complexity (no slide-tackle sub-mechanic, no re-block cooldown
+// escalation, no wave-based lateral-slot spawn formation). A blocker with
+// no eligible defender nearby just escorts: holds a fixed lead distance
+// ahead of the runner, drifting laterally toward his position.
+const BLOCKER_COUNT = 3; // fixed -- not tied to the difficulty ladder, confirmed no server-side hook exists or is wanted for this
+const BLOCKER_BASE_SPEED = 8.0; // yd/s -- between the runner's 8.5 and a chasing defender's base 7.5, so a blocker can actually catch a defender that's closing on the runner
+const BLOCK_ENGAGE_DISTANCE = 2.75; // yards -- ballpark of the 2D game's own 3.5, tuned down for this game's already-tighter DEFENDER_TRIGGER_RANGE/TACKLE_RADIUS scale
+const BLOCK_HOLD_MIN = 1.0; // seconds -- how long a block holds a defender, before it resumes chasing
+const BLOCK_HOLD_MAX = 1.5;
+const BLOCKER_MAX_CHASE_DIST = 14; // yards -- beyond this a blocker ignores a defender and escorts instead of committing to a long chase
+const BLOCKER_ESCORT_LEAD = 4; // yards ahead of the runner a non-engaged blocker tries to hold
+// A released defender and the blocker that just held it are both still
+// standing right on top of each other (neither one moved during the
+// hold) -- without a cooldown, the very next frame's seeking pass finds
+// the same pair back within BLOCK_ENGAGE_DISTANCE and re-engages
+// instantly, which pins the defender in a near-permanent blocking loop
+// instead of actually giving it a window to resume the chase. Found by
+// sampling live state at 0.1s resolution during testing: holdElapsed hit
+// holdDuration, flipped to 'seeking' for exactly one frame, then landed
+// right back in 'blocking' against the same target on the next.
+const BLOCK_COOLDOWN = 1.5; // seconds a just-released defender is immune to being re-blocked by anyone
+
+let blockers = [];
+
+function clearBlockers() {
+  blockers.forEach((b) => scene.remove(b.group));
+  blockers = [];
+}
+
+function spawnBlockers(count) {
+  clearBlockers();
+  for (let i = 0; i < count; i++) {
+    const group = new THREE.Group();
+    let model, mixer = null, hipsBoneB = null, hipsBindPosB = null;
+    if (blockerTemplate) {
+      // Same SkeletonUtils.clone() pattern as defenders -- a plain
+      // .clone() doesn't correctly duplicate a SkinnedMesh's skeleton.
+      model = cloneSkinnedScene(blockerTemplate);
+      model.rotation.y = Math.PI; // same base-facing correction as the runner/defender models
+      mixer = new THREE.AnimationMixer(model);
+      mixer.clipAction(defenderRunClip).play(); // same shared running clip -- same Mixamo rig convention throughout
+      model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') hipsBoneB = o; });
+      hipsBindPosB = hipsBoneB ? hipsBoneB.position.clone() : null;
+    } else {
+      // Fallback if blocker.glb hasn't shipped yet or fails to load --
+      // blue to read as distinct from the runner's own model and the red
+      // defender-fallback capsules.
+      model = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 1.2, 4, 8), new THREE.MeshStandardMaterial({ color: 0x2255cc }));
+      model.position.y = 1.0;
+      model.castShadow = true;
+    }
+    group.add(model);
+    scene.add(group);
+
+    // Small escort formation spread laterally ahead of the runner's start
+    // position -- not a full wave/lateral-slot system like the 2D game's.
+    const escortOffsetX = (i - (count - 1) / 2) * 4;
+    group.position.set(RUNNER_GROUP.position.x + escortOffsetX, 0, RUNNER_GROUP.position.z - BLOCKER_ESCORT_LEAD);
+
+    blockers.push({
+      group, mixer, hipsBone: hipsBoneB, hipsBindPos: hipsBindPosB,
+      escortOffsetX,
+      state: 'seeking', // 'seeking' (find/engage a defender, or escort if none in range) | 'blocking' (holding an engaged defender)
+      targetDefender: null,
+      holdElapsed: 0, holdDuration: 0,
+    });
+  }
+}
+
+// Called right after updateDefenders(dt), same phase === 'play' gating.
+// Mixer/root-motion upkeep is separate (updateBlockerAnimations() below,
+// called unconditionally) for the same reason defenders split the two.
+function updateBlockers(dt) {
+  for (const b of blockers) {
+    if (b.state === 'blocking') {
+      b.holdElapsed += dt;
+      // Release if the hold window elapsed, OR if the held defender left
+      // 'blocked' some other way (e.g. a fresh return reset it) -- either
+      // way this blocker is done here.
+      if (b.holdElapsed >= b.holdDuration || !b.targetDefender || b.targetDefender.state !== 'blocked') {
+        if (b.targetDefender && b.targetDefender.state === 'blocked') {
+          b.targetDefender.state = 'chasing';
+          b.targetDefender.blockedByBlocker = null;
+          b.targetDefender.blockCooldown = BLOCK_COOLDOWN; // give it a real window to move before it can be re-engaged
+        }
+        b.state = 'seeking';
+        b.targetDefender = null;
+      } else {
+        // Hold position right where the block happened, facing the
+        // defender it's holding.
+        const dx = b.targetDefender.group.position.x - b.group.position.x;
+        const dz = b.targetDefender.group.position.z - b.group.position.z;
+        if (Math.hypot(dx, dz) > 1e-4) b.group.rotation.y = Math.atan2(dx, dz) + Math.PI;
+      }
+      continue;
+    }
+
+    // 'seeking': find the nearest defender that's actually a threat
+    // (chasing/lunging, not already blocked/done) and not already
+    // targeted by another blocker.
+    let target = null, targetDist = Infinity;
+    for (const d of defenders) {
+      if (d.state !== 'chasing' && d.state !== 'lunging') continue;
+      if (d.blockedByBlocker && d.blockedByBlocker !== b) continue;
+      if (d.blockCooldown > 0) continue;
+      const dist = Math.hypot(b.group.position.x - d.group.position.x, b.group.position.z - d.group.position.z);
+      if (dist < targetDist) { targetDist = dist; target = d; }
+    }
+
+    if (target && targetDist <= BLOCKER_MAX_CHASE_DIST) {
+      const dx = target.group.position.x - b.group.position.x;
+      const dz = target.group.position.z - b.group.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist <= BLOCK_ENGAGE_DISTANCE) {
+        // Engage: the defender stops dead (mirrors updateDefenders()'s own
+        // early-skip for 'blocked'), the blocker holds here.
+        target.state = 'blocked';
+        target.blockedByBlocker = b;
+        b.state = 'blocking';
+        b.targetDefender = target;
+        b.holdElapsed = 0;
+        b.holdDuration = BLOCK_HOLD_MIN + Math.random() * (BLOCK_HOLD_MAX - BLOCK_HOLD_MIN);
+      } else if (dist > 1e-4) {
+        b.group.position.x += (dx / dist) * BLOCKER_BASE_SPEED * dt;
+        b.group.position.z += (dz / dist) * BLOCKER_BASE_SPEED * dt;
+        b.group.rotation.y = Math.atan2(dx, dz) + Math.PI;
+      }
+    } else {
+      // No eligible defender in range -- escort: hold a fixed lead
+      // distance ahead of the runner, drifting laterally toward his
+      // current X (a simplified version of the 2D game's own
+      // seek/escort duality).
+      const targetX = RUNNER_GROUP.position.x + b.escortOffsetX;
+      const targetZ = RUNNER_GROUP.position.z - BLOCKER_ESCORT_LEAD;
+      const dx = targetX - b.group.position.x;
+      const dz = targetZ - b.group.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 1e-4) {
+        b.group.position.x += (dx / dist) * BLOCKER_BASE_SPEED * dt;
+        b.group.position.z += (dz / dist) * BLOCKER_BASE_SPEED * dt;
+        b.group.rotation.y = Math.atan2(dx, dz) + Math.PI;
+      }
+    }
+  }
+}
+
+// Mixer/root-motion upkeep for every blocker, called unconditionally every
+// frame regardless of phase -- same reasoning as updateDefenderAnimations():
+// otherwise a blocker keeps looping its run cycle frozen in place once
+// phase leaves 'play'.
+function updateBlockerAnimations(dt) {
+  for (const b of blockers) {
+    if (b.mixer) b.mixer.update(dt);
+    if (b.hipsBone && b.hipsBindPos) b.hipsBone.position.copy(b.hipsBindPos);
+  }
+}
+
 function clearDefenders() {
   defenders.forEach((d) => scene.remove(d.group));
   defenders = [];
@@ -676,9 +851,12 @@ function spawnDefenders(count, speedMultiplier) {
     defenders.push({
       group, mixer, hipsBone: hipsBoneD, hipsBindPos: hipsBindPosD,
       speed: DEFENDER_BASE_SPEED * speedMultiplier,
-      state: 'chasing', // 'chasing' | 'lunging' | 'recovering' | 'done'
+      state: 'chasing', // 'chasing' | 'lunging' | 'recovering' | 'blocked' | 'done'
       lungeElapsed: 0, lungeTargetX: 0, lungeTargetZ: 0,
       recoverElapsed: 0,
+      blockedByBlocker: null, // set by updateBlockers() while a blocker is holding this defender
+      blockCooldown: 0, // seconds of immunity to a new block, set on release -- see BLOCK_COOLDOWN
+      currentClipName: 'run', // debug-overlay visibility into push/flex/victory sequencing -- see triggerTackle()
     });
   }
 }
@@ -692,7 +870,14 @@ function spawnDefenders(count, speedMultiplier) {
 // frame and mixers never advance by more than one dt.
 function updateDefenders(dt) {
   for (const d of defenders) {
-    if (d.state === 'chasing') {
+    if (d.blockCooldown > 0) d.blockCooldown -= dt;
+    if (d.state === 'blocked') {
+      // Held by a blocker -- see updateBlockers(), which owns the hold
+      // timer and releases this back to 'chasing' itself. No movement, no
+      // lunge trigger while held; this is what makes a block actually
+      // stop the defender dead rather than just cosmetically slow it.
+      continue;
+    } else if (d.state === 'chasing') {
       const dx = RUNNER_GROUP.position.x - d.group.position.x;
       const dz = RUNNER_GROUP.position.z - d.group.position.z;
       const dist = Math.hypot(dx, dz);
@@ -791,11 +976,33 @@ function triggerTackle(defender) {
   document.getElementById('kr3d-overlay-text').textContent = 'TACKLED';
 
   // The defender that actually made the hit gets his own moment -- swap his
-  // mixer off the run cycle and onto a celebration. Only ever touches this
+  // mixer off the run cycle, onto the push (the moment of impact), then
+  // once that finishes, onto the flex celebration. Only ever touches this
   // one defender's OWN mixer (each has its own, per spawnDefenders()).
-  if (defender.mixer && defenderFlexClip) {
+  if (defender.mixer && defenderPushClip) {
+    defender.mixer.stopAllAction();
+    const pushAction = defender.mixer.clipAction(defenderPushClip);
+    pushAction.setLoop(THREE.LoopOnce);
+    pushAction.clampWhenFinished = true;
+    pushAction.time = 0;
+    pushAction.play();
+    defender.currentClipName = 'push';
+    const onPushFinished = (e) => {
+      if (e.action !== pushAction) return;
+      defender.mixer.removeEventListener('finished', onPushFinished);
+      if (defenderFlexClip) {
+        defender.mixer.stopAllAction();
+        defender.mixer.clipAction(defenderFlexClip).setLoop(THREE.LoopRepeat).play();
+        defender.currentClipName = 'flex';
+      }
+    };
+    defender.mixer.addEventListener('finished', onPushFinished);
+  } else if (defender.mixer && defenderFlexClip) {
+    // Push clip missing for some reason -- fall straight to flex like
+    // before rather than leaving him frozen on the run cycle.
     defender.mixer.stopAllAction();
     defender.mixer.clipAction(defenderFlexClip).setLoop(THREE.LoopRepeat).play();
+    defender.currentClipName = 'flex';
   }
 
   // Every OTHER defender's position stops updating the instant phase
@@ -807,7 +1014,13 @@ function triggerTackle(defender) {
     if (d === defender || !d.mixer || !defenderVictoryClip) continue;
     d.mixer.stopAllAction();
     d.mixer.clipAction(defenderVictoryClip).setLoop(THREE.LoopRepeat).play();
+    d.currentClipName = 'victory';
   }
+
+  // Blockers didn't win either -- freeze their mixers too (not a
+  // celebration they earned), same fix/reasoning as the defenders' own
+  // touchdown-path freeze below.
+  blockers.forEach((b) => { if (b.mixer) b.mixer.timeScale = 0; });
 }
 
 function tick(now) {
@@ -973,6 +1186,7 @@ function tick(now) {
       }
 
       updateDefenders(dt); // can flip phase to 'tackled' (triggerTackle) -- guard the touchdown check below on phase still being 'play'. Mixer/root-motion upkeep is separate (updateDefenderAnimations(), called unconditionally further down) so it isn't skipped once phase leaves 'play'.
+      updateBlockers(dt); // same gating as updateDefenders() -- can flip a defender to 'blocked', which the touchdown/tackle checks below don't need to special-case (a blocked defender just stops like any other 'chasing' one would have)
 
       if (phase === 'play' && RUNNER_GROUP.position.z <= -fieldYards) {
         // Don't stop dead on the goal line -- keep auto-running a bit
@@ -998,6 +1212,8 @@ function tick(now) {
         // clock (whatever pose it happens to be on) reads better than
         // switching them to a celebration they didn't earn.
         defenders.forEach((d) => { if (d.mixer) d.mixer.timeScale = 0; });
+        // Same fix, same reason, for blockers.
+        blockers.forEach((b) => { if (b.mixer) b.mixer.timeScale = 0; });
       }
     } else if (phase === 'endzone') {
       RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
@@ -1043,6 +1259,7 @@ function tick(now) {
     updateBlend(dt);
     if (mixer) mixer.update(dt);
     updateDefenderAnimations(dt);
+    updateBlockerAnimations(dt);
     // Skipped during 'tackled': the fall clips' own baked root motion is
     // what actually drags him down to the ground -- stripping it every
     // frame like the run cycle needs would hold him rigidly standing
@@ -1056,8 +1273,9 @@ function tick(now) {
 
     if (debugEl) {
       const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === spinLeftAction ? 'spinLeft' : activeAction === spinRightAction ? 'spinRight' : activeAction === jumpCutLeftAction ? 'jumpCutLeft' : activeAction === jumpCutRightAction ? 'jumpCutRight' : activeAction === fallingDownAction ? 'fallingDown' : activeAction === fallFlatAction ? 'fallFlat' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
-      const defSummary = defenders.map((d, i) => `${i}:${d.state}@${Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z).toFixed(1)}yd`).join(' ');
-      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}  jumpCut: ${jumpCut ? jumpCut.dir : '-'}\npos: x=${RUNNER_GROUP.position.x.toFixed(3)} z=${RUNNER_GROUP.position.z.toFixed(3)}\ndefenders: ${defSummary || '(none)'}`;
+      const defSummary = defenders.map((d, i) => `${i}:${d.state}/${d.currentClipName}@${Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z).toFixed(1)}yd`).join(' ');
+      const blockerSummary = blockers.map((b, i) => `${i}:${b.state}${b.targetDefender ? '->d' + defenders.indexOf(b.targetDefender) : ''}@${Math.hypot(RUNNER_GROUP.position.x - b.group.position.x, RUNNER_GROUP.position.z - b.group.position.z).toFixed(1)}yd`).join(' ');
+      debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}  jumpCut: ${jumpCut ? jumpCut.dir : '-'}\npos: x=${RUNNER_GROUP.position.x.toFixed(3)} z=${RUNNER_GROUP.position.z.toFixed(3)}\ndefenders: ${defSummary || '(none)'}\nblockers: ${blockerSummary || '(none)'}`;
     }
   }
 
@@ -1105,6 +1323,7 @@ async function startReturn(returnConfig) {
   // `returnConfig.defenderCount ?? 3`) once testing's done.
   const testDefenderCount = 4;
   spawnDefenders(testDefenderCount, returnConfig.defenderSpeed ?? 1); // ?? not || -- a legitimate 0 defenderSpeed shouldn't get silently overridden to 1
+  spawnBlockers(BLOCKER_COUNT);
   wasMoving = false;
   heldKeys.clear();
   // Reset directly rather than through setActiveAction() -- that always
