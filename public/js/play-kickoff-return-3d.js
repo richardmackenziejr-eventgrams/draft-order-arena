@@ -606,7 +606,7 @@ function chooseSpinDir(lateral) {
 // FORWARD_FACTOR 0, not partial like the spin.
 const JUMPCUT_COOLDOWN = 0.5;
 const JUMPCUT_FORWARD_FACTOR = 0; // plants -- no forward progress during the cut itself
-const JUMPCUT_LATERAL_SPEED = 15.8; // dialed to land ~2.5yd total (live-measured) at the current JUMPCUT_TIME_SCALE below -- was 20 (~3.17yd), scaled down proportionally since distance = SPEED * duration / 2 and duration wasn't changing this time
+const JUMPCUT_LATERAL_SPEED = 17.7; // dialed to land ~2.8yd total (live-measured) at the current JUMPCUT_TIME_SCALE below -- was 15.8 (~2.5yd), scaled up proportionally since distance = SPEED * duration / 2 and duration wasn't changing this time
 const JUMPCUT_TIME_SCALE = 1.5; // lowered from 2.5 -- the new v2 clip (0.5s raw) at the old scale played out in ~0.2s, too quick to read as a real move; this stretches it to ~0.33s (~3.3yd total with the speed above, farther than the original clip's own ~3.15yd)
 const JUMPCUT_BLEND = 0.12;
 let jumpCut = null; // { dir, action, elapsed, dur, forward }
