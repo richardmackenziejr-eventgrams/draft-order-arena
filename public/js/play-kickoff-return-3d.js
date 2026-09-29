@@ -1203,7 +1203,23 @@ function triggerTackle(defender) {
 }
 
 function tick(now) {
-  const dt = Math.min(0.05, (now - lastFrameAt) / 1000);
+  // Clamped on BOTH ends: the upper bound guards against a huge dt after a
+  // stall/tab-switch, the lower bound (added after a real production bug)
+  // guards against a NEGATIVE dt on the very first frame after
+  // startReturn() -- the rAF timestamp passed to this callback can land
+  // slightly BEFORE the performance.now() reading startReturn() just took
+  // for lastFrameAt (a known browser quirk: input-event-adjacent rAF
+  // timestamps can predate a performance.now() call made in the same
+  // handler), which is harmless for most of this file's own state (a
+  // position nudged backward by a microscopic negative dt self-corrects
+  // next frame) but is NOT harmless for a LoopOnce+clampWhenFinished
+  // AnimationAction started on that exact first frame: three.js's own
+  // LoopOnce handling treats time < 0 as "finished" and permanently pauses
+  // it via clampWhenFinished, right at time=0 -- which is exactly the
+  // kicker's own kick animation, started the instant startReturn() runs.
+  // Confirmed live: kickerAction.paused was already true, time still 0, on
+  // the very first frame -- a permanent freeze, not a slow one.
+  const dt = Math.max(0, Math.min(0.05, (now - lastFrameAt) / 1000));
   lastFrameAt = now;
 
   if (running) {
