@@ -173,6 +173,7 @@ let defenderPushClip = null; // played by the tackler first, at the moment of im
 let defenderFlexClip = null; // played by whichever defender actually makes the tackle
 let defenderVictoryClip = null; // played by every OTHER defender once the play ends -- otherwise they keep looping the run cycle in place, frozen mid-stride, since their position stops updating but their mixer doesn't
 let blockerTemplate = null; // the loaded (or null: not ready yet) blocker scene -- same SkeletonUtils.clone() pattern as defenderTemplate
+let blockerSadIdleClip = null; // played by every blocker the instant the runner is tackled -- see triggerTackle()
 
 // The spin clips are JSON, not GLB: quaternion tracks retargeted offline
 // onto this model's Mixamo bone names. Cascadeur-authored as of 2026-09-27
@@ -247,12 +248,9 @@ Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/flex.glb', resolve, undefined, (err) => console.error('flex animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/victory.glb', resolve, undefined, (err) => console.error('victory animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/push.glb', resolve, undefined, (err) => console.error('push animation load failed', err))),
-  // Blocker character: not shipped yet (blue-jersey Mixamo character still
-  // needs a rigging pass) -- loadGltfWithRetry's resolve(null)-on-failure
-  // path means this gracefully falls back to placeholder capsules exactly
-  // like the defender model did before its own real model existed.
   loadGltfWithRetry('/models/blocker.glb'),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf]) => {
+  new Promise((resolve) => new GLTFLoader().load('/models/sad-idle.glb', resolve, undefined, (err) => console.error('sad-idle animation load failed', err))),
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf, sadIdleGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -310,6 +308,7 @@ Promise.all([
     blockerTemplate = blockerGltf.scene;
     blockerTemplate.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   }
+  blockerSadIdleClip = sadIdleGltf.animations[0];
 
   // `paused` only stops an action's own time from advancing -- it does NOT
   // stop the action from being evaluated by the mixer, so a "paused" clip
@@ -643,6 +642,7 @@ let defenders = [];
 const BLOCKER_COUNT = 3; // fixed -- not tied to the difficulty ladder, confirmed no server-side hook exists or is wanted for this
 const BLOCKER_BASE_SPEED = 8.0; // yd/s -- between the runner's 8.5 and a chasing defender's base 7.5, so a blocker can actually catch a defender that's closing on the runner
 const BLOCK_ENGAGE_DISTANCE = 2.75; // yards -- ballpark of the 2D game's own 3.5, tuned down for this game's already-tighter DEFENDER_TRIGGER_RANGE/TACKLE_RADIUS scale
+const BLOCK_CONTACT_DISTANCE = 0.9; // yards -- how far apart engaged pair stand once snapped together, close enough to read as actually pushing each other rather than each holding wherever they happened to be (up to BLOCK_ENGAGE_DISTANCE apart) when the engage check passed
 const BLOCK_HOLD_MIN = 1.0; // seconds -- how long a block holds a defender, before it resumes chasing
 const BLOCK_HOLD_MAX = 1.5;
 const BLOCKER_MAX_CHASE_DIST = 14; // yards -- beyond this a blocker ignores a defender and escorts instead of committing to a long chase
@@ -720,16 +720,23 @@ function updateBlockers(dt) {
           b.targetDefender.state = 'chasing';
           b.targetDefender.blockedByBlocker = null;
           b.targetDefender.blockCooldown = BLOCK_COOLDOWN; // give it a real window to move before it can be re-engaged
+          if (b.targetDefender.mixer && defenderRunClip) {
+            b.targetDefender.mixer.stopAllAction();
+            b.targetDefender.mixer.clipAction(defenderRunClip).setLoop(THREE.LoopRepeat).play();
+            b.targetDefender.currentClipName = 'run';
+          }
+        }
+        if (b.mixer && defenderRunClip) {
+          b.mixer.stopAllAction();
+          b.mixer.clipAction(defenderRunClip).setLoop(THREE.LoopRepeat).play();
         }
         b.state = 'seeking';
         b.targetDefender = null;
-      } else {
-        // Hold position right where the block happened, facing the
-        // defender it's holding.
-        const dx = b.targetDefender.group.position.x - b.group.position.x;
-        const dz = b.targetDefender.group.position.z - b.group.position.z;
-        if (Math.hypot(dx, dz) > 1e-4) b.group.rotation.y = Math.atan2(dx, dz) + Math.PI;
       }
+      // Position/rotation were snapped to contact distance once, at the
+      // moment of engagement (see below) -- neither one moves while
+      // 'blocked'/'blocking', so there's nothing to re-hold here every
+      // frame.
       continue;
     }
 
@@ -751,13 +758,41 @@ function updateBlockers(dt) {
       const dist = Math.hypot(dx, dz);
       if (dist <= BLOCK_ENGAGE_DISTANCE) {
         // Engage: the defender stops dead (mirrors updateDefenders()'s own
-        // early-skip for 'blocked'), the blocker holds here.
+        // early-skip for 'blocked'), the blocker holds here. The engage
+        // check only guarantees they're within BLOCK_ENGAGE_DISTANCE (up
+        // to 2.75yd), which read as each pushing air rather than each
+        // other -- snap both to BLOCK_CONTACT_DISTANCE apart, symmetric
+        // around wherever contact actually happened, facing each other.
+        const ndx = dist > 1e-4 ? dx / dist : 0;
+        const ndz = dist > 1e-4 ? dz / dist : 1;
+        const midX = (b.group.position.x + target.group.position.x) / 2;
+        const midZ = (b.group.position.z + target.group.position.z) / 2;
+        const half = BLOCK_CONTACT_DISTANCE / 2;
+        b.group.position.set(midX - ndx * half, 0, midZ - ndz * half);
+        target.group.position.set(midX + ndx * half, 0, midZ + ndz * half);
+        b.group.rotation.y = Math.atan2(ndx, ndz) + Math.PI; // blocker faces the defender
+        target.group.rotation.y = Math.atan2(-ndx, -ndz) + Math.PI; // defender faces the blocker
+
         target.state = 'blocked';
         target.blockedByBlocker = b;
         b.state = 'blocking';
         b.targetDefender = target;
         b.holdElapsed = 0;
         b.holdDuration = BLOCK_HOLD_MIN + Math.random() * (BLOCK_HOLD_MAX - BLOCK_HOLD_MIN);
+
+        // Both play the push/shove clip for the duration of the hold
+        // (looping -- it's a held struggle, not a one-shot) instead of
+        // each just continuing to run in place, which read as two guys
+        // jogging past each other rather than actually blocking.
+        if (b.mixer && defenderPushClip) {
+          b.mixer.stopAllAction();
+          b.mixer.clipAction(defenderPushClip).setLoop(THREE.LoopRepeat).play();
+        }
+        if (target.mixer && defenderPushClip) {
+          target.mixer.stopAllAction();
+          target.mixer.clipAction(defenderPushClip).setLoop(THREE.LoopRepeat).play();
+          target.currentClipName = 'push';
+        }
       } else if (dist > 1e-4) {
         b.group.position.x += (dx / dist) * BLOCKER_BASE_SPEED * dt;
         b.group.position.z += (dz / dist) * BLOCKER_BASE_SPEED * dt;
@@ -1017,10 +1052,14 @@ function triggerTackle(defender) {
     d.currentClipName = 'victory';
   }
 
-  // Blockers didn't win either -- freeze their mixers too (not a
-  // celebration they earned), same fix/reasoning as the defenders' own
-  // touchdown-path freeze below.
-  blockers.forEach((b) => { if (b.mixer) b.mixer.timeScale = 0; });
+  // Blockers didn't win either -- every one of them (mid-block or still
+  // escorting) reacts with a sad idle instead of just freezing whatever
+  // pose they were in.
+  blockers.forEach((b) => {
+    if (!b.mixer || !blockerSadIdleClip) return;
+    b.mixer.stopAllAction();
+    b.mixer.clipAction(blockerSadIdleClip).setLoop(THREE.LoopRepeat).play();
+  });
 }
 
 function tick(now) {
