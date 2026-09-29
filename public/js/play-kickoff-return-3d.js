@@ -672,8 +672,8 @@ const BLOCKER_LINE_Z = -35; // yards downfield of the returner's own goal line
 const BLOCKER_BASE_SPEED = 8.0; // yd/s -- between the runner's 8.5 and a chasing defender's base 7.5, so a blocker can actually catch a defender that's closing on the runner
 const BLOCK_ENGAGE_DISTANCE = 2.75; // yards -- ballpark of the 2D game's own 3.5, tuned down for this game's already-tighter DEFENDER_TRIGGER_RANGE/TACKLE_RADIUS scale
 const BLOCK_CONTACT_DISTANCE = 0.9; // yards -- how far apart engaged pair stand once snapped together, close enough to read as actually pushing each other rather than each holding wherever they happened to be (up to BLOCK_ENGAGE_DISTANCE apart) when the engage check passed
-const BLOCK_HOLD_MIN = 1.0; // seconds -- how long a block holds a defender, before it resumes chasing
-const BLOCK_HOLD_MAX = 1.5;
+const BLOCK_HOLD_MIN = 1.5; // seconds -- how long a block holds a defender, before it resumes chasing. Bumped from 1.0-1.5 to try 1.5-2.0 -- now that the early-release-on-cut bug is fixed (blocks actually run their full duration), the shorter range read as defenders getting free too quickly.
+const BLOCK_HOLD_MAX = 2.0;
 const BLOCKER_MAX_CHASE_DIST = 14; // yards -- beyond this a blocker ignores a defender and escorts instead of committing to a long chase
 const BLOCKER_ESCORT_LEAD = 4; // yards ahead of the runner a non-engaged blocker tries to hold
 // A released defender and the blocker that just held it are both still
@@ -1052,6 +1052,8 @@ let kicker = null; // THREE.Group, recreated each return -- see spawnKicker()
 let kickerMixer = null;
 let kickerAction = null; // tracked so tick()'s 'kickoff' branch can check its own clip-internal .time for the contact moment, independent of KICKOFF_TIME_SCALE
 let kickerHipsBone = null;
+let kickerHipsBindPos = null; // captured BEFORE the kick clip ever plays -- needed once he's promoted into a real defender (see promoteKickerToDefender()), which strips root motion back to this exact pose every frame like every other defender
+let kickerSpeedMultiplier = 1; // stashed from spawnKicker()'s own argument, applied once he's promoted to a real defender
 let kickerKickSpotZ = 0; // his own 35 -- kept even if the kicker itself failed to load, so the ball still has a sensible launch point (see kickOrigin())
 
 function clearKicker() {
@@ -1060,14 +1062,18 @@ function clearKicker() {
   kickerMixer = null;
   kickerAction = null;
   kickerHipsBone = null;
+  kickerHipsBindPos = null;
 }
 
 // Reuses defenderTemplate (a defender-model kicker, per the user's own
 // call) and player-kick.glb's baked run-up+kick clip (loaded for the
 // runner's own mesh but its .animations were never read until now) --
-// no new asset needed for either.
-function spawnKicker() {
+// no new asset needed for either. speedMultiplier matches spawnDefenders()'s
+// own argument -- stashed for when he's later promoted into a real
+// defender (see promoteKickerToDefender()).
+function spawnKicker(speedMultiplier) {
   clearKicker();
+  kickerSpeedMultiplier = speedMultiplier;
   kickerKickSpotZ = -(fieldYards - 35);
   if (!defenderTemplate || !runnerKickClip) return; // graceful no-op, same fallback philosophy as the capsule placeholders -- just skips the visual kicker rather than showing a broken one; kickOrigin() below still gives the ball a sensible launch point, and tick()'s 'kickoff' branch falls straight through to 'hang' if there's no kickerAction to wait on
   const model = cloneSkinnedScene(defenderTemplate);
@@ -1089,6 +1095,9 @@ function spawnKicker() {
   // evaluated for a target straight ahead in +Z.
   group.rotation.y = Math.PI;
 
+  model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') kickerHipsBone = o; });
+  kickerHipsBindPos = kickerHipsBone ? kickerHipsBone.position.clone() : null; // captured NOW, before any animation plays -- promoteKickerToDefender() needs this exact bind pose to strip root motion later, same as every other defender
+
   kickerMixer = new THREE.AnimationMixer(model);
   kickerAction = kickerMixer.clipAction(runnerKickClip);
   kickerAction.setLoop(THREE.LoopOnce);
@@ -1099,8 +1108,44 @@ function spawnKicker() {
   // cycle -- this clip's whole point is the run-up travel, same reasoning
   // as why the runner's own tackle-fall clips skip stripRootMotion().
 
-  model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') kickerHipsBone = o; });
   group.position.set(0, 0, kickerKickSpotZ + KICKER_RUNUP_BACK);
+}
+
+// Once he's kicked it, the kicker becomes a real defender -- the last line
+// of defense, per the user's own request. Reuses his EXISTING group/mixer
+// (no new clone) and simply pushes a defender-shaped object onto the
+// shared `defenders` array, so he gets the exact same chase/lunge/tackle
+// state machine, the exact same block-interaction eligibility, and the
+// exact same freeze-until-the-catch treatment as the other 10 -- nothing
+// new to build. Starting ~20-25yd further back than the rest of the
+// formation (his own 35 vs. their 40) is what naturally keeps him
+// trailing as a last-ditch defender for most of the play, not a slower
+// speed -- he moves at the same DEFENDER_BASE_SPEED as everyone else.
+function promoteKickerToDefender() {
+  if (!kicker || !kickerMixer) return; // no kicker (asset load failure) -- nothing to promote
+  kickerMixer.stopAllAction();
+  kickerMixer.clipAction(defenderRunClip).setLoop(THREE.LoopRepeat).play();
+  kickerMixer.timeScale = 0; // held on frame 0 until the catch, same as every other defender -- see spawnDefenders()'s own comment
+  defenders.push({
+    group: kicker, mixer: kickerMixer, hipsBone: kickerHipsBone, hipsBindPos: kickerHipsBindPos,
+    speed: DEFENDER_BASE_SPEED * kickerSpeedMultiplier,
+    state: 'chasing',
+    lungeElapsed: 0, lungeTargetX: 0, lungeTargetZ: 0,
+    recoverElapsed: 0,
+    blockedByBlocker: null,
+    blockCooldown: 0,
+    currentClipName: 'run',
+  });
+  // The defenders array now owns this group/mixer/bone (see
+  // updateDefenderAnimations()) -- null every kicker-specific tracker so
+  // updateKickerAnimation() stops updating the SAME mixer a second time
+  // every frame, and nothing else in this file mistakes him for still
+  // being "the kicker".
+  kickerMixer = null;
+  kickerAction = null;
+  kicker = null;
+  kickerHipsBone = null;
+  kickerHipsBindPos = null;
 }
 
 // Unconditional per-frame mixer update, same pattern as
@@ -1504,6 +1549,7 @@ function tick(now) {
           toPos: new THREE.Vector3(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK),
           toTarget: new THREE.Vector3(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD),
         };
+        promoteKickerToDefender(); // his job's done -- he's the last line of defense now, same as every other defender
         phase = 'hang';
         phaseElapsed = 0;
       }
@@ -1638,7 +1684,7 @@ async function startReturn(returnConfig) {
   // left over from the end of the previous return.
   spawnDefenders(DEFENDER_FORMATION_COUNT, returnConfig.defenderSpeed ?? 1); // ?? not || -- a legitimate 0 defenderSpeed shouldn't get silently overridden to 1
   spawnBlockers(BLOCKER_COUNT);
-  spawnKicker();
+  spawnKicker(returnConfig.defenderSpeed ?? 1); // same speed multiplier as the rest of the defenders -- he's promoted into that same array once he's kicked it (see promoteKickerToDefender())
   if (ball) { if (ball.parent) ball.parent.remove(ball); ball = null; } // clear any leftover ball from the previous return (e.g. still parented to the forearm bone)
   cameraPan = null;
   catchStarted = false;
