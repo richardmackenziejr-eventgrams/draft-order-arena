@@ -657,6 +657,7 @@ const BLOCKER_ESCORT_LEAD = 4; // yards ahead of the runner a non-engaged blocke
 // holdDuration, flipped to 'seeking' for exactly one frame, then landed
 // right back in 'blocking' against the same target on the next.
 const BLOCK_COOLDOWN = 1.5; // seconds a just-released defender is immune to being re-blocked by anyone
+const BLOCK_RELEASE_LATERAL_RANGE = 5; // yards -- if the runner drifts further than this laterally from where a block is happening, that defender no longer needs to fight through it to reach him, so release immediately rather than waiting out the hold timer
 
 let blockers = [];
 
@@ -712,10 +713,14 @@ function updateBlockers(dt) {
   for (const b of blockers) {
     if (b.state === 'blocking') {
       b.holdElapsed += dt;
-      // Release if the hold window elapsed, OR if the held defender left
-      // 'blocked' some other way (e.g. a fresh return reset it) -- either
-      // way this blocker is done here.
-      if (b.holdElapsed >= b.holdDuration || !b.targetDefender || b.targetDefender.state !== 'blocked') {
+      // Release if the hold window elapsed, OR the runner has drifted far
+      // enough laterally that this block is no longer in his path (the
+      // defender doesn't need to fight through it to reach him anymore --
+      // let it go immediately rather than waiting out the timer), OR the
+      // held defender left 'blocked' some other way (e.g. a fresh return
+      // reset it) -- any of these and this blocker is done here.
+      const outOfPlay = Math.abs(RUNNER_GROUP.position.x - b.group.position.x) > BLOCK_RELEASE_LATERAL_RANGE;
+      if (b.holdElapsed >= b.holdDuration || outOfPlay || !b.targetDefender || b.targetDefender.state !== 'blocked') {
         if (b.targetDefender && b.targetDefender.state === 'blocked') {
           b.targetDefender.state = 'chasing';
           b.targetDefender.blockedByBlocker = null;
