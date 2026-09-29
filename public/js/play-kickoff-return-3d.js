@@ -734,7 +734,7 @@ function spawnBlockers(count) {
       escortOffsetX,
       state: 'seeking', // 'seeking' (find/engage a defender, or escort if none in range) | 'blocking' (holding an engaged defender)
       targetDefender: null,
-      holdElapsed: 0, holdDuration: 0,
+      holdElapsed: 0, holdDuration: 0, engageRunnerX: 0,
     });
   }
 }
@@ -747,12 +747,25 @@ function updateBlockers(dt) {
     if (b.state === 'blocking') {
       b.holdElapsed += dt;
       // Release if the hold window elapsed, OR the runner has drifted far
-      // enough laterally that this block is no longer in his path (the
-      // defender doesn't need to fight through it to reach him anymore --
-      // let it go immediately rather than waiting out the timer), OR the
-      // held defender left 'blocked' some other way (e.g. a fresh return
-      // reset it) -- any of these and this blocker is done here.
-      const outOfPlay = Math.abs(RUNNER_GROUP.position.x - b.group.position.x) > BLOCK_RELEASE_LATERAL_RANGE;
+      // enough laterally AWAY FROM WHERE HE WAS WHEN THIS BLOCK STARTED
+      // that it's no longer in his path (the defender doesn't need to
+      // fight through it to reach him anymore -- let it go immediately
+      // rather than waiting out the timer), OR the held defender left
+      // 'blocked' some other way (e.g. a fresh return reset it) -- any of
+      // these and this blocker is done here.
+      //
+      // Measured against b.engageRunnerX (captured at the moment of
+      // engagement below), NOT the block's own x position -- the real
+      // Dynamic Kickoff formation spreads blocks across the full ~49yd
+      // width while the runner himself usually sits near center field, so
+      // comparing to the block's own position made every wing block
+      // "already out of play" the instant it engaged (a block at x=-18
+      // failed `|0 - (-18)| > 5` immediately), releasing in ~0.02s instead
+      // of its assigned 1.0-1.5s hold regardless of whether the runner
+      // ever actually moved. Confirmed live before this fix: only blocks
+      // that happened to engage within 5yd of a stationary center-field
+      // runner ever held their full duration.
+      const outOfPlay = Math.abs(RUNNER_GROUP.position.x - b.engageRunnerX) > BLOCK_RELEASE_LATERAL_RANGE;
       if (b.holdElapsed >= b.holdDuration || outOfPlay || !b.targetDefender || b.targetDefender.state !== 'blocked') {
         if (b.targetDefender && b.targetDefender.state === 'blocked') {
           b.targetDefender.state = 'chasing';
@@ -817,6 +830,7 @@ function updateBlockers(dt) {
         b.targetDefender = target;
         b.holdElapsed = 0;
         b.holdDuration = BLOCK_HOLD_MIN + Math.random() * (BLOCK_HOLD_MAX - BLOCK_HOLD_MIN);
+        b.engageRunnerX = RUNNER_GROUP.position.x; // reference point for the early-release drift check above -- where the RUNNER was, not where this block happened to be
 
         // Both play the push/shove clip for the duration of the hold
         // (looping -- it's a held struggle, not a one-shot) instead of
