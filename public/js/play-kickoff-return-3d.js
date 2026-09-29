@@ -1025,15 +1025,18 @@ function updateDefenderAnimations(dt) {
 // camera on the kicker) -> 'hang' (ball flight, camera pans then holds on
 // the returner) -> 'catch' (catch animation, ball reparents to his hand) ->
 // 'play' (unchanged from here on). See the phase branches in tick().
-const KICKOFF_CONTACT_TIME = 0.55; // seconds into the kick clip where the foot meets the ball -- same clip play-field-goal.js's own kicker uses, same empirically-found mark (see calibrateKickAnimation() there)
-const KICKER_RUNUP_BACK = 3.5; // yards behind the true kick spot the kicker starts -- lets the clip's own baked run-up travel carry him roughly onto the mark by contact. Tuned by eye, not calibrated like the field-goal kicker's variable-distance system: kickoff is always the one fixed distance, nothing to plan ahead for.
+const KICKOFF_CONTACT_TIME = 0.55; // seconds into the kick clip's OWN timeline where the foot meets the ball -- same clip play-field-goal.js's own kicker uses, same empirically-found mark (see calibrateKickAnimation() there). Checked against the action's own .time, not real elapsed time, so it stays correct regardless of KICKOFF_TIME_SCALE.
+const KICKOFF_TIME_SCALE = 0.6; // the raw clip reads as too fast for this run-up+kick to actually register -- played slower, opposite of this file's other *_TIME_SCALE constants (which all speed a slow capture up)
+const KICKER_RUNUP_BACK = 3.5; // yards behind the true kick spot the kicker starts -- lets the clip's own baked run-up travel carry him roughly onto the mark by contact (playback speed doesn't change how FAR the root motion travels, just how long it takes). Tuned by eye, not calibrated like the field-goal kicker's variable-distance system: kickoff is always the one fixed distance, nothing to plan ahead for.
 const HANG_TIME = 4.0; // seconds the ball is airborne
-const CAMERA_PAN_DURATION = 1.6; // seconds -- the camera arrives at the returner well before the ball lands, same idea as a broadcast cutting to the return side early rather than panning for the whole flight
+const CAMERA_PAN_DURATION = 2.8; // seconds -- the camera arrives at the returner well before the ball lands, same idea as a broadcast cutting to the return side early rather than panning for the whole flight
 const BALL_PEAK_HEIGHT = 15; // yards -- how high the flight arc peaks
 const CATCH_HEIGHT = 1.3; // yards -- roughly chest/hands height, where the ball "arrives" for the catch
+const CATCH_ANTICIPATION = 0.6; // seconds before the ball actually arrives that the catch animation starts -- otherwise his hands only start rising AFTER the ball has already "landed" at his position, which read as catching something already in his hands rather than actually catching it
 
 let kicker = null; // THREE.Group, recreated each return -- see spawnKicker()
 let kickerMixer = null;
+let kickerAction = null; // tracked so tick()'s 'kickoff' branch can check its own clip-internal .time for the contact moment, independent of KICKOFF_TIME_SCALE
 let kickerHipsBone = null;
 let kickerKickSpotZ = 0; // his own 35 -- kept even if the kicker itself failed to load, so the ball still has a sensible launch point (see kickOrigin())
 
@@ -1041,6 +1044,7 @@ function clearKicker() {
   if (kicker) scene.remove(kicker);
   kicker = null;
   kickerMixer = null;
+  kickerAction = null;
   kickerHipsBone = null;
 }
 
@@ -1051,7 +1055,7 @@ function clearKicker() {
 function spawnKicker() {
   clearKicker();
   kickerKickSpotZ = -(fieldYards - 35);
-  if (!defenderTemplate || !runnerKickClip) return; // graceful no-op, same fallback philosophy as the capsule placeholders -- just skips the visual kicker rather than showing a broken one; kickOrigin() below still gives the ball a sensible launch point
+  if (!defenderTemplate || !runnerKickClip) return; // graceful no-op, same fallback philosophy as the capsule placeholders -- just skips the visual kicker rather than showing a broken one; kickOrigin() below still gives the ball a sensible launch point, and tick()'s 'kickoff' branch falls straight through to 'hang' if there's no kickerAction to wait on
   const model = cloneSkinnedScene(defenderTemplate);
   model.rotation.y = Math.PI;
   const group = new THREE.Group();
@@ -1060,10 +1064,11 @@ function spawnKicker() {
   kicker = group;
 
   kickerMixer = new THREE.AnimationMixer(model);
-  const action = kickerMixer.clipAction(runnerKickClip);
-  action.setLoop(THREE.LoopOnce);
-  action.clampWhenFinished = true;
-  action.play();
+  kickerAction = kickerMixer.clipAction(runnerKickClip);
+  kickerAction.setLoop(THREE.LoopOnce);
+  kickerAction.clampWhenFinished = true;
+  kickerAction.setEffectiveTimeScale(KICKOFF_TIME_SCALE);
+  kickerAction.play();
   // Root motion is NOT stripped here, unlike defenders'/blockers' run
   // cycle -- this clip's whole point is the run-up travel, same reasoning
   // as why the runner's own tackle-fall clips skip stripRootMotion().
@@ -1111,6 +1116,7 @@ let ball = null; // THREE.Mesh, scene-level during 'hang' -- reparented onto the
 let ballStart = new THREE.Vector3();
 let ballEnd = new THREE.Vector3();
 let cameraPan = null; // { fromPos, fromTarget, toPos, toTarget } -- captured once at the 'kickoff' -> 'hang' transition, consumed by the 'hang' branch's per-frame lerp
+let catchStarted = false; // the catch animation fires CATCH_ANTICIPATION seconds before the ball actually arrives, partway through 'hang' -- this just guards it firing once, see the 'hang' branch below
 
 // Which way he goes down depends on where the hit came from, relative to
 // which way he's actually facing/running (RUNNER_GROUP's own local -Z,
@@ -1426,8 +1432,12 @@ function tick(now) {
     } else if (phase === 'kickoff') {
       // Camera/kicker positioning already set once in startReturn() (see
       // snapCameraToKicker()) -- his root motion is bone-local, so nothing
-      // here needs to track a moving group position. Just wait for contact.
-      if (phaseElapsed >= KICKOFF_CONTACT_TIME) {
+      // here needs to track a moving group position. Just wait for contact,
+      // checked against the ACTION's own clip-internal time (not real
+      // elapsed time), so this stays correct under KICKOFF_TIME_SCALE. Falls
+      // straight through if there's no kicker at all (asset load failure) --
+      // nothing to wait on.
+      if (!kickerAction || kickerAction.time >= KICKOFF_CONTACT_TIME) {
         ballStart.copy(kickOrigin());
         ballEnd.set(RUNNER_GROUP.position.x, CATCH_HEIGHT, RUNNER_GROUP.position.z);
         ball = new THREE.Mesh(
@@ -1464,6 +1474,17 @@ function tick(now) {
       camTarget.lerpVectors(cameraPan.fromTarget, cameraPan.toTarget, panT);
       camera.lookAt(camTarget);
 
+      // Starts the catch animation a beat BEFORE the ball actually arrives
+      // -- starting it exactly on arrival (the old behavior) meant his
+      // hands only began rising once the ball was already "there", which
+      // read as catching something already in his hands rather than
+      // actually catching it.
+      if (!catchStarted && catchAction && phaseElapsed >= HANG_TIME - CATCH_ANTICIPATION) {
+        catchStarted = true;
+        setActiveAction(catchAction);
+        activeAction.paused = false;
+      }
+
       if (phaseElapsed >= HANG_TIME) {
         // Caught -- the ball leaves the scene and becomes a child of the
         // runner's own forearm bone instead: a bone-parented mesh rigidly
@@ -1475,15 +1496,11 @@ function tick(now) {
           ball.position.set(0.05, -0.15, 0.1);
           ball.rotation.set(0, 0, Math.PI / 2);
         }
-        if (catchAction) {
-          setActiveAction(catchAction);
-          activeAction.paused = false;
-        }
         phase = 'catch';
         phaseElapsed = 0;
       }
     } else if (phase === 'catch') {
-      // Holds for the clip's own natural duration, then hands off to
+      // Holds until the catch clip itself finishes, then hands off to
       // 'play' -- unfreezing every defender/blocker mixer (see
       // spawnDefenders()/spawnBlockers()'s own timeScale=0 comment) and
       // the camera (celebrationCamFrozen, the same flag the touchdown
@@ -1492,7 +1509,12 @@ function tick(now) {
       // camera). No explicit action-swap needed here -- 'play''s own
       // isMoving/wasMoving logic already leaves activeAction on the caught
       // pose until the player's first input.
-      if (!catchAction || phaseElapsed >= catchAction.getClip().duration) {
+      //
+      // Checked against the action's own .time (not phaseElapsed) -- the
+      // clip actually started CATCH_ANTICIPATION seconds ago, back during
+      // 'hang', so phaseElapsed alone would run short of the clip's real
+      // remaining length.
+      if (!catchAction || catchAction.time >= catchAction.getClip().duration - 1e-3) {
         phase = 'play';
         phaseElapsed = 0;
         celebrationCamFrozen = false;
@@ -1573,6 +1595,7 @@ async function startReturn(returnConfig) {
   spawnKicker();
   if (ball) { if (ball.parent) ball.parent.remove(ball); ball = null; } // clear any leftover ball from the previous return (e.g. still parented to the forearm bone)
   cameraPan = null;
+  catchStarted = false;
   wasMoving = false;
   heldKeys.clear();
   // Reset directly rather than through setActiveAction() -- that always
