@@ -93,7 +93,15 @@ function buildField(lengthYards) {
   // shows through in the surrounding gap.
   if (groundApron) scene.remove(groundApron);
   groundApron = new THREE.Mesh(
-    new THREE.PlaneGeometry(300, lengthYards + 60),
+    // +120, not the stands' own ~20yd endzone setback -- the corner
+    // tiles' own footprint reaches noticeably further back past their
+    // pivot than the setback number alone suggests (see
+    // CORNER_FRONT_OFFSET in buildEndzoneStands), so a margin tied
+    // exactly to the setback came up short and left a blue gap under the
+    // near corner's own outer edge. Generous margin here is free (it's a
+    // flat-shaded plane, cheap regardless of size) so there's no reason
+    // to chase an exact number the way the tile-to-tile seams do.
+    new THREE.PlaneGeometry(300, lengthYards + 120),
     new THREE.MeshStandardMaterial({ color: 0x2f6b3f, roughness: 0.95 })
   );
   groundApron.rotation.x = -Math.PI / 2;
@@ -245,24 +253,33 @@ function buildEndzoneStands(lengthYards) {
   const CORNER_X = 12.8 + STAND_WIDTH_DELTA;
   const SIDELINE_ANCHOR_X = 16 + STAND_WIDTH_DELTA;
 
-  // How far behind the actual goal line the stand's crowd-facing edge
-  // should sit -- a real NFL endzone is about this deep, and it keeps the
-  // bowl's structure from visually looming into the playable endzone.
-  // Placing a tile's PIVOT this far back is NOT enough on its own -- the
-  // model's own real depth means its pivot sits mid-depth, not at its
-  // front face, so its front edge lands roughly STAND_MODEL_FRONT_OFFSET
-  // yards closer to the field than the pivot. This bit a live deployed
-  // touchdown screenshot: the far stand's front edge landed ~2.7yd on the
-  // FIELD side of the goal line (pivot placed only 4yd back, depth ~13.4yd)
-  // and visibly cut across the endzone where the celebrating runner
-  // stands. Deriving the pivot from the desired FRONT edge instead of a
-  // flat, depth-blind margin fixes it for any future depth/scale change.
-  const ENDZONE_STAND_SETBACK = 10;
+  // Yards from the corner tile's own pivot to its own crowd-facing front
+  // edge -- measured the same way STAND_MODEL_FRONT_OFFSET was (a Box3 on
+  // a placed, unrotated, mirror=1 instance). Notably bigger than the
+  // straight tile's own ~6.67yd offset: using the STRAIGHT tile's offset
+  // for the corners too (an earlier version of this code did) placed the
+  // corners' pivots close enough that their own, bigger front-reach stuck
+  // out well past the straight tile's front edge -- invisible while
+  // everything sat close to the field, but once both were pushed back for
+  // real endzone clearance it read as the corners "encroaching" past a
+  // visibly-recessed center section, with a gap/notch of sky between them.
+  const CORNER_FRONT_OFFSET = 11.17;
+
+  // How far behind the actual goal line each element's own crowd-facing
+  // edge should sit -- a real NFL endzone is about this deep, giving
+  // clear green space between the playable endzone and the stands rather
+  // than the stands looming right at the goal line. Each element's PIVOT
+  // is derived from this same target front line using ITS OWN front
+  // offset (not a shared/flat margin) so the straight tile and the
+  // corners land their front edges at the SAME place instead of one
+  // sticking out past the other.
+  const ENDZONE_STAND_SETBACK = 20;
   const farFrontZ = -(lengthYards + ENDZONE_STAND_SETBACK);
   const farBackZ = farFrontZ - STAND_MODEL_FRONT_OFFSET;
+  const farCornerZ = farFrontZ - CORNER_FRONT_OFFSET;
   addStandStraightTile(0, farBackZ, 0);
-  addStandCornerTile(CORNER_X, farBackZ + 0.3, 1, false);
-  addStandCornerTile(-CORNER_X, farBackZ + 0.3, -1, false);
+  addStandCornerTile(CORNER_X, farCornerZ, 1, false);
+  addStandCornerTile(-CORNER_X, farCornerZ, -1, false);
 
   // Near end (the returner's own goal line, +Z) -- a mirror of the far
   // end: the whole assembly turned 180 so it faces back toward the field
@@ -278,16 +295,20 @@ function buildEndzoneStands(lengthYards) {
   // every earlier "looks right" read on this section worthless).
   const nearFrontZ = ENDZONE_STAND_SETBACK;
   const nearBackZ = nearFrontZ + STAND_MODEL_FRONT_OFFSET;
+  const nearCornerZ = nearFrontZ + CORNER_FRONT_OFFSET;
   addStandStraightTile(0, nearBackZ, Math.PI);
-  addStandCornerTile(CORNER_X, nearBackZ - 0.3, -1, true);
-  addStandCornerTile(-CORNER_X, nearBackZ - 0.3, 1, true);
+  addStandCornerTile(CORNER_X, nearCornerZ, -1, true);
+  addStandCornerTile(-CORNER_X, nearCornerZ, 1, true);
 
   // One long straight-tile chain per sideline, running the FULL length
   // between the two ends' corners (Field Goal Kick's own chain only ever
   // needed to close one end) -- same generous-overlap philosophy at both
-  // anchor points, no exact seam-chasing.
-  const farAnchorZ = farBackZ - 4;
-  const nearAnchorZ = nearBackZ + 4;
+  // anchor points, no exact seam-chasing. Anchored off the CORNER's own
+  // (now further-back) pivot, not the straight tile's, since the corner
+  // sits deeper than the straight tile once each is placed off its own
+  // front offset.
+  const farAnchorZ = farCornerZ - 4;
+  const nearAnchorZ = nearCornerZ + 4;
   [1, -1].forEach((mirror) => {
     let edge = new THREE.Vector3(SIDELINE_ANCHOR_X * mirror, 0, farAnchorZ);
     let guard = 0;
@@ -298,6 +319,12 @@ function buildEndzoneStands(lengthYards) {
   });
 }
 
+// Both stand models load asynchronously over the network, well after the
+// idle "about to start" screen's own first render -- the idle screen's
+// idleRenderTick() (see stopLoop()/tick() area) keeps redrawing every
+// frame regardless, so whichever model finishes loading second just
+// naturally shows up on the next frame with no extra handling needed
+// here.
 new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
   standStraightGltf = gltf;
   buildEndzoneStands(fieldYards);
@@ -1863,6 +1890,12 @@ function stopLoop() {
   animationHandle = null;
 }
 
+function idleRenderTick() {
+  if (running) return; // startReturn() has taken over via stopLoop()+tick()
+  renderer.render(scene, camera);
+  animationHandle = requestAnimationFrame(idleRenderTick);
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -2029,8 +2062,30 @@ async function init() {
   buildField(fieldYards);
   resizeRenderer();
   RUNNER_GROUP.position.set(0, 0, 0);
-  snapCamera();
-  renderer.render(scene, camera);
+  // A wider, higher establishing shot for the idle "about to start" screen
+  // rather than reusing snapCamera()'s own tight over-the-shoulder chase
+  // framing -- that framing looks toward -Z from right behind the
+  // returner's start, which puts the entire near-end stand (behind him,
+  // at positive Z) out of frame entirely, so the idle screen showed empty
+  // field/sky with no stadium visible at all. This sits further back and
+  // higher, still on the field side of the near stand, so the stand shows
+  // in frame above/behind the returner while still looking down the
+  // field.
+  camera.position.set(0, 10, 12);
+  camera.lookAt(0, 3, -50);
+  // A persistent per-frame render, not a one-shot renderer.render() call --
+  // the stadium's own GLTF models load asynchronously well after this
+  // point, and a one-shot render can easily fire before either finishes,
+  // permanently freezing the idle screen on a stadium-less frame (nothing
+  // else repaints it until Start Return kicks off the real game loop).
+  // This mirrors tick()'s own rAF chain (same animationHandle/stopLoop(),
+  // so starting a real return cleanly cancels it) but does nothing except
+  // redraw the current (idle) camera/scene every frame until `running`
+  // flips true -- cheap, since nothing here is animating, and it means
+  // the idle screen just naturally shows whatever finished loading by
+  // the next real paint frame instead of needing every future
+  // async-loaded piece of scenery to remember to trigger its own render.
+  idleRenderTick();
 
   if (gi.currentReturn.index === 0) {
     currentReturnConfig = gi.currentReturn;
