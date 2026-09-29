@@ -539,7 +539,18 @@ function loadGltfWithRetry(url, retries = 1) {
   });
 }
 
-Promise.all([
+// Resolves once every character model/clip/animation this file needs is
+// fully loaded AND all the derived state below (defenderTemplate,
+// blockerTemplate, every AnimationAction, etc.) has actually been set --
+// awaited before the FIRST return of a game starts (see the
+// start-return-btn handler) so spawnDefenders()/spawnBlockers() never run
+// while defenderTemplate/blockerTemplate are still null. Before this,
+// "Start Return" appeared as soon as the (much faster) game-instance API
+// call resolved, completely independent of this Promise.all -- a real
+// production report of defenders/blockers rendering as their capsule
+// placeholder fallback for an entire return traced back to exactly this
+// race, a player clicking Start Return before this had actually finished.
+const charactersLoaded = Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/player-kick.glb', resolve, undefined, (err) => console.error('runner model load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/running.glb', resolve, undefined, (err) => console.error('running animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/running-right-turn.glb', resolve, undefined, (err) => console.error('running-right-turn animation load failed', err))),
@@ -2244,6 +2255,14 @@ async function init() {
   // the next real paint frame instead of needing every future
   // async-loaded piece of scenery to remember to trigger its own render.
   idleRenderTick();
+
+  // Don't show (or act on) "Start Return" until the character models are
+  // actually ready -- see charactersLoaded's own comment for the race this
+  // closes. The idle screen keeps rendering (idleRenderTick(), already
+  // running) while this awaits, so there's no dead/frozen moment -- just
+  // a beat before the button appears, instead of a button that can start
+  // a return still missing its defenders/blockers.
+  await charactersLoaded;
 
   if (gi.currentReturn.index === 0) {
     currentReturnConfig = gi.currentReturn;
