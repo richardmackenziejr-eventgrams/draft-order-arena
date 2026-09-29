@@ -197,9 +197,10 @@ const CORNER_SCALE = STAND_HEIGHT / CORNER_BBOX_H;
 // bounds room (see triggerOutOfBounds()) -- the runner can now actually
 // cross the sideline and needs somewhere to visibly run out into before
 // the stands themselves start, not just enough clearance to avoid
-// clipping the field. Bumped from an initial too-tight gap per live
-// feedback.
-const SIDELINE_RUNOFF = 10;
+// clipping the field. Bumped from an initial too-tight gap (0) to 10 per
+// live feedback, then found THAT too far back ("somewhere halfway") --
+// split the difference.
+const SIDELINE_RUNOFF = 5;
 const STAND_WIDTH_DELTA = (FIELD_WIDTH / 2) - 15 + SIDELINE_RUNOFF;
 
 let standStraightGltf = null;
