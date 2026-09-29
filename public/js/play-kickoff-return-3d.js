@@ -1032,7 +1032,7 @@ const HANG_TIME = 4.0; // seconds the ball is airborne
 const CAMERA_PAN_DURATION = 2.8; // seconds -- the camera arrives at the returner well before the ball lands, same idea as a broadcast cutting to the return side early rather than panning for the whole flight
 const BALL_PEAK_HEIGHT = 15; // yards -- how high the flight arc peaks
 const CATCH_HEIGHT = 1.3; // yards -- roughly chest/hands height, where the ball "arrives" for the catch
-const CATCH_ANTICIPATION = 0.6; // seconds before the ball actually arrives that the catch animation starts -- otherwise his hands only start rising AFTER the ball has already "landed" at his position, which read as catching something already in his hands rather than actually catching it
+const CATCH_ANTICIPATION = 1.3; // seconds before the ball actually arrives that the catch animation starts -- otherwise his hands only start rising AFTER the ball has already "landed" at his position, which read as catching something already in his hands rather than actually catching it. Bumped from an initial 0.6s (still read as too late) -- comfortably under the ~2.77s catch clip's own duration, so there's still a real catch-and-secure follow-through after the ball visually arrives.
 
 let kicker = null; // THREE.Group, recreated each return -- see spawnKicker()
 let kickerMixer = null;
@@ -1057,11 +1057,23 @@ function spawnKicker() {
   kickerKickSpotZ = -(fieldYards - 35);
   if (!defenderTemplate || !runnerKickClip) return; // graceful no-op, same fallback philosophy as the capsule placeholders -- just skips the visual kicker rather than showing a broken one; kickOrigin() below still gives the ball a sensible launch point, and tick()'s 'kickoff' branch falls straight through to 'hang' if there's no kickerAction to wait on
   const model = cloneSkinnedScene(defenderTemplate);
-  model.rotation.y = Math.PI;
+  model.rotation.y = Math.PI; // same fixed child-correction every character gets -- what varies is the GROUP's own rotation below
   const group = new THREE.Group();
   group.add(model);
   scene.add(group);
   kicker = group;
+  // The kicker faces the OPPOSITE way from everyone else's "forward = -Z":
+  // he needs to run/kick TOWARD the returner at z=0, i.e. toward +Z (he's
+  // spawned deep at kickerKickSpotZ, a large negative z). Every other
+  // character (runner, defenders, blockers) either IS the -Z-forward
+  // convention or explicitly faces back toward the runner via its own
+  // atan2 computation -- the kicker never got an equivalent correction, so
+  // his root motion carried him further AWAY from the returner instead of
+  // toward him. A group-level Math.PI on top of the model's own fixed
+  // Math.PI cancels out to a net 0 (world-facing +Z), matching the same
+  // atan2(dx,dz)+Math.PI convention used everywhere else in this file
+  // evaluated for a target straight ahead in +Z.
+  group.rotation.y = Math.PI;
 
   kickerMixer = new THREE.AnimationMixer(model);
   kickerAction = kickerMixer.clipAction(runnerKickClip);
@@ -1099,16 +1111,20 @@ function kickOrigin() {
   return p;
 }
 
-// Camera framing for the 'kickoff' phase -- same over-the-shoulder formula
-// as snapCamera(), centered on the kicker instead of the runner. Set once
-// (not per-frame): the kicker's root motion is bone-local (see
-// spawnKicker()'s comment), so the GROUP's own position, and therefore
-// this framing, stays fixed for the whole run-up -- exactly how
-// play-field-goal.js's own kick cam already works.
+// Camera framing for the 'kickoff' phase -- over-the-shoulder, same idea as
+// snapCamera(), centered on the kicker instead of the runner. Mirrored
+// (+/- flipped) from snapCamera()'s own formula because the kicker faces
+// the OPPOSITE way (+Z, toward the returner -- see spawnKicker()'s own
+// comment): "behind him" is the LOWER z (away from the returner), and
+// "ahead of him" (what the camera looks toward) is the HIGHER z (toward
+// the returner). Set once (not per-frame): the kicker's root motion is
+// bone-local (see spawnKicker()'s comment), so the GROUP's own position,
+// and therefore this framing, stays fixed for the whole run-up -- exactly
+// how play-field-goal.js's own kick cam already works.
 function snapCameraToKicker() {
   const z = kicker ? kicker.position.z : kickerKickSpotZ + KICKER_RUNUP_BACK;
-  camera.position.set(0, CHASE_HEIGHT, z + CHASE_BACK + 0.5);
-  camTarget.set(0, LOOK_HEIGHT, z - LOOK_AHEAD);
+  camera.position.set(0, CHASE_HEIGHT, z - CHASE_BACK - 0.5);
+  camTarget.set(0, LOOK_HEIGHT, z + LOOK_AHEAD);
   camera.lookAt(camTarget);
 }
 
