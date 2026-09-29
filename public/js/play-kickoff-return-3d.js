@@ -65,6 +65,14 @@ scene.add(sun);
 
 // ---- Field: forward = -Z, lateral = X, own goal line at z=0 -----------
 const FIELD_WIDTH = 53.3;
+// Real NFL endzone depth -- this game's own gameplay endzone
+// (ENDZONE_RUN_YARDS, in the touchdown-celebration section below) is only
+// 1yd, just enough room for the auto-run-in before stopping, but the
+// VISUAL endzone (the lined, marked area a broadcast would show, and
+// where the goalposts sit) should read as a real one. Shared at module
+// scope so buildField()'s back-of-endzone lines and buildGoalposts()'s
+// placement can never drift out of sync with each other.
+const ENDZONE_DEPTH = 10;
 
 function stripeTexture() {
   const c = document.createElement('canvas');
@@ -131,13 +139,24 @@ function buildField(lengthYards) {
   goalLine.position.set(0, 0.011, -lengthYards);
   scene.add(goalLine);
 
+  // Back-of-endzone lines, ENDZONE_DEPTH (module-level, shared with
+  // buildGoalposts()) behind each goal line.
+  [-(lengthYards + ENDZONE_DEPTH), ENDZONE_DEPTH].forEach((z) => {
+    const backLine = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_WIDTH - 2, 0.3), lineMat);
+    backLine.rotation.x = -Math.PI / 2;
+    backLine.position.set(0, 0.011, z);
+    scene.add(backLine);
+  });
+
   // Sideline boundary lines -- the yard-line stripes above only ever ran
   // ACROSS the field, so the two long edges (what actually makes an
   // out-of-bounds catch/step read as a real sideline instead of just an
   // arbitrary spot on green turf) were bare grass. Same inset from the
-  // true edge as the yard lines/hash marks already use elsewhere.
+  // true edge as the yard lines/hash marks already use elsewhere. Spans
+  // both endzones too (a real sideline runs the full length, goal line to
+  // goal line and both back lines), not just the playable field.
   const SIDELINE_INSET = 1;
-  const sidelineGeo = new THREE.PlaneGeometry(0.3, lengthYards);
+  const sidelineGeo = new THREE.PlaneGeometry(0.3, lengthYards + ENDZONE_DEPTH * 2);
   [-1, 1].forEach((side) => {
     const sideline = new THREE.Mesh(sidelineGeo, lineMat);
     sideline.rotation.x = -Math.PI / 2;
@@ -181,12 +200,12 @@ function buildField(lengthYards) {
 // Same real-world dimensions/geometry as Field Goal Kick's own goalpost
 // (public/js/play-field-goal.js) -- these are absolute units (a real
 // upright's height/width doesn't scale with field width), so reused
-// as-is rather than re-deriving. One at each end, a few yards behind each
-// goal line -- this game's own "endzone" is only ENDZONE_RUN_YARDS (1)
-// deep for gameplay purposes, so GOALPOST_SETBACK is a purely visual
-// stand-in for a real endzone's ~10yd depth, picked to read right without
-// crowding the goal line or reaching the stadium stands (which sit much
-// further back, at ENDZONE_STAND_SETBACK -- see buildEndzoneStands()).
+// as-is rather than re-deriving. One at each end, centered on the field
+// and sitting just behind the back-of-endzone line (ENDZONE_DEPTH,
+// module-level, shared with buildField()) -- matches where a real
+// goalpost actually sits, right on the back line. A small extra margin
+// (GOALPOST_LINE_CLEARANCE) keeps the base pole from visually poking
+// through the line itself.
 let goalpostGroup = null;
 function buildGoalposts(lengthYards) {
   if (goalpostGroup) scene.remove(goalpostGroup);
@@ -196,7 +215,8 @@ function buildGoalposts(lengthYards) {
   const CROSSBAR_Y = 3.05;
   const UPRIGHT_TOP_Y = 8.5;
   const UPRIGHT_HALF_SPAN = 2.82;
-  const GOALPOST_SETBACK = 18;
+  const GOALPOST_LINE_CLEARANCE = 0.5;
+  const GOALPOST_SETBACK = ENDZONE_DEPTH + GOALPOST_LINE_CLEARANCE;
 
   function addGoalpost(z) {
     const post = new THREE.Group();
@@ -374,7 +394,7 @@ function buildEndzoneStands(lengthYards) {
   // offset (not a shared/flat margin) so the straight tile and the
   // corners land their front edges at the SAME place instead of one
   // sticking out past the other.
-  const ENDZONE_STAND_SETBACK = 20;
+  const ENDZONE_STAND_SETBACK = 20 * (2 / 3); // ~13.3yd -- pushed forward (closer to the field) by 1/3 of the previous 20yd distance, per live feedback. Still clear of the goalposts (ENDZONE_DEPTH + GOALPOST_LINE_CLEARANCE ≈ 10.5yd) and the back-of-endzone line (ENDZONE_DEPTH = 10yd) by a comfortable margin.
   const farFrontZ = -(lengthYards + ENDZONE_STAND_SETBACK);
   const farBackZ = farFrontZ - STAND_MODEL_FRONT_OFFSET;
   const farCornerZ = farFrontZ - CORNER_FRONT_OFFSET;
