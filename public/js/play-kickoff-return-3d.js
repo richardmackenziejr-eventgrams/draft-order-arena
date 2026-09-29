@@ -255,6 +255,32 @@ function addStandStraightFromEdge(edge, mirror) {
   return edge.clone().addScaledVector(dir, STAND_MODEL_TILE_LEN);
 }
 
+// The single center tile behind the endzone is only ~27yd wide
+// (STAND_MODEL_TILE_LEN), but the corners now sit much further out than
+// that (CORNER_X, pushed out for sideline out-of-bounds room -- see
+// SIDELINE_RUNOFF -- independent of how wide any one stand tile is) --
+// direct measurement of the corner's own mesh confirmed its inward-facing
+// surface (the part that's supposed to meet the center tile) sits well
+// short of its overall bounding-box front, which is dominated by the tip
+// of its outer, tapering arm instead. A single center tile can no longer
+// reach it at all, at any Z -- this isn't a depth/front-offset problem,
+// it's a WIDTH problem, and no amount of nudging the center tile's Z ever
+// closes an X gap. Chains extra tiles outward from the center at the SAME
+// Z/rotation (same generous-overlap philosophy as the sideline chain)
+// until they clear the corner's own pivot.
+function addBackStandFlankingTiles(z, rotationY, cornerX) {
+  const halfTile = STAND_MODEL_TILE_LEN / 2;
+  [1, -1].forEach((mirror) => {
+    let x = mirror * STAND_MODEL_TILE_LEN;
+    let guard = 0;
+    while (mirror * x - halfTile < cornerX && guard < 10) {
+      addStandStraightTile(x, z, rotationY);
+      x += mirror * STAND_MODEL_TILE_LEN;
+      guard++;
+    }
+  });
+}
+
 function buildEndzoneStands(lengthYards) {
   if (!standStraightGltf || !standCornerGltf) return;
   standGroup.clear();
@@ -283,23 +309,11 @@ function buildEndzoneStands(lengthYards) {
   // corners land their front edges at the SAME place instead of one
   // sticking out past the other.
   const ENDZONE_STAND_SETBACK = 20;
-  // CORNER_FRONT_OFFSET above is measured off the corner's OVERALL
-  // bounding box, which is dominated by the tip of its outer, tapering
-  // arm (the one curving away toward the sideline) -- not by the flat
-  // inner edge that's actually supposed to mate with the center tile.
-  // Matching bounding-box fronts (both at the same Z) therefore left the
-  // center tile reading as visibly RECESSED behind the corners from any
-  // real gameplay camera angle (confirmed against the actual
-  // freezeCelebrationCamera() framing, not just a generic overview shot)
-  // -- exactly what a live "push the center forward, corners should be
-  // flush with it" report caught. Nudging the center tile forward by this
-  // much (found by eye, same as Field Goal Kick's own corner tuning) is
-  // what actually reads flush; the corners' own position is unchanged.
-  const CENTER_FLUSH_NUDGE = 5;
   const farFrontZ = -(lengthYards + ENDZONE_STAND_SETBACK);
-  const farBackZ = farFrontZ - STAND_MODEL_FRONT_OFFSET + CENTER_FLUSH_NUDGE;
+  const farBackZ = farFrontZ - STAND_MODEL_FRONT_OFFSET;
   const farCornerZ = farFrontZ - CORNER_FRONT_OFFSET;
   addStandStraightTile(0, farBackZ, 0);
+  addBackStandFlankingTiles(farBackZ, 0, CORNER_X);
   addStandCornerTile(CORNER_X, farCornerZ, 1, false);
   addStandCornerTile(-CORNER_X, farCornerZ, -1, false);
 
@@ -316,9 +330,10 @@ function buildEndzoneStands(lengthYards) {
   // position was never actually applied at all for a while, which made
   // every earlier "looks right" read on this section worthless).
   const nearFrontZ = ENDZONE_STAND_SETBACK;
-  const nearBackZ = nearFrontZ + STAND_MODEL_FRONT_OFFSET - CENTER_FLUSH_NUDGE;
+  const nearBackZ = nearFrontZ + STAND_MODEL_FRONT_OFFSET;
   const nearCornerZ = nearFrontZ + CORNER_FRONT_OFFSET;
   addStandStraightTile(0, nearBackZ, Math.PI);
+  addBackStandFlankingTiles(nearBackZ, Math.PI, CORNER_X);
   addStandCornerTile(CORNER_X, nearCornerZ, -1, true);
   addStandCornerTile(-CORNER_X, nearCornerZ, 1, true);
 
