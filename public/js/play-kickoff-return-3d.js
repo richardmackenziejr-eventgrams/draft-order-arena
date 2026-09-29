@@ -559,6 +559,16 @@ const SPIN_COOLDOWN = 0.5;
 const SPIN_FORWARD_FACTOR = 0.65; // fraction of run speed kept while spinning (if he was running forward)
 const SPIN_LATERAL_SPEED = 10;    // yards/sec sideways burst, easing out over the spin
 const SPIN_BLEND = 0.12;
+// A defender's lunge (DEFENDER_LUNGE_SPEED_MULT, 1.6x its base 7.5yd/s
+// speed) can close the DEFENDER_TRIGGER_RANGE gap (2.5yd) faster than the
+// spin's own lateral burst can create separation, so pure geometry rarely
+// saves him even with good timing -- per user feedback, the spin was
+// reading as "tackles me every time even if I am spinning." Rather than
+// rebalance lunge speed/tackle radius globally (would also soften every
+// straight-running tackle, not just spins), an active spin gets a flat
+// chance to turn what would be a tackle into a miss -- see the 'lunging'
+// branch of updateDefenders().
+const SPIN_EVADE_CHANCE = 0.5;
 let spin = null; // { dir: -1 left / +1 right, action, elapsed, dur, forward }
 let spinCooldown = 0;
 let spinQueued = false;
@@ -672,8 +682,8 @@ const BLOCKER_LINE_Z = -35; // yards downfield of the returner's own goal line
 const BLOCKER_BASE_SPEED = 8.0; // yd/s -- between the runner's 8.5 and a chasing defender's base 7.5, so a blocker can actually catch a defender that's closing on the runner
 const BLOCK_ENGAGE_DISTANCE = 2.75; // yards -- ballpark of the 2D game's own 3.5, tuned down for this game's already-tighter DEFENDER_TRIGGER_RANGE/TACKLE_RADIUS scale
 const BLOCK_CONTACT_DISTANCE = 0.9; // yards -- how far apart engaged pair stand once snapped together, close enough to read as actually pushing each other rather than each holding wherever they happened to be (up to BLOCK_ENGAGE_DISTANCE apart) when the engage check passed
-const BLOCK_HOLD_MIN = 1.5; // seconds -- how long a block holds a defender, before it resumes chasing. Bumped from 1.0-1.5 to try 1.5-2.0 -- now that the early-release-on-cut bug is fixed (blocks actually run their full duration), the shorter range read as defenders getting free too quickly.
-const BLOCK_HOLD_MAX = 2.0;
+const BLOCK_HOLD_MIN = 1.5; // seconds -- how long a block holds a defender, before it resumes chasing. Bumped from 1.0-1.5 to 1.5-2.0, then widened to 1.5-2.5 to spread out when different blocks release relative to each other (a narrower range meant most of them let go in a tight cluster).
+const BLOCK_HOLD_MAX = 2.5;
 const BLOCKER_MAX_CHASE_DIST = 14; // yards -- beyond this a blocker ignores a defender and escorts instead of committing to a long chase
 const BLOCKER_ESCORT_LEAD = 4; // yards ahead of the runner a non-engaged blocker tries to hold
 // A released defender and the blocker that just held it are both still
@@ -1004,8 +1014,15 @@ function updateDefenders(dt) {
       // he's no longer where the lunge was aimed.
       const hitDist = Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z);
       if (hitDist <= DEFENDER_TACKLE_RADIUS) {
-        d.state = 'done';
-        triggerTackle(d);
+        // An active spin gets a flat SPIN_EVADE_CHANCE roll to turn this
+        // into a miss instead -- see that constant's own comment for why.
+        if (spin && Math.random() < SPIN_EVADE_CHANCE) {
+          d.state = 'recovering';
+          d.recoverElapsed = 0;
+        } else {
+          d.state = 'done';
+          triggerTackle(d);
+        }
       } else if (d.lungeElapsed >= DEFENDER_LUNGE_DURATION) {
         d.state = 'recovering';
         d.recoverElapsed = 0;
