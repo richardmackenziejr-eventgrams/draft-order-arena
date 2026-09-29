@@ -370,6 +370,7 @@ let stopAction = null;
 let turn180Action = null;
 let fallingDownAction = null; // tackled from the front or side
 let fallFlatAction = null; // tackled from behind
+let outOfBoundsAction = null; // played (standing, not falling) when he steps out of bounds -- see triggerOutOfBounds(). Same raw clip as blockerSadIdleClip, just bound to the runner's own mixer instead of a blocker's.
 const FALL_TIME_SCALE = 3.5; // the raw Mixamo clips (~2.3-2.5s) read as slow for a tackle -- played faster, same idea as SPIN_TIME_SCALE/JUMPCUT_TIME_SCALE
 let activeAction = null;
 let hipsBone = null;
@@ -529,6 +530,15 @@ Promise.all([
   blockerSadIdleClip = sadIdleGltf.animations[0];
   runnerKickClip = runnerGltf.animations[0]; // player-kick.glb's own baked run-up+kick clip -- applied to a defender-model kicker in spawnKicker()
 
+  // Same raw sad-idle clip the blockers react with on a tackle, bound to
+  // the RUNNER's own mixer this time -- reused for stepping out of
+  // bounds (see triggerOutOfBounds()), a discouraged "head down, hands
+  // on hips" standing reaction rather than the fall clips a real tackle
+  // uses.
+  outOfBoundsAction = mixer.clipAction(blockerSadIdleClip);
+  outOfBoundsAction.setLoop(THREE.LoopRepeat);
+  ONE_SHOT_ACTIONS.add(outOfBoundsAction); // starts fresh at frame 0 when activated, same as every other reaction clip here
+
   // `paused` only stops an action's own time from advancing -- it does NOT
   // stop the action from being evaluated by the mixer, so a "paused" clip
   // still blends its frozen pose into the skeleton alongside whichever
@@ -536,7 +546,7 @@ Promise.all([
   // action from the blend. Without this, the turn/stop clips' poses were
   // silently bleeding into the straight run the whole time, which is what
   // was actually behind the persistent "running at an angle" report.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, ...danceActions.map((d) => d.action)];
   allActions.forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
   runAction.enabled = true;
   activeAction = runAction;
@@ -738,6 +748,7 @@ let wasMoving = false; // tracks the previous frame's movement state, to catch t
 // result panel). Player input is ignored once phase leaves 'play'.
 const ENDZONE_RUN_YARDS = 1;
 let phase = 'play';
+let downReason = 'tackled'; // 'tackled' or 'out of bounds' -- both end the play via the same 'tackled' phase, this just tracks which for the result-panel wording (see finalizeCelebration())
 let phaseElapsed = 0;
 let turnStartYaw = 0;
 
@@ -1426,6 +1437,7 @@ const TACKLE_ANGLE_FRONT_SIDE_MAX = Math.PI / 2;
 function triggerTackle(defender) {
   if (phase !== 'play') return; // already resolved (e.g. reached the goal line the same frame) -- don't double-fire
   phase = 'tackled';
+  downReason = 'tackled';
   phaseElapsed = 0;
   spin = null;
   jumpCut = null;
@@ -1499,6 +1511,34 @@ function triggerTackle(defender) {
   });
 }
 
+// Stepping past the sideline ends the play immediately, same as a tackle
+// (down over, yardage locked in, not a touchdown) -- but nobody actually
+// hit him, so none of triggerTackle()'s fall/push/flex/victory choreography
+// applies. He just pulls up and stands there with a discouraged look
+// (outOfBoundsAction, the same sad-idle clip the blockers already react
+// with) instead of playing a tackle-fall clip he wasn't tackled into.
+// Reuses the exact 'tackled' phase/result-panel flow since mechanically
+// it's the same "down ends here, not a touchdown" outcome -- only the
+// animation and overlay text differ.
+function triggerOutOfBounds() {
+  if (phase !== 'play') return;
+  phase = 'tackled';
+  downReason = 'out of bounds';
+  phaseElapsed = 0;
+  spin = null;
+  jumpCut = null;
+
+  setActiveAction(outOfBoundsAction || stopAction);
+  if (activeAction) activeAction.paused = false;
+  document.getElementById('kr3d-overlay-text').textContent = 'OUT OF BOUNDS';
+
+  // Same "nobody earned a celebration here" treatment the touchdown path
+  // already gives defenders/blockers -- freeze each mixer right where it
+  // is rather than playing a tackle reaction nobody actually made.
+  defenders.forEach((d) => { if (d.mixer) d.mixer.timeScale = 0; });
+  blockers.forEach((b) => { if (b.mixer) b.mixer.timeScale = 0; });
+}
+
 function tick(now) {
   // Clamped on BOTH ends: the upper bound guards against a huge dt after a
   // stall/tab-switch, the lower bound (added after a real production bug)
@@ -1533,7 +1573,16 @@ function tick(now) {
       if (heldKeys.has('ArrowRight')) lateral += 1;
       movingForward = heldKeys.has('ArrowUp');
       movingBackward = !movingForward && heldKeys.has('ArrowDown');
-      const lateralLimit = FIELD_WIDTH / 2 - 1.5;
+      // Used to clamp WELL inside the sideline (FIELD_WIDTH/2 - 1.5),
+      // which meant he could never actually reach it, let alone cross it
+      // -- there was no such thing as out of bounds. Now just a generous
+      // backstop past the real sideline (FIELD_WIDTH/2): the OOB check
+      // below (see triggerOutOfBounds()) ends the play the instant he
+      // actually crosses the line, so this rarely even gets used -- it
+      // only guards the couple of frames between crossing the line and
+      // that check running, keeping him from sailing arbitrarily far into
+      // the ground apron before the down ends.
+      const lateralLimit = FIELD_WIDTH / 2 + 6;
 
       // Pure backward (no forward, no lateral) triggers a quick spin to
       // face his own goal line, then runs "forward" in that direction --
@@ -1707,6 +1756,10 @@ function tick(now) {
         // Same fix, same reason, for blockers.
         blockers.forEach((b) => { if (b.mixer) b.mixer.timeScale = 0; });
       }
+
+      if (phase === 'play' && Math.abs(RUNNER_GROUP.position.x) > FIELD_WIDTH / 2) {
+        triggerOutOfBounds();
+      }
     } else if (phase === 'endzone') {
       RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
       if (RUNNER_GROUP.position.z <= -(fieldYards + ENDZONE_RUN_YARDS)) {
@@ -1740,7 +1793,7 @@ function tick(now) {
       // the server already re-clamps on submit).
       if (phaseElapsed >= TACKLE_RESULT_DELAY) {
         const yardsGained = THREE.MathUtils.clamp(-RUNNER_GROUP.position.z, 0, fieldYards);
-        finalizeCelebration(yardsGained, false);
+        finalizeCelebration(yardsGained, false, downReason);
       }
     } else if (phase === 'kickoff') {
       // Camera/kicker positioning already set once in startReturn() (see
@@ -1921,7 +1974,7 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, ...danceActions.map((d) => d.action)];
   finishBlend();
   spin = null;
   spinCooldown = 0;
@@ -1932,6 +1985,7 @@ async function startReturn(returnConfig) {
   allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; a.weight = 1; } });
   if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   phase = 'kickoff';
+  downReason = 'tackled';
   phaseElapsed = 0;
   // The kickoff/hang/catch sequence owns the camera (see snapCameraToKicker()
   // and the 'hang' phase's own pan) -- same escape hatch the touchdown
@@ -1986,7 +2040,7 @@ function startDancePhase() {
 // 'tackled' phase branch above calls this too, with wherever he actually
 // got to and touchdown: false. Both paths share the same submit/result-panel
 // plumbing; only the reported outcome and the result text differ.
-async function finalizeCelebration(yardsGained, touchdown) {
+async function finalizeCelebration(yardsGained, touchdown, downReasonLabel = 'tackled') {
   // Deliberately does NOT stopLoop()/set running=false -- if a dance is
   // playing it keeps looping behind the result panel; the loop only
   // actually stops when startReturn() resets things for the next attempt.
@@ -1998,9 +2052,10 @@ async function finalizeCelebration(yardsGained, touchdown) {
   try {
     const { outcome } = await api('POST', `/api/game-instances/${instanceId}/kickoff-return/submit`, { memberId, yardsGained, touchdown });
     const resultEl = document.getElementById('kr-result');
+    const nonTouchdownLabel = downReasonLabel === 'out of bounds' ? 'Out of bounds after' : 'Tackled after';
     resultEl.textContent = outcome.touchdown
       ? `Touchdown! ${outcome.yardsGained} yards — +${outcome.points.toFixed(1)} points`
-      : `Tackled after ${outcome.yardsGained} yards — +${outcome.points.toFixed(1)} points`;
+      : `${nonTouchdownLabel} ${outcome.yardsGained} yards — +${outcome.points.toFixed(1)} points`;
     resultEl.style.color = outcome.touchdown ? '#4ade80' : '#f87171';
     document.getElementById('next-return-btn').style.display = 'inline-block';
   } catch (err) {
