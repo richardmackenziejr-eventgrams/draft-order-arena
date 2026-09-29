@@ -303,18 +303,25 @@ const STAND_WIDTH_DELTA = (FIELD_WIDTH / 2) - 15 + SIDELINE_RUNOFF;
 // Real stadium stands sit on a raised concrete base, not flush with the
 // field -- the source model itself is built to sit AT ground level
 // (y=0), so simply lifting it left a visible gap of green field showing
-// underneath, floating. RISER_MAT/addRiser() fill that gap with a plain,
-// unadorned concrete-colored box (same color Field Goal Kick's own
-// concreteMat uses) under every tile -- doesn't need to match each
+// underneath, floating. RISER_MAT/addRiser() fill that gap with a plain
+// box under every tile, color-matched to the model's own support
+// structure (sampled directly from the rendered pixels, not guessed --
+// its concrete/steel understructure reads as a light neutral gray,
+// nowhere near as dark as this started at). Doesn't need to match each
 // tile's exact footprint (an irregular corner's silhouette isn't a
-// rectangle anyway), just wide/deep enough that the visible gap is fully
-// covered; a riser reading slightly WIDER than the seating above is if
-// anything more realistic, not less.
+// rectangle anyway), just wide/deep enough that the gap is fully
+// covered -- but DOES need `rotationY` applied, same as the tile it sits
+// under: a first version left this off entirely, so every rotated
+// SIDELINE tile's riser kept its un-rotated width/depth axes, physically
+// swapping which direction was "long" and which was "short" -- the
+// riser's long axis ended up running laterally, straight out into the
+// playable field, instead of along the sideline underneath its own tile.
 const STAND_ELEVATION = 2;
-const RISER_MAT = new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.95 });
-function addRiser(x, z, width, depth) {
+const RISER_MAT = new THREE.MeshStandardMaterial({ color: 0x8c8c8a, roughness: 0.95 });
+function addRiser(x, z, width, depth, rotationY = 0) {
   const riser = new THREE.Mesh(new THREE.BoxGeometry(width, STAND_ELEVATION, depth), RISER_MAT);
   riser.position.set(x, STAND_ELEVATION / 2, z);
+  riser.rotation.y = rotationY;
   riser.receiveShadow = true;
   standGroup.add(riser);
 }
@@ -330,7 +337,7 @@ function addStandStraightTile(x, z, rotationY) {
   tile.rotation.y = rotationY;
   tile.position.set(x, STAND_ELEVATION, z);
   standGroup.add(tile);
-  addRiser(x, z, STAND_MODEL_TILE_LEN, STAND_MODEL_BBOX.d * STAND_MODEL_SCALE);
+  addRiser(x, z, STAND_MODEL_TILE_LEN, STAND_MODEL_BBOX.d * STAND_MODEL_SCALE, rotationY);
 }
 
 // `flip` is for the near (returner's own) end's corners, which need the
