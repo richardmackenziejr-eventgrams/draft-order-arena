@@ -1,16 +1,24 @@
-// Kickoff Return — 3D version. Defenders (see the "Defenders" section
-// below) chase, commit to a lunge, and tackle -- the tackler plays a Push
-// clip then a Flex celebration, everyone else plays Victory. Blockers (see
-// the "Blockers" section) engage a chasing/lunging defender and hold it in
-// place for a few seconds before it resumes the chase. See
-// play-kickoff-return.js, the real 2D game, which stays live and untouched
-// independently of this one — the two are permanent, separate games (free
-// "Retro Kick Return" vs. this paid 3D tier), not a replacement in progress.
+// Kickoff Return — 3D version. Each return opens with a real kickoff
+// sequence (see "Kickoff sequence" section): a kicker boots it from his own
+// 35 while the kicking-team defenders (10, on the receiving team's 40) and
+// return-team blockers (9, on their own 35) hold formation, the camera
+// follows the ball to the returner, and only once he catches it does the
+// player-controlled return begin. Defenders (see "Defenders") chase, commit
+// to a lunge, and tackle -- the tackler plays a Push clip then a Flex
+// celebration, everyone else plays Victory. Blockers (see "Blockers")
+// engage a chasing/lunging defender and hold it in place for a few seconds
+// before it resumes the chase. See play-kickoff-return.js, the real 2D
+// game, which stays live and untouched independently of this one for now
+// -- the two were originally meant as permanent separate games (free
+// "Retro Kick Return" vs. this paid 3D tier), but the user has since
+// decided to eliminate the free tier and have this 3D game replace Retro
+// once it's ready to swap in. That swap hasn't happened yet.
 //
 // Wired into the REAL server/game engine (same instance/member/API calls
 // as the 2D version) so the difficulty ladder and scoring were already
 // live and correct before defenders did anything with them --
-// defenderCount/defenderSpeed below come straight off that ladder.
+// defenderSpeed below comes straight off that ladder (defenderCount no
+// longer does -- see DEFENDER_FORMATION_COUNT).
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinnedScene } from 'three/addons/utils/SkeletonUtils.js';
@@ -167,6 +175,9 @@ let hipsBindPos = null;
 let hipsBindQuat = null;
 let spineBone = null;
 let spineBindQuat = null;
+let rightForeArmBone = null; // the football is parented to this bone once caught -- see the Kickoff sequence section
+let runnerKickClip = null; // player-kick.glb's own baked "run-up + kick" clip, already loaded for the runner's mesh but never read until the kickoff sequence needed it -- reused on a defender-model kicker
+let catchAction = null; // played once, on the runner's own mixer, the instant the kicked ball arrives
 let defenderTemplate = null; // the loaded (or null: not ready yet) defender scene -- each defender is its own SkeletonUtils.clone() of this
 let defenderRunClip = null; // same AnimationClip object the runner uses, shared across every defender's own AnimationMixer
 let defenderPushClip = null; // played by the tackler first, at the moment of impact, before the flex celebration -- see triggerTackle()
@@ -250,7 +261,8 @@ Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/push.glb', resolve, undefined, (err) => console.error('push animation load failed', err))),
   loadGltfWithRetry('/models/blocker.glb'),
   new Promise((resolve) => new GLTFLoader().load('/models/sad-idle.glb', resolve, undefined, (err) => console.error('sad-idle animation load failed', err))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf, sadIdleGltf]) => {
+  new Promise((resolve) => new GLTFLoader().load('/models/catch.glb', resolve, undefined, (err) => console.error('catch animation load failed', err))),
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf, sadIdleGltf, catchGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -259,6 +271,7 @@ Promise.all([
   model.traverse((o) => {
     if (o.isBone && o.name === 'mixamorigHips') hipsBone = o;
     if (o.isBone && o.name === 'mixamorigSpine') spineBone = o;
+    if (o.isBone && o.name === 'mixamorigRightForeArm') rightForeArmBone = o;
   });
   hipsBindPos = hipsBone ? hipsBone.position.clone() : null;
   hipsBindQuat = hipsBone ? hipsBone.quaternion.clone() : null;
@@ -279,6 +292,9 @@ Promise.all([
   fallingDownAction = mixer.clipAction(fallingDownGltf.animations[0]);
   fallFlatAction = mixer.clipAction(fallFlatGltf.animations[0]);
   [fallingDownAction, fallFlatAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(FALL_TIME_SCALE); });
+  catchAction = mixer.clipAction(catchGltf.animations[0]);
+  catchAction.setLoop(THREE.LoopOnce);
+  catchAction.clampWhenFinished = true;
   spinLeftAction = mixer.clipAction(clipFromJson(spinLeftJson));
   spinRightAction = mixer.clipAction(clipFromJson(spinRightJson));
   [spinLeftAction, spinRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(SPIN_TIME_SCALE); });
@@ -288,7 +304,7 @@ Promise.all([
   jumpCutLeftAction = mixer.clipAction(clipFromJson(jumpCutLeftJson));
   jumpCutRightAction = mixer.clipAction(clipFromJson(jumpCutRightJson));
   [jumpCutLeftAction, jumpCutRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(JUMPCUT_TIME_SCALE); });
-  ONE_SHOT_ACTIONS.add(stopAction).add(turn180Action).add(spinLeftAction).add(spinRightAction).add(jumpCutLeftAction).add(jumpCutRightAction).add(fallingDownAction).add(fallFlatAction);
+  ONE_SHOT_ACTIONS.add(stopAction).add(turn180Action).add(spinLeftAction).add(spinRightAction).add(jumpCutLeftAction).add(jumpCutRightAction).add(fallingDownAction).add(fallFlatAction).add(catchAction);
 
   danceActions = danceGltfs
     .map((gltf, i) => (gltf ? { name: DANCE_MODEL_PATHS[i], action: mixer.clipAction(gltf.animations[0]) } : null))
@@ -309,6 +325,7 @@ Promise.all([
     blockerTemplate.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   }
   blockerSadIdleClip = sadIdleGltf.animations[0];
+  runnerKickClip = runnerGltf.animations[0]; // player-kick.glb's own baked run-up+kick clip -- applied to a defender-model kicker in spawnKicker()
 
   // `paused` only stops an action's own time from advancing -- it does NOT
   // stop the action from being evaluated by the mixer, so a "paused" clip
@@ -317,7 +334,7 @@ Promise.all([
   // action from the blend. Without this, the turn/stop clips' poses were
   // silently bleeding into the straight run the whole time, which is what
   // was actually behind the persistent "running at an angle" report.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, ...danceActions.map((d) => d.action)];
   allActions.forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
   runAction.enabled = true;
   activeAction = runAction;
@@ -601,6 +618,15 @@ function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
 }
 
+// Evenly spaces `count` players across a line, index 0 at -halfSpan and
+// index count-1 at +halfSpan -- shared by the defender/blocker pre-snap
+// formations (real Dynamic Kickoff lines, not the old random-jitter spawn).
+const FORMATION_MARGIN = 2; // yards kept clear of each sideline, same margin already used for the runner's own lateral clamp elsewhere
+function evenLineX(index, count, halfSpan) {
+  if (count <= 1) return 0;
+  return -halfSpan + (index * (2 * halfSpan)) / (count - 1);
+}
+
 // ---- Defenders --------------------------------------------------------
 // Designed fresh for this 3D game rather than porting the 2D game's
 // telegraphed wind-up/lunge/blocker system verbatim (that one's built
@@ -628,6 +654,8 @@ const DEFENDER_LUNGE_DURATION = 0.3; // seconds -- the commit window
 const DEFENDER_TACKLE_RADIUS = 1.1; // yards -- matches the 2D game's own tackle radius
 const DEFENDER_RECOVER_DURATION = 0.5; // seconds -- pause after a missed lunge before resuming the chase
 const TACKLE_RESULT_DELAY = 0.8; // seconds -- brief beat on "TACKLED" before the result panel shows, same pacing idea as the touchdown celebration
+const DEFENDER_FORMATION_COUNT = 10; // real Dynamic Kickoff formation -- kicking team lines up on the receiving team's 40, evenly spaced, not the old testing-override random count
+const DEFENDER_LINE_Z = -40; // yards downfield of the returner's own goal line
 
 let defenders = [];
 
@@ -639,7 +667,8 @@ let defenders = [];
 // escalation, no wave-based lateral-slot spawn formation). A blocker with
 // no eligible defender nearby just escorts: holds a fixed lead distance
 // ahead of the runner, drifting laterally toward his position.
-const BLOCKER_COUNT = 3; // fixed -- not tied to the difficulty ladder, confirmed no server-side hook exists or is wanted for this
+const BLOCKER_COUNT = 9; // real Dynamic Kickoff formation -- the return team's blockers line up on their own 35, evenly spaced, not tied to the difficulty ladder
+const BLOCKER_LINE_Z = -35; // yards downfield of the returner's own goal line
 const BLOCKER_BASE_SPEED = 8.0; // yd/s -- between the runner's 8.5 and a chasing defender's base 7.5, so a blocker can actually catch a defender that's closing on the runner
 const BLOCK_ENGAGE_DISTANCE = 2.75; // yards -- ballpark of the 2D game's own 3.5, tuned down for this game's already-tighter DEFENDER_TRIGGER_RANGE/TACKLE_RADIUS scale
 const BLOCK_CONTACT_DISTANCE = 0.9; // yards -- how far apart engaged pair stand once snapped together, close enough to read as actually pushing each other rather than each holding wherever they happened to be (up to BLOCK_ENGAGE_DISTANCE apart) when the engage check passed
@@ -678,6 +707,7 @@ function spawnBlockers(count) {
       model.rotation.y = Math.PI; // same base-facing correction as the runner/defender models
       mixer = new THREE.AnimationMixer(model);
       mixer.clipAction(defenderRunClip).play(); // same shared running clip -- same Mixamo rig convention throughout
+      mixer.timeScale = 0; // held on frame 0 until the catch -- see the matching defender comment above
       model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') hipsBoneB = o; });
       hipsBindPosB = hipsBoneB ? hipsBoneB.position.clone() : null;
     } else {
@@ -691,10 +721,13 @@ function spawnBlockers(count) {
     group.add(model);
     scene.add(group);
 
-    // Small escort formation spread laterally ahead of the runner's start
-    // position -- not a full wave/lateral-slot system like the 2D game's.
-    const escortOffsetX = (i - (count - 1) / 2) * 4;
-    group.position.set(RUNNER_GROUP.position.x + escortOffsetX, 0, RUNNER_GROUP.position.z - BLOCKER_ESCORT_LEAD);
+    // Real Dynamic Kickoff formation: the return team's blockers line up
+    // on their own 35, evenly spaced. `escortOffsetX` is kept as each
+    // blocker's own lateral "lane" -- once play begins and a blocker has no
+    // eligible defender to engage, it escorts by holding this same lane
+    // relative to the runner's current position (see updateBlockers()).
+    const escortOffsetX = evenLineX(i, count, FIELD_WIDTH / 2 - FORMATION_MARGIN);
+    group.position.set(RUNNER_GROUP.position.x + escortOffsetX, 0, BLOCKER_LINE_Z);
 
     blockers.push({
       group, mixer, hipsBone: hipsBoneB, hipsBindPos: hipsBindPosB,
@@ -854,6 +887,7 @@ function spawnDefenders(count, speedMultiplier) {
       model.rotation.y = Math.PI; // same base-facing correction as the runner's own model
       mixer = new THREE.AnimationMixer(model);
       mixer.clipAction(defenderRunClip).play();
+      mixer.timeScale = 0; // held on frame 0 until the returner catches the ball -- see the 'catch' -> 'play' transition in tick(), which sets this back to 1. Without this every defender would loop the run cycle in place for the whole pre-snap kickoff/hang/catch sequence, the same "running in place" bug already fixed twice for the post-play freeze.
       // Same real baked root motion as the runner's own running clip (it's
       // the exact same clip -- see stripRootMotion()'s comment for why):
       // without resetting the hips bone every frame, each loop snaps the
@@ -874,11 +908,11 @@ function spawnDefenders(count, speedMultiplier) {
     group.add(model);
     scene.add(group);
 
-    // Staggered down the field ahead of the runner (not one flat line) with
-    // lateral jitter, clamped so nobody spawns past the goal line on a
-    // short test field.
-    const spawnZ = Math.max(-(fieldYards - 5), -(8 + i * 9 + Math.random() * 6));
-    const spawnX = THREE.MathUtils.clamp((Math.random() * 2 - 1) * (FIELD_WIDTH / 2 - 4), -(FIELD_WIDTH / 2 - 2), FIELD_WIDTH / 2 - 2);
+    // Real Dynamic Kickoff formation: the kicking team lines up on the
+    // receiving team's 40, evenly spaced across the field -- not staggered
+    // downfield with random jitter like the old testing spawn.
+    const spawnZ = DEFENDER_LINE_Z;
+    const spawnX = evenLineX(i, count, FIELD_WIDTH / 2 - FORMATION_MARGIN);
     group.position.set(spawnX, 0, spawnZ);
     // Face the runner immediately -- otherwise a freshly-spawned defender
     // defaults to rotation.y=0, which (combined with the model's own base
@@ -982,6 +1016,101 @@ function updateDefenderAnimations(dt) {
     if (d.hipsBone && d.hipsBindPos) d.hipsBone.position.copy(d.hipsBindPos);
   }
 }
+
+// ---- Kickoff sequence (kicker, ball flight, camera pan) -------------------
+// Real Dynamic Kickoff: a kicker boots it from his own 35 while everyone
+// else holds formation, the camera follows the ball toward the returner,
+// and only once he catches it does the player-controlled return begin. New
+// phases inserted before the existing 'play': 'kickoff' (run-up + kick,
+// camera on the kicker) -> 'hang' (ball flight, camera pans then holds on
+// the returner) -> 'catch' (catch animation, ball reparents to his hand) ->
+// 'play' (unchanged from here on). See the phase branches in tick().
+const KICKOFF_CONTACT_TIME = 0.55; // seconds into the kick clip where the foot meets the ball -- same clip play-field-goal.js's own kicker uses, same empirically-found mark (see calibrateKickAnimation() there)
+const KICKER_RUNUP_BACK = 3.5; // yards behind the true kick spot the kicker starts -- lets the clip's own baked run-up travel carry him roughly onto the mark by contact. Tuned by eye, not calibrated like the field-goal kicker's variable-distance system: kickoff is always the one fixed distance, nothing to plan ahead for.
+const HANG_TIME = 4.0; // seconds the ball is airborne
+const CAMERA_PAN_DURATION = 1.6; // seconds -- the camera arrives at the returner well before the ball lands, same idea as a broadcast cutting to the return side early rather than panning for the whole flight
+const BALL_PEAK_HEIGHT = 15; // yards -- how high the flight arc peaks
+const CATCH_HEIGHT = 1.3; // yards -- roughly chest/hands height, where the ball "arrives" for the catch
+
+let kicker = null; // THREE.Group, recreated each return -- see spawnKicker()
+let kickerMixer = null;
+let kickerHipsBone = null;
+let kickerKickSpotZ = 0; // his own 35 -- kept even if the kicker itself failed to load, so the ball still has a sensible launch point (see kickOrigin())
+
+function clearKicker() {
+  if (kicker) scene.remove(kicker);
+  kicker = null;
+  kickerMixer = null;
+  kickerHipsBone = null;
+}
+
+// Reuses defenderTemplate (a defender-model kicker, per the user's own
+// call) and player-kick.glb's baked run-up+kick clip (loaded for the
+// runner's own mesh but its .animations were never read until now) --
+// no new asset needed for either.
+function spawnKicker() {
+  clearKicker();
+  kickerKickSpotZ = -(fieldYards - 35);
+  if (!defenderTemplate || !runnerKickClip) return; // graceful no-op, same fallback philosophy as the capsule placeholders -- just skips the visual kicker rather than showing a broken one; kickOrigin() below still gives the ball a sensible launch point
+  const model = cloneSkinnedScene(defenderTemplate);
+  model.rotation.y = Math.PI;
+  const group = new THREE.Group();
+  group.add(model);
+  scene.add(group);
+  kicker = group;
+
+  kickerMixer = new THREE.AnimationMixer(model);
+  const action = kickerMixer.clipAction(runnerKickClip);
+  action.setLoop(THREE.LoopOnce);
+  action.clampWhenFinished = true;
+  action.play();
+  // Root motion is NOT stripped here, unlike defenders'/blockers' run
+  // cycle -- this clip's whole point is the run-up travel, same reasoning
+  // as why the runner's own tackle-fall clips skip stripRootMotion().
+
+  model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') kickerHipsBone = o; });
+  group.position.set(0, 0, kickerKickSpotZ + KICKER_RUNUP_BACK);
+}
+
+// Unconditional per-frame mixer update, same pattern as
+// updateDefenderAnimations()/updateBlockerAnimations() -- his
+// follow-through keeps settling even after the camera pans away to the
+// returner.
+function updateKickerAnimation(dt) {
+  if (kickerMixer) kickerMixer.update(dt);
+}
+
+// World position of the kicker's hips at this instant -- close enough to
+// "the ball" for this game's fidelity, and simpler (and more accurate for
+// this use) than pre-calibrating a run-up distance table the way
+// play-field-goal.js's kicker does: that game needs to plan a run-up for a
+// VARIABLE kick distance ahead of time, but a kickoff is always the one
+// fixed distance, so there's nothing to plan for -- just read where he
+// actually is the moment contact happens.
+function kickOrigin() {
+  const p = new THREE.Vector3();
+  if (kickerHipsBone) kickerHipsBone.getWorldPosition(p);
+  else p.set(0, CATCH_HEIGHT, kickerKickSpotZ); // fallback if the kicker itself failed to load
+  return p;
+}
+
+// Camera framing for the 'kickoff' phase -- same over-the-shoulder formula
+// as snapCamera(), centered on the kicker instead of the runner. Set once
+// (not per-frame): the kicker's root motion is bone-local (see
+// spawnKicker()'s comment), so the GROUP's own position, and therefore
+// this framing, stays fixed for the whole run-up -- exactly how
+// play-field-goal.js's own kick cam already works.
+function snapCameraToKicker() {
+  const z = kicker ? kicker.position.z : kickerKickSpotZ + KICKER_RUNUP_BACK;
+  camera.position.set(0, CHASE_HEIGHT, z + CHASE_BACK + 0.5);
+  camTarget.set(0, LOOK_HEIGHT, z - LOOK_AHEAD);
+  camera.lookAt(camTarget);
+}
+
+let ball = null; // THREE.Mesh, scene-level during 'hang' -- reparented onto the runner's own forearm bone at the catch (see the 'hang' phase branch in tick())
+let ballStart = new THREE.Vector3();
+let ballEnd = new THREE.Vector3();
+let cameraPan = null; // { fromPos, fromTarget, toPos, toTarget } -- captured once at the 'kickoff' -> 'hang' transition, consumed by the 'hang' branch's per-frame lerp
 
 // Which way he goes down depends on where the hit came from, relative to
 // which way he's actually facing/running (RUNNER_GROUP's own local -Z,
@@ -1294,6 +1423,82 @@ function tick(now) {
         const yardsGained = THREE.MathUtils.clamp(-RUNNER_GROUP.position.z, 0, fieldYards);
         finalizeCelebration(yardsGained, false);
       }
+    } else if (phase === 'kickoff') {
+      // Camera/kicker positioning already set once in startReturn() (see
+      // snapCameraToKicker()) -- his root motion is bone-local, so nothing
+      // here needs to track a moving group position. Just wait for contact.
+      if (phaseElapsed >= KICKOFF_CONTACT_TIME) {
+        ballStart.copy(kickOrigin());
+        ballEnd.set(RUNNER_GROUP.position.x, CATCH_HEIGHT, RUNNER_GROUP.position.z);
+        ball = new THREE.Mesh(
+          new THREE.SphereGeometry(0.11, 16, 12),
+          new THREE.MeshStandardMaterial({ color: 0x8a4b26, roughness: 0.5 })
+        );
+        ball.scale.set(1, 1, 1.5);
+        ball.castShadow = true;
+        ball.position.copy(ballStart);
+        scene.add(ball);
+
+        // Capture the camera's current (kicker) framing as the pan's
+        // start, and the runner's normal snapCamera()-equivalent framing
+        // (at his still-(0,0,0) position) as its end.
+        cameraPan = {
+          fromPos: camera.position.clone(),
+          fromTarget: camTarget.clone(),
+          toPos: new THREE.Vector3(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK),
+          toTarget: new THREE.Vector3(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD),
+        };
+        phase = 'hang';
+        phaseElapsed = 0;
+      }
+    } else if (phase === 'hang') {
+      const t = Math.min(1, phaseElapsed / HANG_TIME);
+      ball.position.lerpVectors(ballStart, ballEnd, t);
+      ball.position.y += BALL_PEAK_HEIGHT * 4 * t * (1 - t);
+
+      // Pan finishes well inside the hang time (see CAMERA_PAN_DURATION's
+      // own comment) -- once panT reaches 1 this just keeps re-copying the
+      // same end framing every frame, which is harmless.
+      const panT = easeOutCubic(Math.min(1, phaseElapsed / CAMERA_PAN_DURATION));
+      camera.position.lerpVectors(cameraPan.fromPos, cameraPan.toPos, panT);
+      camTarget.lerpVectors(cameraPan.fromTarget, cameraPan.toTarget, panT);
+      camera.lookAt(camTarget);
+
+      if (phaseElapsed >= HANG_TIME) {
+        // Caught -- the ball leaves the scene and becomes a child of the
+        // runner's own forearm bone instead: a bone-parented mesh rigidly
+        // follows that bone's animated transform with zero extra per-frame
+        // code, so it swings naturally with the arm once he starts running.
+        scene.remove(ball);
+        if (rightForeArmBone) {
+          rightForeArmBone.add(ball);
+          ball.position.set(0.05, -0.15, 0.1);
+          ball.rotation.set(0, 0, Math.PI / 2);
+        }
+        if (catchAction) {
+          setActiveAction(catchAction);
+          activeAction.paused = false;
+        }
+        phase = 'catch';
+        phaseElapsed = 0;
+      }
+    } else if (phase === 'catch') {
+      // Holds for the clip's own natural duration, then hands off to
+      // 'play' -- unfreezing every defender/blocker mixer (see
+      // spawnDefenders()/spawnBlockers()'s own timeScale=0 comment) and
+      // the camera (celebrationCamFrozen, the same flag the touchdown
+      // celebration uses to keep the unconditional runner-follow block at
+      // the bottom of this function from fighting a deliberately-set
+      // camera). No explicit action-swap needed here -- 'play''s own
+      // isMoving/wasMoving logic already leaves activeAction on the caught
+      // pose until the player's first input.
+      if (!catchAction || phaseElapsed >= catchAction.getClip().duration) {
+        phase = 'play';
+        phaseElapsed = 0;
+        celebrationCamFrozen = false;
+        defenders.forEach((d) => { if (d.mixer) d.mixer.timeScale = 1; });
+        blockers.forEach((b) => { if (b.mixer) b.mixer.timeScale = 1; });
+      }
     }
     // 'dance' phase has nothing to drive here -- it just holds until
     // startDancePhase()'s own completion path (a timer for now, a
@@ -1304,6 +1509,7 @@ function tick(now) {
     if (mixer) mixer.update(dt);
     updateDefenderAnimations(dt);
     updateBlockerAnimations(dt);
+    updateKickerAnimation(dt);
     // Skipped during 'tackled': the fall clips' own baked root motion is
     // what actually drags him down to the ground -- stripping it every
     // frame like the run cycle needs would hold him rigidly standing
@@ -1316,7 +1522,7 @@ function tick(now) {
     }
 
     if (debugEl) {
-      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === spinLeftAction ? 'spinLeft' : activeAction === spinRightAction ? 'spinRight' : activeAction === jumpCutLeftAction ? 'jumpCutLeft' : activeAction === jumpCutRightAction ? 'jumpCutRight' : activeAction === fallingDownAction ? 'fallingDown' : activeAction === fallFlatAction ? 'fallFlat' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : 'dance';
+      const clipName = activeAction === runAction ? 'run' : activeAction === runRightTurnAction ? 'rightTurn' : activeAction === runLeftTurnAction ? 'leftTurn' : activeAction === rightStrafeAction ? 'rightStrafe' : activeAction === leftStrafeAction ? 'leftStrafe' : activeAction === spinLeftAction ? 'spinLeft' : activeAction === spinRightAction ? 'spinRight' : activeAction === jumpCutLeftAction ? 'jumpCutLeft' : activeAction === jumpCutRightAction ? 'jumpCutRight' : activeAction === fallingDownAction ? 'fallingDown' : activeAction === fallFlatAction ? 'fallFlat' : activeAction === stopAction ? 'stop' : activeAction === turn180Action ? 'turn180' : activeAction === catchAction ? 'catch' : 'dance';
       const defSummary = defenders.map((d, i) => `${i}:${d.state}/${d.currentClipName}@${Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z).toFixed(1)}yd`).join(' ');
       const blockerSummary = blockers.map((b, i) => `${i}:${b.state}${b.targetDefender ? '->d' + defenders.indexOf(b.targetDefender) : ''}@${Math.hypot(RUNNER_GROUP.position.x - b.group.position.x, RUNNER_GROUP.position.z - b.group.position.z).toFixed(1)}yd`).join(' ');
       debugEl.textContent = `phase: ${phase}  held: [${[...heldKeys].join(', ')}]\nlateral: ${lateral}  movingForward: ${movingForward}  movingBackward: ${movingBackward}\nyaw: ${RUNNER_GROUP.rotation.y.toFixed(3)}  clip: ${clipName}  hasFocus: ${document.hasFocus()}\nfacingBackward: ${facingBackward}  turningAround: ${turningAround}  spin: ${spin ? spin.dir : '-'}  jumpCut: ${jumpCut ? jumpCut.dir : '-'}\npos: x=${RUNNER_GROUP.position.x.toFixed(3)} z=${RUNNER_GROUP.position.z.toFixed(3)}\ndefenders: ${defSummary || '(none)'}\nblockers: ${blockerSummary || '(none)'}`;
@@ -1358,22 +1564,21 @@ async function startReturn(returnConfig) {
   buildField(fieldYards);
   RUNNER_GROUP.position.set(0, 0, 0);
   RUNNER_GROUP.rotation.y = 0;
-  // Reset BEFORE spawning defenders -- they aim themselves at the runner's
-  // position at spawn time (see spawnDefenders()), so this needs to already
-  // be his real starting spot, not whatever was left over from the end of
-  // the previous return.
-  // TESTING OVERRIDE: always 4 defenders, ignoring the server's own
-  // difficulty-ladder count -- remove this line (and go back to
-  // `returnConfig.defenderCount ?? 3`) once testing's done.
-  const testDefenderCount = 4;
-  spawnDefenders(testDefenderCount, returnConfig.defenderSpeed ?? 1); // ?? not || -- a legitimate 0 defenderSpeed shouldn't get silently overridden to 1
+  // Reset BEFORE spawning defenders/blockers -- they aim themselves at the
+  // runner's position at spawn time (see spawnDefenders()/spawnBlockers()),
+  // so this needs to already be his real starting spot, not whatever was
+  // left over from the end of the previous return.
+  spawnDefenders(DEFENDER_FORMATION_COUNT, returnConfig.defenderSpeed ?? 1); // ?? not || -- a legitimate 0 defenderSpeed shouldn't get silently overridden to 1
   spawnBlockers(BLOCKER_COUNT);
+  spawnKicker();
+  if (ball) { if (ball.parent) ball.parent.remove(ball); ball = null; } // clear any leftover ball from the previous return (e.g. still parented to the forearm bone)
+  cameraPan = null;
   wasMoving = false;
   heldKeys.clear();
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, ...danceActions.map((d) => d.action)];
   finishBlend();
   spin = null;
   spinCooldown = 0;
@@ -1383,24 +1588,27 @@ async function startReturn(returnConfig) {
   jumpCutQueued = false;
   allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; a.weight = 1; } });
   if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
-  phase = 'play';
+  phase = 'kickoff';
   phaseElapsed = 0;
-  celebrationCamFrozen = false;
+  // The kickoff/hang/catch sequence owns the camera (see snapCameraToKicker()
+  // and the 'hang' phase's own pan) -- same escape hatch the touchdown
+  // celebration uses to stop the unconditional runner-follow block at the
+  // bottom of tick() from fighting a deliberately-set camera. Cleared once
+  // 'catch' hands off to 'play'.
+  celebrationCamFrozen = true;
   facingBackward = false;
   turningAround = false;
   resizeRenderer();
-  snapCamera();
+  snapCameraToKicker();
   renderer.render(scene, camera);
 
   document.getElementById('return-info').textContent = `Return ${returnConfig.index + 1} of ${returnsPerPlayer}`;
   document.getElementById('kr-result').textContent = '';
   document.getElementById('next-return-btn').style.display = 'none';
   document.getElementById('kr3d-yards').textContent = `${fieldYards} yards to go`;
-
-  const overlay = document.getElementById('kr3d-overlay-text');
-  overlay.textContent = 'Kickoff...';
-  await wait(900);
-  overlay.textContent = '';
+  // No placeholder "Kickoff..." text/wait -- the real kick/hang/catch
+  // sequence now conveys that on its own.
+  document.getElementById('kr3d-overlay-text').textContent = '';
 
   running = true;
   lastFrameAt = performance.now();
