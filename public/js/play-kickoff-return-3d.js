@@ -560,15 +560,18 @@ const SPIN_FORWARD_FACTOR = 0.65; // fraction of run speed kept while spinning (
 const SPIN_LATERAL_SPEED = 10;    // yards/sec sideways burst, easing out over the spin
 const SPIN_BLEND = 0.12;
 // A defender's lunge (DEFENDER_LUNGE_SPEED_MULT, 1.6x its base 7.5yd/s
-// speed) can close the DEFENDER_TRIGGER_RANGE gap (2.5yd) faster than the
-// spin's own lateral burst can create separation, so pure geometry rarely
-// saves him even with good timing -- per user feedback, the spin was
-// reading as "tackles me every time even if I am spinning." Rather than
-// rebalance lunge speed/tackle radius globally (would also soften every
-// straight-running tackle, not just spins), an active spin gets a flat
-// chance to turn what would be a tackle into a miss -- see the 'lunging'
-// branch of updateDefenders().
-const SPIN_EVADE_CHANCE = 0.5;
+// speed) can close the DEFENDER_TRIGGER_RANGE gap (2.5yd) faster than a
+// spin/jump-cut's own lateral burst can create separation, so pure
+// geometry rarely saves him even with good timing -- per user feedback,
+// the spin was reading as "tackles me every time even if I am spinning."
+// Rather than rebalance lunge speed/tackle radius globally (would also
+// soften every straight-running tackle, not just evasive moves), an
+// active spin OR jump-cut gets a flat chance to turn what would be a
+// tackle into a miss -- see the 'lunging' branch of updateDefenders().
+// Shipped at 0.5 first, dropped to 0.3 same week -- 0.5 read as winning
+// the evade too often. Applies to both moves, not just spin, per the
+// same feedback round.
+const EVADE_CHANCE = 0.3;
 let spin = null; // { dir: -1 left / +1 right, action, elapsed, dur, forward }
 let spinCooldown = 0;
 let spinQueued = false;
@@ -1014,9 +1017,9 @@ function updateDefenders(dt) {
       // he's no longer where the lunge was aimed.
       const hitDist = Math.hypot(RUNNER_GROUP.position.x - d.group.position.x, RUNNER_GROUP.position.z - d.group.position.z);
       if (hitDist <= DEFENDER_TACKLE_RADIUS) {
-        // An active spin gets a flat SPIN_EVADE_CHANCE roll to turn this
-        // into a miss instead -- see that constant's own comment for why.
-        if (spin && Math.random() < SPIN_EVADE_CHANCE) {
+        // An active spin OR jump-cut gets a flat EVADE_CHANCE roll to turn
+        // this into a miss instead -- see that constant's own comment.
+        if ((spin || jumpCut) && Math.random() < EVADE_CHANCE) {
           d.state = 'recovering';
           d.recoverElapsed = 0;
         } else {
