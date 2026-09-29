@@ -987,6 +987,17 @@ function tick(now) {
         spin = null;
         jumpCut = null;
         freezeCelebrationCamera();
+
+        // Same "running in place" bug as the tackle path, on the other
+        // branch: updateDefenders()'s state machine (movement) is gated to
+        // phase === 'play', so every defender's POSITION freezes right here
+        // -- but updateDefenderAnimations() (mixer upkeep) runs
+        // unconditionally, so left alone they'd keep looping the run cycle
+        // in place for the whole endzone/turn/dance celebration. Unlike a
+        // tackle, nobody here "won" the play, so freezing each mixer's own
+        // clock (whatever pose it happens to be on) reads better than
+        // switching them to a celebration they didn't earn.
+        defenders.forEach((d) => { if (d.mixer) d.mixer.timeScale = 0; });
       }
     } else if (phase === 'endzone') {
       RUNNER_GROUP.position.z -= FORWARD_SPEED * dt;
