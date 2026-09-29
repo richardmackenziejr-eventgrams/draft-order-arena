@@ -318,12 +318,37 @@ const STAND_WIDTH_DELTA = (FIELD_WIDTH / 2) - 15 + SIDELINE_RUNOFF;
 // playable field, instead of along the sideline underneath its own tile.
 const STAND_ELEVATION = 2;
 const RISER_MAT = new THREE.MeshStandardMaterial({ color: 0x8c8c8a, roughness: 0.95 });
+// A single flat-colored box read as an edgeless, textureless slab abutting
+// the grass with no visible transition -- same "layer simple boxes for
+// detail" trick already used elsewhere in this codebase (the power meter's
+// bezel/inset-rim/corner-screw layering in play-field-goal.js) fixes it
+// cheaply, no new texture/asset needed: a lighter concrete "coping" cap
+// along the top edge (where the riser meets the seating above) and a
+// darker "toe" line along the base (where it meets the grass) give the
+// eye two real edges to read instead of one flat color bleeding straight
+// into green turf.
+const RISER_CAP_MAT = new THREE.MeshStandardMaterial({ color: 0xb0b0ac, roughness: 0.8 });
+const RISER_BASE_MAT = new THREE.MeshStandardMaterial({ color: 0x2e2e2c, roughness: 0.95 });
+const RISER_CAP_HEIGHT = 0.25;
+const RISER_CAP_OVERHANG = 0.4; // slight lip past the riser's own footprint -- a real coping detail, not just a same-size box restated in a different color
+const RISER_BASE_HEIGHT = 0.35;
 function addRiser(x, z, width, depth, rotationY = 0) {
   const riser = new THREE.Mesh(new THREE.BoxGeometry(width, STAND_ELEVATION, depth), RISER_MAT);
   riser.position.set(x, STAND_ELEVATION / 2, z);
   riser.rotation.y = rotationY;
   riser.receiveShadow = true;
   standGroup.add(riser);
+
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(width + RISER_CAP_OVERHANG, RISER_CAP_HEIGHT, depth + RISER_CAP_OVERHANG), RISER_CAP_MAT);
+  cap.position.set(x, STAND_ELEVATION - RISER_CAP_HEIGHT / 2, z);
+  cap.rotation.y = rotationY;
+  cap.castShadow = true;
+  standGroup.add(cap);
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(width + 0.1, RISER_BASE_HEIGHT, depth + 0.1), RISER_BASE_MAT);
+  base.position.set(x, RISER_BASE_HEIGHT / 2, z);
+  base.rotation.y = rotationY;
+  standGroup.add(base);
 }
 
 let standStraightGltf = null;
