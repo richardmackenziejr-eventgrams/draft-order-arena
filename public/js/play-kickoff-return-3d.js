@@ -223,6 +223,7 @@ function buildField(lengthYards) {
   buildGoalposts(lengthYards);
   buildCheerleaders(lengthYards);
   buildReferees(lengthYards);
+  buildRunningReferees(lengthYards);
   buildCameraman(lengthYards);
   buildSidelinePlayers(lengthYards);
 }
@@ -523,6 +524,118 @@ function updateRefereeAnimations(dt) {
       if (t >= 1) r.armTweenElapsed = null; // done -- left holding the arms-up pose, same as a real ref holding the signal through the celebration
     }
   }
+}
+
+// ---- Running referees ---------------------------------------------------------
+// Two more referee.glb instances (same model as the stationary goal-line
+// refs above), one per sideline, that sprint downfield staying
+// RUNNING_REF_LEAD_YARDS ahead of the returner -- reusing the RUNNER's own
+// right-strafe/left-strafe clips rather than a new asset: a strafe is a
+// "face one direction, translate perpendicular to it" gait, which is
+// exactly a ref running the sideline while watching the field (faces
+// INWARD, translates along Z) just rotated 90 from how the runner uses it
+// (faces downfield/-Z, translates along X). Starts pinned at the near 20
+// (RUNNING_REF_START_Z) in the same relaxed idle stance the goal-line refs
+// use, starts actually moving once the returner closes to
+// RUNNING_REF_LEAD_YARDS away, and locks/returns to that same idle stance
+// once it reaches the far 20 (RUNNING_REF_END_Z, computed per field length)
+// -- there's already a stationary ref waiting on the goal line itself, so
+// covering only the middle of the field is the whole job here.
+let runningRefereeGroup = null;
+let runningReferees = []; // { group, mixer, action, bindPose: [{bone,quat}], leftArm, rightArm, bindLeft, bindRight, hipsBone, hipsBindPos }
+const RUNNING_REF_START_Z = -20;
+const RUNNING_REF_LEAD_YARDS = 5;
+let runningRefEndZ = 0; // set per build (depends on fieldYards) -- the far 20, where the ref stops
+
+function setRunningRefIdlePose(r) {
+  r.bindPose.forEach(({ bone, quat }) => bone.quaternion.copy(quat));
+  if (r.leftArm && r.rightArm && r.bindLeft && r.bindRight) {
+    // Same relaxed-standing adjustment buildReferees() applies to the
+    // goal-line refs -- rotates out of the raw T-pose bind.
+    r.leftArm.rotation.set(r.bindLeft.x + REF_ARM_IDLE_X, r.bindLeft.y, r.bindLeft.z);
+    r.rightArm.rotation.set(r.bindRight.x + REF_ARM_IDLE_X, r.bindRight.y, r.bindRight.z);
+  }
+}
+
+function buildRunningReferees(lengthYards) {
+  if (runningRefereeGroup) scene.remove(runningRefereeGroup);
+  runningReferees = [];
+  if (!refereeTemplate || !rightStrafeClip || !leftStrafeClip) return;
+  runningRefereeGroup = new THREE.Group();
+  runningRefEndZ = -(lengthYards - 20);
+
+  const REF_X = FIELD_WIDTH / 2 - SIDELINE_INSET; // same sideline X buildReferees() uses
+
+  [1, -1].forEach((side) => {
+    const model = cloneSkinnedScene(refereeTemplate);
+    // Same convention as the stationary refs: raw orientation faces +Z,
+    // rotating -side*90 turns that to face INWARD across the field.
+    model.rotation.y = -side * (Math.PI / 2);
+    model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+
+    const bindPose = [];
+    let leftArm = null, rightArm = null, hipsBone = null;
+    model.traverse((o) => {
+      if (o.isBone) bindPose.push({ bone: o, quat: o.quaternion.clone() });
+      if (o.name === 'mixamorigLeftArm') leftArm = o;
+      if (o.name === 'mixamorigRightArm') rightArm = o;
+      if (o.name === 'mixamorigHips') hipsBone = o;
+    });
+    const bindLeft = leftArm ? leftArm.rotation.clone() : null;
+    const bindRight = rightArm ? rightArm.rotation.clone() : null;
+    const hipsBindPos = hipsBone ? hipsBone.position.clone() : null;
+
+    // Same reduced-rig/full-rig mismatch already hit with the referee's own
+    // walk clip and the sideline players' idle clips -- filter each strafe
+    // clip's tracks down to bones this model actually has.
+    const modelBoneNames = new Set(bindPose.map(({ bone }) => bone.name));
+    // Side +1 sits on the +X sideline facing -X; side -1 sits on -X facing
+    // +X -- picked empirically which raw clip (right vs left) reads as
+    // running forward rather than backward/crossed-up once rotated onto
+    // each side, same verify-visually approach as the cameraman facing fix.
+    const rawClip = side === 1 ? leftStrafeClip : rightStrafeClip;
+    const tracks = rawClip.tracks.filter((t) => modelBoneNames.has(t.name.split('.')[0]));
+    const clip = new THREE.AnimationClip(rawClip.name, rawClip.duration, tracks);
+    const mixer = new THREE.AnimationMixer(model);
+    const action = mixer.clipAction(clip);
+    action.play();
+
+    const group = new THREE.Group();
+    group.add(model);
+    group.position.set(side * REF_X, 0, RUNNING_REF_START_Z);
+    runningRefereeGroup.add(group);
+
+    const r = { group, mixer, action, bindPose, leftArm, rightArm, bindLeft, bindRight, hipsBone, hipsBindPos };
+    setRunningRefIdlePose(r);
+    runningReferees.push(r);
+  });
+
+  scene.add(runningRefereeGroup);
+}
+
+// Called every frame from inside the phase === 'play' block (see tick()) --
+// gating it there, rather than in the unconditional per-frame section
+// alongside updateCameraman()/updateSidelinePlayers(), means the refs
+// naturally freeze in whatever pose they're in (position AND animation)
+// the instant the runner is tackled/scores/steps out, with no separate
+// timeScale=0 bookkeeping needed (the same trick defenders/blockers DO
+// need, but only because THEIR mixer upkeep runs unconditionally).
+function updateRunningReferees(dt) {
+  const runnerZ = RUNNER_GROUP.position.z;
+  const target = THREE.MathUtils.clamp(runnerZ - RUNNING_REF_LEAD_YARDS, runningRefEndZ, RUNNING_REF_START_Z);
+  // Strictly between the two ends -- pinned at either end (hasn't started
+  // yet, or already reached the far 20) both read as "standing," not
+  // "running," hence the shared idle branch below for both.
+  const active = target > runningRefEndZ + 1e-4 && target < RUNNING_REF_START_Z - 1e-4;
+  runningReferees.forEach((r) => {
+    r.group.position.z = target;
+    if (active) {
+      r.mixer.update(dt);
+      if (r.hipsBone && r.hipsBindPos) r.hipsBone.position.copy(r.hipsBindPos); // same root-motion strip as the runner's own stripRootMotion() -- the clip's baked hip translation is unreliable scale, the actual travel is driven by `target` above
+    } else {
+      setRunningRefIdlePose(r);
+    }
+  });
 }
 
 // ---- Sideline cameramen ------------------------------------------------------
@@ -1034,6 +1147,7 @@ new GLTFLoader().load('/models/cheer-cheering.glb', (gltf) => {
 new GLTFLoader().load('/models/referee.glb', (gltf) => {
   refereeTemplate = gltf.scene;
   buildReferees(fieldYards);
+  buildRunningReferees(fieldYards);
 }, undefined, (err) => console.error('referee model load failed', err));
 
 new GLTFLoader().load('/models/cameraman.glb', (gltf) => {
@@ -1078,6 +1192,8 @@ let runRightTurnAction = null;
 let runLeftTurnAction = null;
 let rightStrafeAction = null;
 let leftStrafeAction = null;
+let rightStrafeClip = null; // raw clip, same source as rightStrafeAction's -- reused unbound (own AnimationMixer per instance) by the running referees, see buildRunningReferees()
+let leftStrafeClip = null;
 let spinLeftAction = null;
 let spinRightAction = null;
 let jumpCutLeftAction = null;
@@ -1219,6 +1335,8 @@ const charactersLoaded = Promise.all([
   turn180Action.clampWhenFinished = true;
   rightStrafeAction = mixer.clipAction(rightStrafeGltf.animations[0]);
   leftStrafeAction = mixer.clipAction(leftStrafeGltf.animations[0]);
+  rightStrafeClip = rightStrafeGltf.animations[0];
+  leftStrafeClip = leftStrafeGltf.animations[0];
   fallingDownAction = mixer.clipAction(fallingDownGltf.animations[0]);
   fallFlatAction = mixer.clipAction(fallFlatGltf.animations[0]);
   [fallingDownAction, fallFlatAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(FALL_TIME_SCALE); });
@@ -1256,6 +1374,7 @@ const charactersLoaded = Promise.all([
   }
   blockerSadIdleClip = sadIdleGltf.animations[0];
   buildSidelinePlayers(fieldYards); // blockerTemplate is one of its 3 dependencies (the other 2 -- the idle clips -- load independently and may arrive before or after this)
+  buildRunningReferees(fieldYards); // rightStrafeClip/leftStrafeClip are 2 of its 3 dependencies (the third, refereeTemplate, loads independently -- see its own loader below)
   runnerKickClip = runnerGltf.animations[0]; // player-kick.glb's own baked run-up+kick clip -- applied to a defender-model kicker in spawnKicker()
 
   // Same raw sad-idle clip the blockers react with on a tackle, bound to
@@ -2467,6 +2586,7 @@ function tick(now) {
 
       updateDefenders(dt); // can flip phase to 'tackled' (triggerTackle) -- guard the touchdown check below on phase still being 'play'. Mixer/root-motion upkeep is separate (updateDefenderAnimations(), called unconditionally further down) so it isn't skipped once phase leaves 'play'.
       updateBlockers(dt); // same gating as updateDefenders() -- can flip a defender to 'blocked', which the touchdown/tackle checks below don't need to special-case (a blocked defender just stops like any other 'chasing' one would have)
+      updateRunningReferees(dt);
 
       if (phase === 'play' && RUNNER_GROUP.position.z <= -fieldYards) {
         // Don't stop dead on the goal line -- keep auto-running a bit
