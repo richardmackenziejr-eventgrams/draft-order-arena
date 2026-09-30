@@ -73,6 +73,12 @@ const FIELD_WIDTH = 53.3;
 // scope so buildField()'s back-of-endzone lines and buildGoalposts()'s
 // placement can never drift out of sync with each other.
 const ENDZONE_DEPTH = 10;
+// Goalpost upright half-span, hoisted here (not local to buildGoalposts()
+// like it originally was) now that buildReferees() also needs it to place
+// referees just outside the uprights -- same "shared constant, one place"
+// fix already applied to ENDZONE_DEPTH/CORNER_FRONT_OFFSET for the same
+// two-functions-need-the-same-number reason.
+const UPRIGHT_HALF_SPAN = 2.82;
 
 // Declared up here (not down with the other character templates below)
 // because the independent, non-blocking GLTFLoader calls for these run
@@ -83,6 +89,9 @@ const CHEERLEADER_COUNT = 4;
 let cheerleaderTemplates = [null, null, null, null]; // one per public/models/cheerleader-{1..4}.glb -- loaded independently below (like the stadium stands), not gated behind charactersLoaded since they're purely decorative
 let cheerCheeringClip = null;
 let cheerleaders = []; // { mixer } for each spawned instance -- see buildCheerleaders()
+let refereeTemplate = null; // public/models/referee.glb -- same Rodin/Mixamo model Field Goal Kick uses
+let refereeWalkClip = null; // public/models/referee-walk.glb -- user's own Mixamo "Walking" download, animation-only
+let referees = []; // { group, mixer, walkAction, leftArm, rightArm, bindLeft, bindRight, armTweenElapsed } -- see buildReferees()
 
 function stripeTexture() {
   const c = document.createElement('canvas');
@@ -205,6 +214,7 @@ function buildField(lengthYards) {
   buildEndzoneStands(lengthYards);
   buildGoalposts(lengthYards);
   buildCheerleaders(lengthYards);
+  buildReferees(lengthYards);
 }
 
 // ---- Goalposts -----------------------------------------------------------
@@ -225,7 +235,6 @@ function buildGoalposts(lengthYards) {
   const postMat = new THREE.MeshStandardMaterial({ color: 0xffd400, roughness: 0.4, metalness: 0.2 });
   const CROSSBAR_Y = 3.05;
   const UPRIGHT_TOP_Y = 8.5;
-  const UPRIGHT_HALF_SPAN = 2.82;
   const GOALPOST_LINE_CLEARANCE = 0.5;
   const GOALPOST_SETBACK = ENDZONE_DEPTH + GOALPOST_LINE_CLEARANCE;
 
@@ -257,6 +266,122 @@ function buildGoalposts(lengthYards) {
   addGoalpost(-(lengthYards + GOALPOST_SETBACK)); // behind the opponent's goal line (z=-lengthYards)
 
   scene.add(goalpostGroup);
+}
+
+// ---- Referees --------------------------------------------------------------
+// Same referee.glb model Field Goal Kick uses (public/js/play-field-goal.js),
+// one on each side of the FAR (scoring) goalpost only -- that's the one the
+// runner actually reaches on a touchdown. Purely decorative until a
+// touchdown is scored (see triggerRefereeCelebration(), called from the
+// touchdown block in tick()): a referee walks a step or two forward (the
+// user's own Mixamo "Walking" download, referee-walk.glb, animation-only),
+// then raises both arms for the "good" signal, reusing the exact arm-bone
+// tween Field Goal Kick's own animateRefereeSignal() uses -- rotating
+// mixamorigLeftArm/RightArm's local X from their bind pose. NOTE: the raw
+// glTF JSON in referee.glb actually stores these names WITH a colon
+// (`mixamorig:LeftArm`, confirmed by parsing the file's bytes directly) --
+// but three.js's GLTFLoader strips the colon when it builds the runtime
+// Bone objects, so `o.name` at runtime is `mixamorigLeftArm` with no colon.
+// Confirmed live in the browser (dumped every bone name off the actual
+// loaded/cloned model) before trusting this, since the raw-file check alone
+// would have pointed the wrong way.
+let refereeGroup = null;
+function buildReferees(lengthYards) {
+  if (refereeGroup) scene.remove(refereeGroup);
+  referees = [];
+  if (!refereeTemplate || !refereeWalkClip) return; // wait for both -- a referee with no walk clip to play would just stand there when a touchdown happens
+  refereeGroup = new THREE.Group();
+
+  const REF_SIDE_MARGIN = 1.6; // same clearance off the upright Field Goal Kick's own referees use
+  const REF_SETBACK = 4; // yards into the endzone from the goal line -- inside ENDZONE_DEPTH (10) and well in front of the cheer squad's first row (11)
+  const z = -(lengthYards + REF_SETBACK);
+
+  [1, -1].forEach((side) => {
+    const model = cloneSkinnedScene(refereeTemplate);
+    // No base-facing correction (same reasoning as the cheerleaders) -- a
+    // referee standing just past the goal line needs to face back toward
+    // the field, which is the raw/uncorrected orientation already.
+    model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    let leftArm = null, rightArm = null;
+    model.traverse((o) => {
+      if (o.name === 'mixamorigLeftArm') leftArm = o;
+      if (o.name === 'mixamorigRightArm') rightArm = o;
+    });
+    if (!leftArm || !rightArm) { console.warn('referee.glb missing expected arm bones -- signal animation will be skipped'); }
+
+    const group = new THREE.Group();
+    group.add(model);
+    group.position.set(side * (UPRIGHT_HALF_SPAN + REF_SIDE_MARGIN), 0, z);
+    refereeGroup.add(group);
+
+    // referee.glb is a REDUCED rig (one representative finger per hand, not
+    // full articulation -- same as the field-goal kicker's own model), but
+    // the user's Mixamo "Walking" download carries the FULL finger rig
+    // (every Pinky/Ring/Thumb segment) since it was authored against a
+    // standard Mixamo character. Playing the clip as-is against this
+    // skeleton works for the bones that DO match (hips/spine/legs/arms) but
+    // floods the console with a THREE.PropertyBinding "no target node
+    // found" warning for every missing finger track, every single frame --
+    // confirmed live (500+ warnings in a couple seconds). Filter the clip
+    // down to only tracks this model can actually bind before playing it.
+    const modelBoneNames = new Set();
+    model.traverse((o) => { if (o.isBone) modelBoneNames.add(o.name); });
+    const walkTracks = refereeWalkClip.tracks.filter((t) => modelBoneNames.has(t.name.split('.')[0]));
+    const walkClip = new THREE.AnimationClip(refereeWalkClip.name, refereeWalkClip.duration, walkTracks);
+
+    const mixer = new THREE.AnimationMixer(model);
+    const walkAction = mixer.clipAction(walkClip);
+    referees.push({
+      group, mixer, walkAction, leftArm, rightArm,
+      bindLeft: leftArm ? leftArm.rotation.clone() : null,
+      bindRight: rightArm ? rightArm.rotation.clone() : null,
+      armTweenElapsed: null,
+    });
+  });
+  scene.add(refereeGroup);
+}
+
+const REF_ARM_UP_X = -Math.PI / 2; // same value as Field Goal Kick's own REF_ARM_UP_X -- rotates the arm from resting (down) to straight up
+const REF_ARM_RAISE_DURATION = 0.45; // seconds -- same duration Field Goal Kick's own signal tween uses
+
+// Called the instant a touchdown is scored (see the touchdown block in
+// tick()). Plays the walk clip exactly ONCE (LoopOnce + clampWhenFinished) --
+// a single gait cycle IS "a step or two forward," so there's no arbitrary
+// distance/timing constant to tune here, same philosophy as the kicker's own
+// run-up trusting its clip's baked root motion rather than a hand-picked
+// distance. The arm-raise tween starts only once that walk cycle's own
+// 'finished' event fires, so the two moves are strictly sequenced, never
+// overlapping (the walk clip's own arm swing would otherwise fight the
+// procedural arm rotation if both drove the same bones at once).
+function triggerRefereeCelebration() {
+  referees.forEach((r) => {
+    if (!r.mixer || !r.walkAction) return;
+    r.walkAction.reset();
+    r.walkAction.setLoop(THREE.LoopOnce, 1);
+    r.walkAction.clampWhenFinished = true;
+    r.walkAction.play();
+    if (!r.leftArm || !r.rightArm) return; // no arm bones found -- walk still plays, signal just can't
+    const onFinished = (e) => {
+      if (e.action !== r.walkAction) return;
+      r.mixer.removeEventListener('finished', onFinished);
+      r.armTweenElapsed = 0;
+    };
+    r.mixer.addEventListener('finished', onFinished);
+  });
+}
+
+function updateRefereeAnimations(dt) {
+  for (const r of referees) {
+    if (r.mixer) r.mixer.update(dt);
+    if (r.armTweenElapsed != null) {
+      r.armTweenElapsed += dt;
+      const t = Math.min(1, r.armTweenElapsed / REF_ARM_RAISE_DURATION);
+      const e = easeOutCubic(t);
+      r.leftArm.rotation.x = r.bindLeft.x + REF_ARM_UP_X * e;
+      r.rightArm.rotation.x = r.bindRight.x + REF_ARM_UP_X * e;
+      if (t >= 1) r.armTweenElapsed = null; // done -- left holding the arms-up pose, same as a real ref holding the signal through the celebration
+    }
+  }
 }
 
 // ---- Cheerleaders ---------------------------------------------------------
@@ -599,6 +724,15 @@ new GLTFLoader().load('/models/cheer-cheering.glb', (gltf) => {
   cheerCheeringClip = gltf.animations[0];
   buildCheerleaders(fieldYards);
 }, undefined, (err) => console.error('cheer animation load failed', err));
+
+new GLTFLoader().load('/models/referee.glb', (gltf) => {
+  refereeTemplate = gltf.scene;
+  buildReferees(fieldYards);
+}, undefined, (err) => console.error('referee model load failed', err));
+new GLTFLoader().load('/models/referee-walk.glb', (gltf) => {
+  refereeWalkClip = gltf.animations[0];
+  buildReferees(fieldYards);
+}, undefined, (err) => console.error('referee walk animation load failed', err));
 
 // ---- Runner -------------------------------------------------------------
 const RUNNER_GROUP = new THREE.Group();
@@ -2019,6 +2153,7 @@ function tick(now) {
         spin = null;
         jumpCut = null;
         freezeCelebrationCamera();
+        triggerRefereeCelebration();
 
         // Same "running in place" bug as the tackle path, on the other
         // branch: updateDefenders()'s state machine (movement) is gated to
@@ -2177,6 +2312,7 @@ function tick(now) {
     updateBlockerAnimations(dt);
     updateKickerAnimation(dt);
     updateCheerleaderAnimations(dt);
+    updateRefereeAnimations(dt);
     // Skipped during 'tackled': the fall clips' own baked root motion is
     // what actually drags him down to the ground -- stripping it every
     // frame like the run cycle needs would hold him rigidly standing
