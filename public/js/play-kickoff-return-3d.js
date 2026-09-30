@@ -270,21 +270,29 @@ function buildGoalposts(lengthYards) {
 
 // ---- Referees --------------------------------------------------------------
 // Same referee.glb model Field Goal Kick uses (public/js/play-field-goal.js),
-// one on each side of the FAR (scoring) goalpost only -- that's the one the
-// runner actually reaches on a touchdown. Purely decorative until a
-// touchdown is scored (see triggerRefereeCelebration(), called from the
-// touchdown block in tick()): a referee walks a step or two forward (the
-// user's own Mixamo "Walking" download, referee-walk.glb, animation-only),
-// then raises both arms for the "good" signal, reusing the exact arm-bone
-// tween Field Goal Kick's own animateRefereeSignal() uses -- rotating
-// mixamorigLeftArm/RightArm's local X from their bind pose. NOTE: the raw
-// glTF JSON in referee.glb actually stores these names WITH a colon
-// (`mixamorig:LeftArm`, confirmed by parsing the file's bytes directly) --
-// but three.js's GLTFLoader strips the colon when it builds the runtime
-// Bone objects, so `o.name` at runtime is `mixamorigLeftArm` with no colon.
-// Confirmed live in the browser (dumped every bone name off the actual
-// loaded/cloned model) before trusting this, since the raw-file check alone
-// would have pointed the wrong way.
+// one on each side of the field at the FAR (scoring) endzone's back line
+// only -- that's the one the runner actually reaches on a touchdown. Stand
+// well out toward the SIDELINE (not by the goalpost -- as far out as the
+// celebration camera's own frame allows, see REF_X below), facing INWARD
+// across the field -- matches where an NFL back judge/side judge actually
+// stands for a touchdown signal, per live feedback, and sidesteps the
+// arm-raise's outward-hand look entirely: side-on there's no "is this
+// pointing away from the body" read the way there was facing straight
+// downfield. Purely
+// decorative until a touchdown is scored (see triggerRefereeCelebration(),
+// called from the touchdown block in tick()): a referee walks a step or two
+// (the user's own Mixamo "Walking" download, referee-walk.glb, animation-
+// only -- root motion now carries them sideways along the sideline, since
+// that's their own local-forward once rotated), then raises both arms for
+// the "good" signal, reusing the exact arm-bone tween Field Goal Kick's own
+// animateRefereeSignal() uses -- rotating mixamorigLeftArm/RightArm's local
+// X from their bind pose. NOTE: the raw glTF JSON in referee.glb actually
+// stores these names WITH a colon (`mixamorig:LeftArm`, confirmed by parsing
+// the file's bytes directly) -- but three.js's GLTFLoader strips the colon
+// when it builds the runtime Bone objects, so `o.name` at runtime is
+// `mixamorigLeftArm` with no colon. Confirmed live in the browser (dumped
+// every bone name off the actual loaded/cloned model) before trusting this,
+// since the raw-file check alone would have pointed the wrong way.
 let refereeGroup = null;
 function buildReferees(lengthYards) {
   if (refereeGroup) scene.remove(refereeGroup);
@@ -292,14 +300,24 @@ function buildReferees(lengthYards) {
   if (!refereeTemplate || !refereeWalkClip) return; // wait for both -- a referee with no walk clip to play would just stand there when a touchdown happens
   refereeGroup = new THREE.Group();
 
-  const REF_SIDE_MARGIN = 1.6; // same clearance off the upright Field Goal Kick's own referees use
-  const z = -(lengthYards + ENDZONE_DEPTH); // on the back-of-endzone line itself, per live feedback -- same line buildField()'s own back-line marking and the cheer squad's zone both key off
+  // Real NFL sideline distance (FIELD_WIDTH/2 ≈ 26.65yd) is well outside
+  // what the touchdown celebration's own camera (freezeCelebrationCamera(),
+  // centered on the runner near midfield) actually shows -- confirmed live,
+  // the real sideline position rendered completely off-screen. 15yd is the
+  // widest that stays fully in frame at this celebration shot (confirmed
+  // via NDC projection + a live screenshot check), so that's the practical
+  // limit here -- not the true sideline distance, but still clearly further
+  // toward it than standing by the goalpost.
+  const REF_X = 15;
+  const z = -(lengthYards + ENDZONE_DEPTH); // on the back-of-endzone line itself, per earlier live feedback -- same line buildField()'s own back-line marking and the cheer squad's zone both key off
 
   [1, -1].forEach((side) => {
     const model = cloneSkinnedScene(refereeTemplate);
-    // No base-facing correction (same reasoning as the cheerleaders) -- a
-    // referee standing just past the goal line needs to face back toward
-    // the field, which is the raw/uncorrected orientation already.
+    // Raw/uncorrected orientation faces +Z (same convention as the
+    // cheerleaders) -- rotating the whole model -side*90 degrees around Y
+    // turns that into facing INWARD across the field (the +1 side referee
+    // faces -X toward center, the -1 side referee faces +X toward center).
+    model.rotation.y = -side * (Math.PI / 2);
     model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     let leftArm = null, rightArm = null, leftForeArm = null, rightForeArm = null, leftHand = null, rightHand = null;
     model.traverse((o) => {
@@ -314,7 +332,7 @@ function buildReferees(lengthYards) {
 
     const group = new THREE.Group();
     group.add(model);
-    group.position.set(side * (UPRIGHT_HALF_SPAN + REF_SIDE_MARGIN), 0, z);
+    group.position.set(side * REF_X, 0, z);
     refereeGroup.add(group);
 
     // referee.glb is a REDUCED rig (one representative finger per hand, not
