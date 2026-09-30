@@ -611,44 +611,65 @@ function buildSidelinePlayers(lengthYards) {
   if (!blockerTemplate || !sidelineBoredClip || !sidelineIdleClip) return;
   sidelineGroup = new THREE.Group();
 
-  const SIDELINE_PLAYER_X = -(FIELD_WIDTH / 2 - SIDELINE_INSET); // same sideline X the pylons/referees use
+  // Two rows out on the dark-green apron (groundApron, buildField() above),
+  // back from the drawn sideline rather than standing right on it -- same
+  // "two staggered rows" (quincunx) formation as buildCheerleaders() below:
+  // the back row sits further out and gets one extra player at the same
+  // fixed gap, offset by half a gap in Z so it interlocks between the
+  // front row's players instead of hiding directly behind them. Only a
+  // narrow strip of apron is actually usable here: the sideline stands
+  // (buildEndzoneStands's full-length chain, addStandStraightFromEdge)
+  // start their front edge at SIDELINE_ANCHOR_X, which works out to
+  // exactly FIELD_WIDTH/2 + 6 (the same X as the runner's own
+  // out-of-bounds limit) -- going further out than that puts players
+  // inside the stand geometry, which is what a first attempt at this did
+  // (they rendered fine, just invisible, swallowed by the riser mesh).
+  const ROW_X = [-(FIELD_WIDTH / 2 + 1), -(FIELD_WIDTH / 2 + 4)];
   const NEAR_40 = -40; // 40yd from the returner's OWN goal line (z=0)
   const FAR_40 = -(lengthYards - 40); // 40yd from the OPPONENT's goal line
-  const COUNT = 10;
-  const HALF_SPAN = Math.abs(NEAR_40 - FAR_40) / 2;
   const CENTER_Z = (NEAR_40 + FAR_40) / 2;
+  const FRONT_ROW_COUNT = 10;
+  const ROW_GAP_Z = 2.2; // yd between neighbors in a row -- close to the previous single-row spacing
+  const FRONT_HALF_SPREAD = (ROW_GAP_Z * (FRONT_ROW_COUNT - 1)) / 2;
 
   const clips = [sidelineBoredClip, sidelineIdleClip];
-  for (let i = 0; i < COUNT; i++) {
-    const model = cloneSkinnedScene(blockerTemplate);
-    // Blocker's raw orientation faces +Z, same as the cheerleaders/referees
-    // (its own Math.PI correction elsewhere in this file is only needed to
-    // make it run DOWNFIELD, -Z, as a gameplay blocker) -- rotating +90
-    // turns that +Z into +X, facing inward from the left sideline.
-    model.rotation.y = Math.PI / 2;
-    model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  let clipIndex = 0; // runs across BOTH rows so neighbors (including front-to-back) alternate, not just within a row
+  ROW_X.forEach((x, rowIndex) => {
+    const staggered = rowIndex === 1;
+    const rowCount = staggered ? FRONT_ROW_COUNT + 1 : FRONT_ROW_COUNT;
+    const rowHalfSpread = staggered ? (ROW_GAP_Z * (rowCount - 1)) / 2 : FRONT_HALF_SPREAD;
+    for (let i = 0; i < rowCount; i++) {
+      const model = cloneSkinnedScene(blockerTemplate);
+      // Blocker's raw orientation faces +Z, same as the cheerleaders/referees
+      // (its own Math.PI correction elsewhere in this file is only needed to
+      // make it run DOWNFIELD, -Z, as a gameplay blocker) -- rotating +90
+      // turns that +Z into +X, facing inward from the left sideline.
+      model.rotation.y = Math.PI / 2;
+      model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
 
-    // Same reduced-rig/full-rig mismatch already hit with the referee's own
-    // walk clip -- filter each clip's tracks down to bones this model
-    // actually has before playing it, rather than risk the same
-    // THREE.PropertyBinding console-warning flood.
-    const modelBoneNames = new Set();
-    model.traverse((o) => { if (o.isBone) modelBoneNames.add(o.name); });
-    const rawClip = clips[i % clips.length];
-    const tracks = rawClip.tracks.filter((t) => modelBoneNames.has(t.name.split('.')[0]));
-    const clip = new THREE.AnimationClip(rawClip.name, rawClip.duration, tracks);
+      // Same reduced-rig/full-rig mismatch already hit with the referee's own
+      // walk clip -- filter each clip's tracks down to bones this model
+      // actually has before playing it, rather than risk the same
+      // THREE.PropertyBinding console-warning flood.
+      const modelBoneNames = new Set();
+      model.traverse((o) => { if (o.isBone) modelBoneNames.add(o.name); });
+      const rawClip = clips[clipIndex % clips.length];
+      clipIndex++;
+      const tracks = rawClip.tracks.filter((t) => modelBoneNames.has(t.name.split('.')[0]));
+      const clip = new THREE.AnimationClip(rawClip.name, rawClip.duration, tracks);
 
-    const mixer = new THREE.AnimationMixer(model);
-    mixer.clipAction(clip).play();
-    mixer.setTime(Math.random() * clip.duration);
+      const mixer = new THREE.AnimationMixer(model);
+      mixer.clipAction(clip).play();
+      mixer.setTime(Math.random() * clip.duration);
 
-    const group = new THREE.Group();
-    group.add(model);
-    group.position.set(SIDELINE_PLAYER_X, 0, CENTER_Z + evenLineX(i, COUNT, HALF_SPAN));
-    sidelineGroup.add(group);
+      const group = new THREE.Group();
+      group.add(model);
+      group.position.set(x, 0, CENTER_Z + evenLineX(i, rowCount, rowHalfSpread));
+      sidelineGroup.add(group);
 
-    sidelinePlayers.push({ mixer });
-  }
+      sidelinePlayers.push({ mixer });
+    }
+  });
 
   scene.add(sidelineGroup);
 }
