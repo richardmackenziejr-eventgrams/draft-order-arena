@@ -593,7 +593,9 @@ function buildRunningReferees(lengthYards) {
     // +X -- picked empirically which raw clip (right vs left) reads as
     // running forward rather than backward/crossed-up once rotated onto
     // each side, same verify-visually approach as the cameraman facing fix.
-    const rawClip = side === 1 ? leftStrafeClip : rightStrafeClip;
+    // First guess (side 1 -> left clip) read backward per live feedback --
+    // swapped.
+    const rawClip = side === 1 ? rightStrafeClip : leftStrafeClip;
     const tracks = rawClip.tracks.filter((t) => modelBoneNames.has(t.name.split('.')[0]));
     const clip = new THREE.AnimationClip(rawClip.name, rawClip.duration, tracks);
     const mixer = new THREE.AnimationMixer(model);
@@ -2850,7 +2852,15 @@ async function startReturn(returnConfig) {
   jumpCutCooldown = 0;
   jumpCutQueued = false;
   allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; a.weight = 1; } });
-  if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
+  // Frame 0 of the run cycle is a mid-stride pose, not a standing one --
+  // freezing there for the whole kickoff/hang wait read as him already
+  // running in place before the ball even arrives. stopAction's own LAST
+  // frame (clampWhenFinished's target elsewhere in this file) is a real
+  // standing-still pose already on hand for exactly this rig, so seek
+  // straight there instead of playing the transition -- same "set paused,
+  // don't animate" approach as the run cycle it replaces.
+  if (stopAction) { stopAction.enabled = true; activeAction = stopAction; stopAction.time = stopAction.getClip().duration; }
+  else if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   phase = 'kickoff';
   downReason = 'tackled';
   phaseElapsed = 0;
