@@ -534,16 +534,21 @@ function buildCameraman(lengthYards) {
   cameramanGroup = new THREE.Group();
 
   const model = cameramanTemplate.clone();
-  // Raw orientation faces -Z (away from the field) -- confirmed via a
-  // top-down check, opposite of the cheerleaders/pylons convention. Flip
-  // 180 so he's actually filming the field instead of the parking lot.
-  model.rotation.y = Math.PI;
+  // No base-facing correction (same reasoning as the cheerleaders) -- raw
+  // orientation already faces +Z. NOTE: an earlier pass here applied a
+  // Math.PI "fix" based on a top-down read that turned out to be a
+  // misjudged silhouette (kneeling poses don't read clearly from directly
+  // overhead) -- that fix actually flipped him to face AWAY from the field.
+  // Confirmed the real answer this time from an eye-level shot on the field
+  // side looking back at him (the same vantage a returner running toward
+  // the endzone would have): raw orientation shows his face/camera pointed
+  // straight at that camera, no rotation needed.
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-  // Kneels just past the near upright, inside the endzone, at roughly the
-  // same depth as the cheer squad's own first row -- reads as "parked at
-  // the goalpost" without sitting inside the goalpost's own geometry.
-  const CAMERAMAN_X = UPRIGHT_HALF_SPAN + 1.2;
-  const CAMERAMAN_Z = -(lengthYards + 11);
+  // Kneels right next to the near upright, next to the goalpost's own base
+  // (GOALPOST_SETBACK ≈ ENDZONE_DEPTH + 0.5, mirrored here rather than
+  // imported since that constant is local to buildGoalposts()).
+  const CAMERAMAN_X = UPRIGHT_HALF_SPAN + 0.5;
+  const CAMERAMAN_Z = -(lengthYards + ENDZONE_DEPTH + 0.5);
   model.position.set(CAMERAMAN_X, 0, CAMERAMAN_Z);
   cameramanGroup.add(model);
 
@@ -1292,7 +1297,13 @@ const camTarget = new THREE.Vector3();
 // same way a real broadcast lets you see a cut via the hash marks/sideline,
 // not via the camera doing anything unusual.
 function snapCamera() {
-  camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
+  // Clamped at 0 (the returner's own goal line) -- without this, a return
+  // starting right at the goal line puts the camera ITSELF a few yards
+  // inside the near end zone (CHASE_BACK=5.5yd behind a runner standing at
+  // z=0). Harmless when the end zone was plain grass, but visibly odd now
+  // that it's a painted navy zone -- confirmed live (the camera briefly
+  // sits inside blue-painted turf at the very start of a return).
+  camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, Math.min(RUNNER_GROUP.position.z + CHASE_BACK, 0));
   camera.lookAt(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
 }
 
@@ -2510,7 +2521,8 @@ function tick(now) {
   // freezeCelebrationCamera) so the celebration reads as one held shot
   // instead of the camera continuing to chase into the end zone.
   if (!celebrationCamFrozen) {
-    camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
+    // Same near-end-zone clamp as snapCamera() -- see its own comment.
+    camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, Math.min(RUNNER_GROUP.position.z + CHASE_BACK, 0));
     camTarget.set(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
     camera.lookAt(camTarget);
   }
