@@ -381,9 +381,17 @@ function triggerRefereeCelebration() {
       // Tween FROM wherever the walk clip's own last frame actually left
       // the arms (its natural mid-stride swing, not a fixed assumed pose)
       // TO the signal target -- captured fresh here rather than assumed,
-      // so the sweep always starts from the real current pose.
-      r.armTweenFromLeftX = r.leftArm.rotation.x;
-      r.armTweenFromRightX = r.rightArm.rotation.x;
+      // so the sweep always starts from the real current pose. Y/Z are
+      // tweened toward 0 too (not just X) -- the upper arm bone's own bind
+      // pose carries a small Y/Z tilt (part of referee.glb's T-pose not
+      // being perfectly flat), invisible at the idle pose but enough to
+      // visibly point the whole raised arm outward instead of straight up
+      // (confirmed live: straightening the forearm/hand alone wasn't
+      // enough, because the UPPER ARM itself was already off-vertical).
+      r.armTweenFrom = {
+        leftArm: r.leftArm.rotation.clone(),
+        rightArm: r.rightArm.rotation.clone(),
+      };
       // The forearm/hand bones keep whatever local bend they had (their
       // bind pose isn't a perfectly straight T -- there's a small natural
       // wrist/elbow bend baked in) -- straighten them out to zero as part
@@ -412,8 +420,16 @@ function updateRefereeAnimations(dt) {
       const e = easeOutCubic(t);
       const targetLeftX = r.bindLeft.x + REF_ARM_UP_X;
       const targetRightX = r.bindRight.x + REF_ARM_UP_X;
-      r.leftArm.rotation.x = r.armTweenFromLeftX + (targetLeftX - r.armTweenFromLeftX) * e;
-      r.rightArm.rotation.x = r.armTweenFromRightX + (targetRightX - r.armTweenFromRightX) * e;
+      r.leftArm.rotation.set(
+        r.armTweenFrom.leftArm.x + (targetLeftX - r.armTweenFrom.leftArm.x) * e,
+        r.armTweenFrom.leftArm.y * (1 - e),
+        r.armTweenFrom.leftArm.z * (1 - e),
+      );
+      r.rightArm.rotation.set(
+        r.armTweenFrom.rightArm.x + (targetRightX - r.armTweenFrom.rightArm.x) * e,
+        r.armTweenFrom.rightArm.y * (1 - e),
+        r.armTweenFrom.rightArm.z * (1 - e),
+      );
       // Straighten the forearm/hand toward zero local rotation (a dead-
       // straight line continuing the now-vertical upper arm) at the same
       // pace as the raise itself.
