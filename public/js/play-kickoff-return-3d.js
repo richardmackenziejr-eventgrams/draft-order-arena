@@ -293,8 +293,7 @@ function buildReferees(lengthYards) {
   refereeGroup = new THREE.Group();
 
   const REF_SIDE_MARGIN = 1.6; // same clearance off the upright Field Goal Kick's own referees use
-  const REF_SETBACK = 4; // yards into the endzone from the goal line -- inside ENDZONE_DEPTH (10) and well in front of the cheer squad's first row (11)
-  const z = -(lengthYards + REF_SETBACK);
+  const z = -(lengthYards + ENDZONE_DEPTH); // on the back-of-endzone line itself, per live feedback -- same line buildField()'s own back-line marking and the cheer squad's zone both key off
 
   [1, -1].forEach((side) => {
     const model = cloneSkinnedScene(refereeTemplate);
@@ -331,17 +330,28 @@ function buildReferees(lengthYards) {
 
     const mixer = new THREE.AnimationMixer(model);
     const walkAction = mixer.clipAction(walkClip);
+    const bindLeft = leftArm ? leftArm.rotation.clone() : null;
+    const bindRight = rightArm ? rightArm.rotation.clone() : null;
+    if (leftArm && rightArm) {
+      // referee.glb's raw bind pose is a T-pose (arms straight out to the
+      // sides) -- same starting point Field Goal Kick's own referee has,
+      // fixed there (setRefereeIdle()) by rotating the arms down into a
+      // relaxed standing pose rather than leaving them in the T-pose
+      // whenever a touchdown hasn't happened (yet) to trigger the signal.
+      leftArm.rotation.set(bindLeft.x + REF_ARM_IDLE_X, bindLeft.y, bindLeft.z);
+      rightArm.rotation.set(bindRight.x + REF_ARM_IDLE_X, bindRight.y, bindRight.z);
+    }
     referees.push({
       group, mixer, walkAction, leftArm, rightArm,
-      bindLeft: leftArm ? leftArm.rotation.clone() : null,
-      bindRight: rightArm ? rightArm.rotation.clone() : null,
+      bindLeft, bindRight,
       armTweenElapsed: null,
     });
   });
   scene.add(refereeGroup);
 }
 
-const REF_ARM_UP_X = -Math.PI / 2; // same value as Field Goal Kick's own REF_ARM_UP_X -- rotates the arm from resting (down) to straight up
+const REF_ARM_IDLE_X = Math.PI / 2; // same value as Field Goal Kick's own REF_ARM_IDLE_X -- rotates the arm from the raw T-pose bind down into a relaxed standing pose
+const REF_ARM_UP_X = -Math.PI / 2; // same value as Field Goal Kick's own REF_ARM_UP_X -- rotates the arm from the T-pose bind to straight up
 const REF_ARM_RAISE_DURATION = 0.45; // seconds -- same duration Field Goal Kick's own signal tween uses
 
 // Called the instant a touchdown is scored (see the touchdown block in
@@ -364,6 +374,12 @@ function triggerRefereeCelebration() {
     const onFinished = (e) => {
       if (e.action !== r.walkAction) return;
       r.mixer.removeEventListener('finished', onFinished);
+      // Tween FROM wherever the walk clip's own last frame actually left
+      // the arms (its natural mid-stride swing, not a fixed assumed pose)
+      // TO the signal target -- captured fresh here rather than assumed,
+      // so the sweep always starts from the real current pose.
+      r.armTweenFromLeftX = r.leftArm.rotation.x;
+      r.armTweenFromRightX = r.rightArm.rotation.x;
       r.armTweenElapsed = 0;
     };
     r.mixer.addEventListener('finished', onFinished);
@@ -377,8 +393,10 @@ function updateRefereeAnimations(dt) {
       r.armTweenElapsed += dt;
       const t = Math.min(1, r.armTweenElapsed / REF_ARM_RAISE_DURATION);
       const e = easeOutCubic(t);
-      r.leftArm.rotation.x = r.bindLeft.x + REF_ARM_UP_X * e;
-      r.rightArm.rotation.x = r.bindRight.x + REF_ARM_UP_X * e;
+      const targetLeftX = r.bindLeft.x + REF_ARM_UP_X;
+      const targetRightX = r.bindRight.x + REF_ARM_UP_X;
+      r.leftArm.rotation.x = r.armTweenFromLeftX + (targetLeftX - r.armTweenFromLeftX) * e;
+      r.rightArm.rotation.x = r.armTweenFromRightX + (targetRightX - r.armTweenFromRightX) * e;
       if (t >= 1) r.armTweenElapsed = null; // done -- left holding the arms-up pose, same as a real ref holding the signal through the celebration
     }
   }
