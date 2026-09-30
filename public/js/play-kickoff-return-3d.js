@@ -96,6 +96,9 @@ let cheerleaders = []; // { mixer } for each spawned instance -- see buildCheerl
 let refereeTemplate = null; // public/models/referee.glb -- same Rodin/Mixamo model Field Goal Kick uses
 let referees = []; // { group, leftArm, rightArm, bindLeft, bindRight, armTweenElapsed } -- see buildReferees()
 let cameramanTemplate = null; // public/models/cameraman.glb -- user's own Rodin download, a static kneeling pose, no rig/animation at all
+let sidelineBoredClip = null; // public/models/sideline-bored.glb -- user's own Mixamo "Bored" download, animation-only
+let sidelineIdleClip = null; // public/models/sideline-idle.glb -- user's own Mixamo "Standing Idle" download, animation-only
+let sidelinePlayers = []; // { mixer } for each spawned instance -- see buildSidelinePlayers()
 
 function stripeTexture() {
   const c = document.createElement('canvas');
@@ -221,6 +224,7 @@ function buildField(lengthYards) {
   buildCheerleaders(lengthYards);
   buildReferees(lengthYards);
   buildCameraman(lengthYards);
+  buildSidelinePlayers(lengthYards);
 }
 
 // ---- Endzone color fill + "HOME" lettering --------------------------------
@@ -591,6 +595,68 @@ function updateCameraman() {
   }
 }
 
+// ---- Sideline players --------------------------------------------------------
+// Reuses the existing blocker.glb model (already blue, already Mixamo-rigged,
+// no new character asset needed) -- lined up along the LEFT sideline (-X,
+// matching the referees'/pylons' own X convention) between the two 40-yard
+// lines, facing INWARD across the field. Each one loops one of two idle
+// clips (the user's own Mixamo "Bored"/"Standing Idle" downloads),
+// alternating which clip a given player gets so neighbors don't all mirror
+// each other, plus a random start offset so even two players on the SAME
+// clip don't sync up.
+let sidelineGroup = null;
+function buildSidelinePlayers(lengthYards) {
+  if (sidelineGroup) scene.remove(sidelineGroup);
+  sidelinePlayers = [];
+  if (!blockerTemplate || !sidelineBoredClip || !sidelineIdleClip) return;
+  sidelineGroup = new THREE.Group();
+
+  const SIDELINE_PLAYER_X = -(FIELD_WIDTH / 2 - SIDELINE_INSET); // same sideline X the pylons/referees use
+  const NEAR_40 = -40; // 40yd from the returner's OWN goal line (z=0)
+  const FAR_40 = -(lengthYards - 40); // 40yd from the OPPONENT's goal line
+  const COUNT = 10;
+  const HALF_SPAN = Math.abs(NEAR_40 - FAR_40) / 2;
+  const CENTER_Z = (NEAR_40 + FAR_40) / 2;
+
+  const clips = [sidelineBoredClip, sidelineIdleClip];
+  for (let i = 0; i < COUNT; i++) {
+    const model = cloneSkinnedScene(blockerTemplate);
+    // Blocker's raw orientation faces +Z, same as the cheerleaders/referees
+    // (its own Math.PI correction elsewhere in this file is only needed to
+    // make it run DOWNFIELD, -Z, as a gameplay blocker) -- rotating +90
+    // turns that +Z into +X, facing inward from the left sideline.
+    model.rotation.y = Math.PI / 2;
+    model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+
+    // Same reduced-rig/full-rig mismatch already hit with the referee's own
+    // walk clip -- filter each clip's tracks down to bones this model
+    // actually has before playing it, rather than risk the same
+    // THREE.PropertyBinding console-warning flood.
+    const modelBoneNames = new Set();
+    model.traverse((o) => { if (o.isBone) modelBoneNames.add(o.name); });
+    const rawClip = clips[i % clips.length];
+    const tracks = rawClip.tracks.filter((t) => modelBoneNames.has(t.name.split('.')[0]));
+    const clip = new THREE.AnimationClip(rawClip.name, rawClip.duration, tracks);
+
+    const mixer = new THREE.AnimationMixer(model);
+    mixer.clipAction(clip).play();
+    mixer.setTime(Math.random() * clip.duration);
+
+    const group = new THREE.Group();
+    group.add(model);
+    group.position.set(SIDELINE_PLAYER_X, 0, CENTER_Z + evenLineX(i, COUNT, HALF_SPAN));
+    sidelineGroup.add(group);
+
+    sidelinePlayers.push({ mixer });
+  }
+
+  scene.add(sidelineGroup);
+}
+
+function updateSidelinePlayers(dt) {
+  for (const p of sidelinePlayers) p.mixer.update(dt);
+}
+
 // ---- Cheerleaders ---------------------------------------------------------
 // Two squads (two rows of the same 4 cheerleader-1..4.glb models, cycling
 // through them since each row is wider than 4), one per side of the goalpost
@@ -942,6 +1008,15 @@ new GLTFLoader().load('/models/cameraman.glb', (gltf) => {
   buildCameraman(fieldYards);
 }, undefined, (err) => console.error('cameraman model load failed', err));
 
+new GLTFLoader().load('/models/sideline-bored.glb', (gltf) => {
+  sidelineBoredClip = gltf.animations[0];
+  buildSidelinePlayers(fieldYards);
+}, undefined, (err) => console.error('sideline bored animation load failed', err));
+new GLTFLoader().load('/models/sideline-idle.glb', (gltf) => {
+  sidelineIdleClip = gltf.animations[0];
+  buildSidelinePlayers(fieldYards);
+}, undefined, (err) => console.error('sideline idle animation load failed', err));
+
 // ---- Runner -------------------------------------------------------------
 const RUNNER_GROUP = new THREE.Group();
 scene.add(RUNNER_GROUP);
@@ -1147,6 +1222,7 @@ const charactersLoaded = Promise.all([
     blockerTemplate.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   }
   blockerSadIdleClip = sadIdleGltf.animations[0];
+  buildSidelinePlayers(fieldYards); // blockerTemplate is one of its 3 dependencies (the other 2 -- the idle clips -- load independently and may arrive before or after this)
   runnerKickClip = runnerGltf.animations[0]; // player-kick.glb's own baked run-up+kick clip -- applied to a defender-model kicker in spawnKicker()
 
   // Same raw sad-idle clip the blockers react with on a tackle, bound to
@@ -2533,6 +2609,7 @@ function tick(now) {
     updateCheerleaderAnimations(dt);
     updateRefereeAnimations(dt);
     updateCameraman();
+    updateSidelinePlayers(dt);
     // Skipped during 'tackled': the fall clips' own baked root motion is
     // what actually drags him down to the ground -- stripping it every
     // frame like the run cycle needs would hold him rigidly standing
