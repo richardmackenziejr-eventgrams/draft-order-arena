@@ -543,17 +543,20 @@ function buildCameraman(lengthYards) {
   if (!cameramanTemplate) return;
   cameramanGroup = new THREE.Group();
 
-  // Kneels right next to the near upright, next to the goalpost's own base
+  // Kneels near the near upright, close to the goalpost's own base
   // (GOALPOST_SETBACK ≈ ENDZONE_DEPTH + 0.5, mirrored here rather than
-  // imported since that constant is local to buildGoalposts()), plus one at
-  // each back corner -- past the cheer squad's own widest row (x up to ~21,
-  // see buildCheerleaders() above), near where the back pylons sit
-  // (x = FIELD_WIDTH/2 - SIDELINE_INSET ≈ 25.65) but pulled in a couple
-  // yards so he doesn't sit on top of the pylon itself.
+  // imported since that constant is local to buildGoalposts()) but pulled
+  // back an extra yard past it, plus one at each back corner -- past the
+  // cheer squad's own widest row (x up to ~21, see buildCheerleaders()
+  // above), near where the back pylons sit (x = FIELD_WIDTH/2 -
+  // SIDELINE_INSET ≈ 25.65) but pulled in a couple yards so he doesn't sit
+  // on top of the pylon itself. All three pulled a few yards further back
+  // from the back-of-endzone line than their first placement -- per
+  // feedback, sitting right ON that line read as crowding it.
   const spots = [
-    { x: UPRIGHT_HALF_SPAN + 0.5, z: -(lengthYards + ENDZONE_DEPTH + 0.5) },
-    { x: FIELD_WIDTH / 2 - SIDELINE_INSET - 2, z: -(lengthYards + ENDZONE_DEPTH) },
-    { x: -(FIELD_WIDTH / 2 - SIDELINE_INSET - 2), z: -(lengthYards + ENDZONE_DEPTH) },
+    { x: UPRIGHT_HALF_SPAN + 0.5, z: -(lengthYards + ENDZONE_DEPTH + 1.5) },
+    { x: FIELD_WIDTH / 2 - SIDELINE_INSET - 2, z: -(lengthYards + ENDZONE_DEPTH + 3) },
+    { x: -(FIELD_WIDTH / 2 - SIDELINE_INSET - 2), z: -(lengthYards + ENDZONE_DEPTH + 3) },
   ];
 
   spots.forEach(({ x, z }) => {
