@@ -79,6 +79,10 @@ const ENDZONE_DEPTH = 10;
 // fix already applied to ENDZONE_DEPTH/CORNER_FRONT_OFFSET for the same
 // two-functions-need-the-same-number reason.
 const UPRIGHT_HALF_SPAN = 2.82;
+// Inset of the drawn sideline from the true field edge -- hoisted for the
+// same reason as UPRIGHT_HALF_SPAN above, now that buildPylons() also needs
+// it to sit the pylons right on the sideline/goal-line corners.
+const SIDELINE_INSET = 1;
 
 // Declared up here (not down with the other character templates below)
 // because the independent, non-blocking GLTFLoader calls for these run
@@ -174,7 +178,6 @@ function buildField(lengthYards) {
   // true edge as the yard lines/hash marks already use elsewhere. Spans
   // both endzones too (a real sideline runs the full length, goal line to
   // goal line and both back lines), not just the playable field.
-  const SIDELINE_INSET = 1;
   const sidelineGeo = new THREE.PlaneGeometry(0.3, lengthYards + ENDZONE_DEPTH * 2);
   [-1, 1].forEach((side) => {
     const sideline = new THREE.Mesh(sidelineGeo, lineMat);
@@ -211,10 +214,111 @@ function buildField(lengthYards) {
   }
   scene.add(hashMesh);
 
+  buildEndzoneMarkings(lengthYards);
+  buildPylons(lengthYards);
   buildEndzoneStands(lengthYards);
   buildGoalposts(lengthYards);
   buildCheerleaders(lengthYards);
   buildReferees(lengthYards);
+}
+
+// ---- Endzone color fill + "HOME" lettering --------------------------------
+// A solid-color plane over each endzone (real fields paint the whole zone a
+// team color) plus block-letter text drawn via a canvas texture -- same
+// CanvasTexture technique stripeTexture() above already uses for the field's
+// own grass stripes, just drawing text instead of stripes. Text is drawn
+// with a THICK white stroke behind a blue fill (ctx.strokeText() under
+// ctx.fillText()) so the letters stay legible against the also-blue
+// background -- real fields do the same thing for exactly this reason.
+function endzoneTextTexture(text, fillColor, strokeColor) {
+  const c = document.createElement('canvas');
+  c.width = 1024; c.height = 220;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  ctx.font = '900 170px Arial, Helvetica, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 22;
+  ctx.strokeStyle = strokeColor;
+  ctx.fillStyle = fillColor;
+  ctx.strokeText(text, c.width / 2, c.height / 2 + 8);
+  ctx.fillText(text, c.width / 2, c.height / 2 + 8);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const ENDZONE_FILL_COLOR = 0x0a2f6b; // dark navy, same family as the team's own blue (runner/cheerleaders/blockers)
+const ENDZONE_TEXT_FILL = 0x1c4fa8; // a lighter blue than the fill -- reads as a deliberate two-tone, not just invisible-on-itself, even before the white stroke does the real legibility work
+let endzoneMarkingsGroup = null;
+function buildEndzoneMarkings(lengthYards) {
+  if (endzoneMarkingsGroup) scene.remove(endzoneMarkingsGroup);
+  endzoneMarkingsGroup = new THREE.Group();
+
+  const fillMat = new THREE.MeshStandardMaterial({ color: ENDZONE_FILL_COLOR, roughness: 0.95 });
+  const textTex = endzoneTextTexture('HOME', `#${ENDZONE_TEXT_FILL.toString(16).padStart(6, '0')}`, '#ffffff');
+  const textMat = new THREE.MeshBasicMaterial({ map: textTex, transparent: true });
+
+  // Both endzones get the same treatment -- it's the home team's stadium at
+  // both ends, same as a real one. Near end spans z=0..ENDZONE_DEPTH (center
+  // ENDZONE_DEPTH/2); far end spans z=-lengthYards..-(lengthYards+ENDZONE_DEPTH)
+  // (center -(lengthYards+ENDZONE_DEPTH/2)).
+  [-(lengthYards + ENDZONE_DEPTH / 2), ENDZONE_DEPTH / 2].forEach((z) => {
+    // y=0.005: above the bare striped field (y=0) but below the goal/back
+    // lines and sideline (y=0.01-0.011) -- so the white boundary lines stay
+    // visibly on top of the fill at the zone's own edges, same layering
+    // order as everything else in buildField().
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_WIDTH, ENDZONE_DEPTH), fillMat);
+    fill.rotation.x = -Math.PI / 2;
+    fill.position.set(0, 0.005, z);
+    fill.receiveShadow = true;
+    endzoneMarkingsGroup.add(fill);
+
+    // Baseline runs ACROSS the field (along X, same as the fill's own long
+    // axis) -- the common real broadcast convention (letters upright as
+    // seen looking into the endzone from midfield), and it fits this
+    // zone's own proportions naturally (53.3yd wide, only 10yd deep --
+    // plenty of room lengthwise, tight vertically).
+    const TEXT_WIDTH = ENDZONE_DEPTH * 3.2; // yards
+    const TEXT_HEIGHT = TEXT_WIDTH * (220 / 1024); // matches the canvas's own aspect ratio, ~6.9yd -- comfortably inside the 10yd-deep zone
+    const text = new THREE.Mesh(new THREE.PlaneGeometry(TEXT_WIDTH, TEXT_HEIGHT), textMat);
+    text.rotation.x = -Math.PI / 2;
+    text.position.set(0, 0.006, z);
+    endzoneMarkingsGroup.add(text);
+  });
+
+  scene.add(endzoneMarkingsGroup);
+}
+
+// ---- Pylons ----------------------------------------------------------------
+// One at each of the 4 corners of EACH endzone (8 total, matching a real
+// NFL field) -- where the goal line and back-of-endzone line each meet the
+// sideline. Bright orange, same real-world size regardless of field width
+// (absolute units, like the goalposts).
+const PYLON_COLOR = 0xff4400;
+const PYLON_WIDTH = 0.15; // yards
+const PYLON_HEIGHT = 0.5; // yards -- real pylons are ~18in
+let pylonGroup = null;
+function buildPylons(lengthYards) {
+  if (pylonGroup) scene.remove(pylonGroup);
+  pylonGroup = new THREE.Group();
+
+  const pylonMat = new THREE.MeshStandardMaterial({ color: PYLON_COLOR, roughness: 0.5 });
+  const pylonGeo = new THREE.BoxGeometry(PYLON_WIDTH, PYLON_HEIGHT, PYLON_WIDTH);
+  const sidelineX = FIELD_WIDTH / 2 - SIDELINE_INSET; // right on the drawn sideline, same X the sideline mesh itself uses
+
+  const cornerZs = [0, ENDZONE_DEPTH, -lengthYards, -(lengthYards + ENDZONE_DEPTH)];
+  cornerZs.forEach((z) => {
+    [-1, 1].forEach((side) => {
+      const pylon = new THREE.Mesh(pylonGeo, pylonMat);
+      pylon.position.set(side * sidelineX, PYLON_HEIGHT / 2, z);
+      pylon.castShadow = true;
+      pylonGroup.add(pylon);
+    });
+  });
+
+  scene.add(pylonGroup);
 }
 
 // ---- Goalposts -----------------------------------------------------------
@@ -309,7 +413,7 @@ function buildReferees(lengthYards) {
   // limit here -- not the true sideline distance, but still clearly further
   // toward it than standing by the goalpost.
   const REF_X = 15;
-  const z = -(lengthYards + ENDZONE_DEPTH); // on the back-of-endzone line itself, per earlier live feedback -- same line buildField()'s own back-line marking and the cheer squad's zone both key off
+  const z = -lengthYards; // the FRONT (goal) line of the endzone, next to the front pylon -- per live feedback, moved off the back line a real goal-line official doesn't stand on
 
   [1, -1].forEach((side) => {
     const model = cloneSkinnedScene(refereeTemplate);
