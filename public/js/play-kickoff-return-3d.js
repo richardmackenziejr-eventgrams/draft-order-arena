@@ -525,9 +525,12 @@ function updateRefereeAnimations(dt) {
 // The user's own Rodin download -- a static kneeling-with-camera pose baked
 // directly into the mesh (no rig, no animation at all, unlike every other
 // character in this file). Purely decorative, one instance, parked beside
-// the FAR goalpost "filming" the action -- never moves, never gated behind
-// charactersLoaded.
+// the FAR goalpost "filming" the action. Never gated behind charactersLoaded.
+// Position is fixed, but he does turn in place to track the runner every
+// frame (updateCameraman(), below) -- a fixed facing looked wrong the
+// moment the runner wasn't lined up directly in front of him.
 let cameramanGroup = null;
+let cameramanModel = null; // kept around so updateCameraman() can turn him to track the runner every frame
 function buildCameraman(lengthYards) {
   if (cameramanGroup) scene.remove(cameramanGroup);
   if (!cameramanTemplate) return;
@@ -539,10 +542,11 @@ function buildCameraman(lengthYards) {
   // Math.PI "fix" based on a top-down read that turned out to be a
   // misjudged silhouette (kneeling poses don't read clearly from directly
   // overhead) -- that fix actually flipped him to face AWAY from the field.
-  // Confirmed the real answer this time from an eye-level shot on the field
-  // side looking back at him (the same vantage a returner running toward
-  // the endzone would have): raw orientation shows his face/camera pointed
-  // straight at that camera, no rotation needed.
+  // Confirmed the real answer via a calibrated reference (an arrow on a
+  // known world axis, and an eye-level shot from the field looking back at
+  // him): raw orientation shows his face/camera pointed at the field,
+  // no rotation needed as the RESTING orientation -- see updateCameraman()
+  // for why he doesn't just sit at that fixed angle, though.
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   // Kneels right next to the near upright, next to the goalpost's own base
   // (GOALPOST_SETBACK ≈ ENDZONE_DEPTH + 0.5, mirrored here rather than
@@ -551,8 +555,26 @@ function buildCameraman(lengthYards) {
   const CAMERAMAN_Z = -(lengthYards + ENDZONE_DEPTH + 0.5);
   model.position.set(CAMERAMAN_X, 0, CAMERAMAN_Z);
   cameramanGroup.add(model);
+  cameramanModel = model;
 
   scene.add(cameramanGroup);
+}
+
+// Turns to track the returner every frame, like a real sideline photographer
+// actually would -- a fixed facing looked wrong per live feedback the
+// moment the runner wasn't lined up directly in front of him. No base-yaw
+// correction in this formula (unlike the defenders'/blockers' own
+// `atan2(dx,dz) + Math.PI`) because this model's raw orientation already
+// faces +Z with zero correction, so `atan2(dx,dz)` alone already points
+// him at a target sitting on +Z -- the same convention, just without the
+// extra half-turn the -Z-raw characters need.
+function updateCameraman() {
+  if (!cameramanModel) return;
+  const dx = RUNNER_GROUP.position.x - cameramanModel.position.x;
+  const dz = RUNNER_GROUP.position.z - cameramanModel.position.z;
+  if (Math.abs(dx) > 1e-4 || Math.abs(dz) > 1e-4) {
+    cameramanModel.rotation.y = Math.atan2(dx, dz);
+  }
 }
 
 // ---- Cheerleaders ---------------------------------------------------------
@@ -1297,13 +1319,18 @@ const camTarget = new THREE.Vector3();
 // same way a real broadcast lets you see a cut via the hash marks/sideline,
 // not via the camera doing anything unusual.
 function snapCamera() {
-  // Clamped at 0 (the returner's own goal line) -- without this, a return
-  // starting right at the goal line puts the camera ITSELF a few yards
-  // inside the near end zone (CHASE_BACK=5.5yd behind a runner standing at
-  // z=0). Harmless when the end zone was plain grass, but visibly odd now
-  // that it's a painted navy zone -- confirmed live (the camera briefly
-  // sits inside blue-painted turf at the very start of a return).
-  camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, Math.min(RUNNER_GROUP.position.z + CHASE_BACK, 0));
+  // NOT clamped at the goal line -- a clamped version was tried (holding
+  // the camera at z=0 whenever the natural z+CHASE_BACK would be positive)
+  // to keep the camera out of the now-painted near end zone, but that
+  // freezes the camera in place for the runner's first CHASE_BACK (5.5yd)
+  // of movement while he keeps moving -- he visibly pulls away from a
+  // stationary camera instead of the camera trailing him at a constant
+  // distance, confirmed live as a real regression, worse than the thing it
+  // was fixing. Reverted. The camera DOES briefly sit inside the near end
+  // zone for the first few yards of every return (CHASE_BACK behind a
+  // runner who starts at his own goal line) -- a real, known trade-off,
+  // not fixed here.
+  camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
   camera.lookAt(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
 }
 
@@ -2491,6 +2518,7 @@ function tick(now) {
     updateKickerAnimation(dt);
     updateCheerleaderAnimations(dt);
     updateRefereeAnimations(dt);
+    updateCameraman();
     // Skipped during 'tackled': the fall clips' own baked root motion is
     // what actually drags him down to the ground -- stripping it every
     // frame like the run cycle needs would hold him rigidly standing
@@ -2521,8 +2549,10 @@ function tick(now) {
   // freezeCelebrationCamera) so the celebration reads as one held shot
   // instead of the camera continuing to chase into the end zone.
   if (!celebrationCamFrozen) {
-    // Same near-end-zone clamp as snapCamera() -- see its own comment.
-    camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, Math.min(RUNNER_GROUP.position.z + CHASE_BACK, 0));
+    // Not clamped -- see snapCamera()'s own comment on why the clamped
+    // version was reverted (it froze the camera for the runner's first
+    // few yards instead of trailing him, a worse regression).
+    camera.position.set(RUNNER_GROUP.position.x, CHASE_HEIGHT, RUNNER_GROUP.position.z + CHASE_BACK);
     camTarget.set(RUNNER_GROUP.position.x, LOOK_HEIGHT, RUNNER_GROUP.position.z - LOOK_AHEAD);
     camera.lookAt(camTarget);
   }
