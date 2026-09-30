@@ -260,12 +260,13 @@ function buildGoalposts(lengthYards) {
 }
 
 // ---- Cheerleaders ---------------------------------------------------------
-// Two 4-cheerleader squads (cheerleader-1..4.glb, same 1-2-3-4 order on both
-// sides), one per side of the goalpost at the FAR (scoring) end only --
-// that's the endzone the runner actually reaches on a touchdown, matching
-// where they'd be seen/used in-game. Purely decorative, like the stadium
-// stands: loaded independently (see the GLTFLoader calls near
-// stadium-stand.glb below), never gated behind charactersLoaded.
+// Two 8-cheerleader squads (two rows of the same 4 cheerleader-1..4.glb
+// models, same 1-2-3-4 order every row/side), one per side of the goalpost
+// at the FAR (scoring) end only -- that's the endzone the runner actually
+// reaches on a touchdown, matching where they'd be seen/used in-game.
+// Purely decorative, like the stadium stands: loaded independently (see the
+// GLTFLoader calls near stadium-stand.glb below), never gated behind
+// charactersLoaded.
 let cheerleaderGroup = null;
 function buildCheerleaders(lengthYards) {
   if (cheerleaderGroup) scene.remove(cheerleaderGroup);
@@ -273,36 +274,38 @@ function buildCheerleaders(lengthYards) {
   if (!cheerCheeringClip) return; // wait for the shared clip too -- a T-posed cheerleader frozen in place would look broken, worse than just not showing up yet
   cheerleaderGroup = new THREE.Group();
 
-  // CHEER_SETBACK sits roughly at the midpoint of the clear grass strip
-  // behind the far endzone: between the back-of-endzone line (ENDZONE_DEPTH
-  // behind the goal line) and the stand's own front edge
-  // (ENDZONE_STAND_SETBACK, buildEndzoneStands() below) -- comfortable
-  // margin either side even if that setback gets retuned again later.
-  const CHEER_SETBACK = 14;
+  // Two rows, both inside the clear grass strip behind the far endzone:
+  // between the back-of-endzone line (ENDZONE_DEPTH behind the goal line)
+  // and the stand's own front edge (ENDZONE_STAND_SETBACK, buildEndzoneStands()
+  // below) -- 12/17 leaves a comfortable ~2yd margin off the back line and
+  // ~1.3yd off the stand front even if that setback gets retuned again.
+  const CHEER_ROW_SETBACKS = [12, 17];
   const CHEER_GROUP_CENTER_X = 13; // roughly the middle of each half of the field -- clear of the goalpost uprights (UPRIGHT_HALF_SPAN above) and well short of the sideline stands
-  const CHEER_GROUP_HALF_SPREAD = 3; // yards each side of that center the 4 spread across (evenLineX below) -- a little separation between each of them, not shoulder to shoulder
-  const z = -(lengthYards + CHEER_SETBACK);
+  const CHEER_GROUP_HALF_SPREAD = 3; // yards each side of that center the 4-per-row spread across (evenLineX below) -- a little separation between each of them, not shoulder to shoulder
 
   [1, -1].forEach((side) => {
-    for (let i = 0; i < CHEERLEADER_COUNT; i++) {
-      const template = cheerleaderTemplates[i];
-      if (!template) continue; // that particular model hasn't loaded yet -- buildCheerleaders() reruns once it does
-      const model = cloneSkinnedScene(template);
-      // No base-facing correction here (unlike the runner/defender/blocker
-      // models, which all apply `rotation.y = Math.PI`) -- those need it to
-      // face this game's own "forward" (-Z) running direction, but a
-      // cheerleader stationed past the FAR goal line just needs to face
-      // back toward the field (+Z), which is the raw/uncorrected Mixamo
-      // export orientation already.
-      model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-      const mixer = new THREE.AnimationMixer(model);
-      mixer.clipAction(cheerCheeringClip).play();
-      mixer.setTime(Math.random() * cheerCheeringClip.duration); // stagger each one's loop so all 8 don't cheer in lockstep
-      const offset = CHEER_GROUP_CENTER_X + evenLineX(i, CHEERLEADER_COUNT, CHEER_GROUP_HALF_SPREAD);
-      model.position.set(side * offset, 0, z);
-      cheerleaderGroup.add(model);
-      cheerleaders.push({ mixer });
-    }
+    CHEER_ROW_SETBACKS.forEach((setback) => {
+      const z = -(lengthYards + setback);
+      for (let i = 0; i < CHEERLEADER_COUNT; i++) {
+        const template = cheerleaderTemplates[i];
+        if (!template) continue; // that particular model hasn't loaded yet -- buildCheerleaders() reruns once it does
+        const model = cloneSkinnedScene(template);
+        // No base-facing correction here (unlike the runner/defender/blocker
+        // models, which all apply `rotation.y = Math.PI`) -- those need it to
+        // face this game's own "forward" (-Z) running direction, but a
+        // cheerleader stationed past the FAR goal line just needs to face
+        // back toward the field (+Z), which is the raw/uncorrected Mixamo
+        // export orientation already.
+        model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+        const mixer = new THREE.AnimationMixer(model);
+        mixer.clipAction(cheerCheeringClip).play();
+        mixer.setTime(Math.random() * cheerCheeringClip.duration); // stagger each one's loop so all 16 don't cheer in lockstep
+        const offset = CHEER_GROUP_CENTER_X + evenLineX(i, CHEERLEADER_COUNT, CHEER_GROUP_HALF_SPREAD);
+        model.position.set(side * offset, 0, z);
+        cheerleaderGroup.add(model);
+        cheerleaders.push({ mixer });
+      }
+    });
   });
   scene.add(cheerleaderGroup);
 }
