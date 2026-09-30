@@ -269,8 +269,11 @@ function buildEndzoneMarkings(lengthYards) {
     // y=0.005: above the bare striped field (y=0) but below the goal/back
     // lines and sideline (y=0.01-0.011) -- so the white boundary lines stay
     // visibly on top of the fill at the zone's own edges, same layering
-    // order as everything else in buildField().
-    const fill = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_WIDTH, ENDZONE_DEPTH), fillMat);
+    // order as everything else in buildField(). Width stops at the drawn
+    // SIDELINE (FIELD_WIDTH - SIDELINE_INSET*2), not the true field edge --
+    // using FIELD_WIDTH itself let the blue visibly spill a yard past the
+    // white sideline mark on both sides, confirmed live.
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_WIDTH - SIDELINE_INSET * 2, ENDZONE_DEPTH), fillMat);
     fill.rotation.x = -Math.PI / 2;
     fill.position.set(0, 0.005, z);
     fill.receiveShadow = true;
