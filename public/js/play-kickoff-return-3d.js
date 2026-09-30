@@ -301,10 +301,14 @@ function buildReferees(lengthYards) {
     // referee standing just past the goal line needs to face back toward
     // the field, which is the raw/uncorrected orientation already.
     model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-    let leftArm = null, rightArm = null;
+    let leftArm = null, rightArm = null, leftForeArm = null, rightForeArm = null, leftHand = null, rightHand = null;
     model.traverse((o) => {
       if (o.name === 'mixamorigLeftArm') leftArm = o;
       if (o.name === 'mixamorigRightArm') rightArm = o;
+      if (o.name === 'mixamorigLeftForeArm') leftForeArm = o;
+      if (o.name === 'mixamorigRightForeArm') rightForeArm = o;
+      if (o.name === 'mixamorigLeftHand') leftHand = o;
+      if (o.name === 'mixamorigRightHand') rightHand = o;
     });
     if (!leftArm || !rightArm) { console.warn('referee.glb missing expected arm bones -- signal animation will be skipped'); }
 
@@ -342,7 +346,7 @@ function buildReferees(lengthYards) {
       rightArm.rotation.set(bindRight.x + REF_ARM_IDLE_X, bindRight.y, bindRight.z);
     }
     referees.push({
-      group, mixer, walkAction, leftArm, rightArm,
+      group, mixer, walkAction, leftArm, rightArm, leftForeArm, rightForeArm, leftHand, rightHand,
       bindLeft, bindRight,
       armTweenElapsed: null,
     });
@@ -380,6 +384,19 @@ function triggerRefereeCelebration() {
       // so the sweep always starts from the real current pose.
       r.armTweenFromLeftX = r.leftArm.rotation.x;
       r.armTweenFromRightX = r.rightArm.rotation.x;
+      // The forearm/hand bones keep whatever local bend they had (their
+      // bind pose isn't a perfectly straight T -- there's a small natural
+      // wrist/elbow bend baked in) -- straighten them out to zero as part
+      // of the signal so the arm reads as one clean line overhead instead
+      // of a straight upper arm with the hand visibly bent/splayed out at
+      // the end (confirmed live: barely visible with the arm out to the
+      // side, obviously wrong once the arm points straight up).
+      r.straightenFrom = {
+        leftForeArm: r.leftForeArm ? r.leftForeArm.rotation.clone() : null,
+        rightForeArm: r.rightForeArm ? r.rightForeArm.rotation.clone() : null,
+        leftHand: r.leftHand ? r.leftHand.rotation.clone() : null,
+        rightHand: r.rightHand ? r.rightHand.rotation.clone() : null,
+      };
       r.armTweenElapsed = 0;
     };
     r.mixer.addEventListener('finished', onFinished);
@@ -397,6 +414,17 @@ function updateRefereeAnimations(dt) {
       const targetRightX = r.bindRight.x + REF_ARM_UP_X;
       r.leftArm.rotation.x = r.armTweenFromLeftX + (targetLeftX - r.armTweenFromLeftX) * e;
       r.rightArm.rotation.x = r.armTweenFromRightX + (targetRightX - r.armTweenFromRightX) * e;
+      // Straighten the forearm/hand toward zero local rotation (a dead-
+      // straight line continuing the now-vertical upper arm) at the same
+      // pace as the raise itself.
+      const straighten = (bone, from) => {
+        if (!bone || !from) return;
+        bone.rotation.set(from.x * (1 - e), from.y * (1 - e), from.z * (1 - e));
+      };
+      straighten(r.leftForeArm, r.straightenFrom.leftForeArm);
+      straighten(r.rightForeArm, r.straightenFrom.rightForeArm);
+      straighten(r.leftHand, r.straightenFrom.leftHand);
+      straighten(r.rightHand, r.straightenFrom.rightHand);
       if (t >= 1) r.armTweenElapsed = null; // done -- left holding the arms-up pose, same as a real ref holding the signal through the celebration
     }
   }
