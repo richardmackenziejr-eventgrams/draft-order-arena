@@ -446,7 +446,7 @@ function buildEndzoneStands(lengthYards) {
   // offset (not a shared/flat margin) so the straight tile and the
   // corners land their front edges at the SAME place instead of one
   // sticking out past the other.
-  const ENDZONE_STAND_SETBACK = 20 * (2 / 3); // ~13.3yd -- pushed forward (closer to the field) by 1/3 of the previous 20yd distance, per live feedback. Still clear of the goalposts (ENDZONE_DEPTH + GOALPOST_LINE_CLEARANCE ≈ 10.5yd) and the back-of-endzone line (ENDZONE_DEPTH = 10yd) by a comfortable margin.
+  const ENDZONE_STAND_SETBACK = 20 * (2 / 3) + 5; // ~18.3yd -- +5 more past the previous ~13.3yd, per live feedback: leaves ~8.3yd of clear grass behind the back-of-endzone line (ENDZONE_DEPTH=10yd) instead of ~3.3yd, room for a planned cheerleader routine back there. Still clear of the goalposts (ENDZONE_DEPTH + GOALPOST_LINE_CLEARANCE ≈ 10.5yd) by an even wider margin than before.
   const farFrontZ = -(lengthYards + ENDZONE_STAND_SETBACK);
   const farBackZ = farFrontZ - STAND_MODEL_FRONT_OFFSET;
   const farCornerZ = farFrontZ - CORNER_FRONT_OFFSET;
