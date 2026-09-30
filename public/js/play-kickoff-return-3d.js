@@ -624,7 +624,7 @@ function buildSidelinePlayers(lengthYards) {
   // out-of-bounds limit) -- going further out than that puts players
   // inside the stand geometry, which is what a first attempt at this did
   // (they rendered fine, just invisible, swallowed by the riser mesh).
-  const ROW_X = [-(FIELD_WIDTH / 2 + 1), -(FIELD_WIDTH / 2 + 4)];
+  const ROW_X = [-(FIELD_WIDTH / 2 + 1), -(FIELD_WIDTH / 2 + 2.3)];
   const NEAR_40 = -40; // 40yd from the returner's OWN goal line (z=0)
   const FAR_40 = -(lengthYards - 40); // 40yd from the OPPONENT's goal line
   const CENTER_Z = (NEAR_40 + FAR_40) / 2;
