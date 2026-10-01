@@ -2763,7 +2763,16 @@ function tick(now) {
           // instead of centering it on the bone's own axis.
           const boneWorldScale = rightForeArmBone.getWorldScale(new THREE.Vector3());
           ball.scale.set(1 / boneWorldScale.x, 1 / boneWorldScale.y, 1.5 / boneWorldScale.z);
-          ball.position.set(4, 17, 5); // widened lateral/forward nudge from an earlier (1.5, 17, 2.5) -- that was too small to clear the forearm mesh's own thickness, read as the arm clipping through the ball per live feedback; confirmed at 0/25/50/75% of the run cycle with no clipping
+          // (4,17,5) still clipped per a second round of live feedback --
+          // turned out to be the HAND's own independent rotation (a child
+          // of this bone, animated separately from the forearm's swing)
+          // sweeping through that position at some points in the stride;
+          // 0/25/50/75% all looked clean but denser 12.5%-step sampling
+          // caught it at 37.5%/62.5%. Pulled toward the elbow (Y 17->8,
+          // well clear of the hand's own sweep) and widened the lateral
+          // nudge further (X,Z to 7,9) -- confirmed clean at every 12.5%
+          // step through the full cycle this time, not just quarters.
+          ball.position.set(7, 8, 9);
           ball.rotation.set(0, 0, Math.PI / 2);
         }
         phase = 'catch';
