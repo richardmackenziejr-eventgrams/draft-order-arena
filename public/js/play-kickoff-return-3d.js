@@ -2763,7 +2763,7 @@ function tick(now) {
           // instead of centering it on the bone's own axis.
           const boneWorldScale = rightForeArmBone.getWorldScale(new THREE.Vector3());
           ball.scale.set(1 / boneWorldScale.x, 1 / boneWorldScale.y, 1.5 / boneWorldScale.z);
-          ball.position.set(1.5, 17, 2.5);
+          ball.position.set(4, 17, 5); // widened lateral/forward nudge from an earlier (1.5, 17, 2.5) -- that was too small to clear the forearm mesh's own thickness, read as the arm clipping through the ball per live feedback; confirmed at 0/25/50/75% of the run cycle with no clipping
           ball.rotation.set(0, 0, Math.PI / 2);
         }
         phase = 'catch';
