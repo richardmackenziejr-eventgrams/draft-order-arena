@@ -98,6 +98,7 @@ let referees = []; // { group, leftArm, rightArm, bindLeft, bindRight, armTweenE
 let cameramanTemplate = null; // public/models/cameraman.glb -- user's own Rodin download, a static kneeling pose, no rig/animation at all
 let sidelineBoredClip = null; // public/models/sideline-bored.glb -- user's own Mixamo "Bored" download, animation-only
 let sidelineIdleClip = null; // public/models/sideline-idle.glb -- user's own Mixamo "Standing Idle" download, animation-only
+let sidelineLookingAroundClip = null; // public/models/sideline-looking-around.glb -- user's own Mixamo "Looking Around" download, animation-only
 let sidelinePlayers = []; // { mixer } for each spawned instance -- see buildSidelinePlayers()
 
 function stripeTexture() {
@@ -719,10 +720,10 @@ function updateCameraman() {
 // [[kickoff-return-3d-controls-and-mocap]]) -- no new character assets
 // needed for either. Both sides use the same two-row layout between the two
 // 40-yard lines, facing INWARD across the field, each player looping one of
-// two idle clips (the user's own Mixamo "Bored"/"Standing Idle" downloads),
-// alternating which clip a given player gets so neighbors don't all mirror
-// each other, plus a random start offset so even two players on the SAME
-// clip don't sync up.
+// three idle clips (the user's own Mixamo "Bored"/"Standing Idle"/"Looking
+// Around" downloads), cycling through which clip a given player gets so
+// neighbors don't all mirror each other, plus a random start offset so even
+// two players on the SAME clip don't sync up.
 let sidelineGroup = null;
 function buildSidelinePlayers(lengthYards) {
   if (sidelineGroup) scene.remove(sidelineGroup);
@@ -749,7 +750,12 @@ function buildSidelinePlayers(lengthYards) {
   const FRONT_ROW_COUNT = 10;
   const ROW_GAP_Z = 2.2; // yd between neighbors in a row -- close to the previous single-row spacing
   const FRONT_HALF_SPREAD = (ROW_GAP_Z * (FRONT_ROW_COUNT - 1)) / 2;
-  const clips = [sidelineBoredClip, sidelineIdleClip];
+  // Third clip (Looking Around) is optional at build time -- filtered out
+  // if it hasn't loaded yet rather than gating the whole feature on it, so
+  // players still show up with 2 alternating clips in the meantime; the
+  // clip's own loader calls buildSidelinePlayers() again once it arrives,
+  // upgrading every player to pick from all 3 on the next rebuild.
+  const clips = [sidelineBoredClip, sidelineIdleClip, sidelineLookingAroundClip].filter(Boolean);
 
   // sign -1 = left sideline (blue, blocker.glb), +1 = right sideline (red,
   // defender.glb). Both templates share blocker's own raw-orientation
@@ -1165,6 +1171,10 @@ new GLTFLoader().load('/models/sideline-idle.glb', (gltf) => {
   sidelineIdleClip = gltf.animations[0];
   buildSidelinePlayers(fieldYards);
 }, undefined, (err) => console.error('sideline idle animation load failed', err));
+new GLTFLoader().load('/models/sideline-looking-around.glb', (gltf) => {
+  sidelineLookingAroundClip = gltf.animations[0];
+  buildSidelinePlayers(fieldYards);
+}, undefined, (err) => console.error('sideline looking-around animation load failed', err));
 
 // ---- Runner -------------------------------------------------------------
 const RUNNER_GROUP = new THREE.Group();
@@ -2854,12 +2864,17 @@ async function startReturn(returnConfig) {
   allActions.forEach((a) => { if (a) { a.paused = true; a.enabled = false; a.weight = 1; } });
   // Frame 0 of the run cycle is a mid-stride pose, not a standing one --
   // freezing there for the whole kickoff/hang wait read as him already
-  // running in place before the ball even arrives. stopAction's own LAST
-  // frame (clampWhenFinished's target elsewhere in this file) is a real
-  // standing-still pose already on hand for exactly this rig, so seek
-  // straight there instead of playing the transition -- same "set paused,
-  // don't animate" approach as the run cycle it replaces.
-  if (stopAction) { stopAction.enabled = true; activeAction = stopAction; stopAction.time = stopAction.getClip().duration; }
+  // running in place before the ball even arrives. A first attempt held
+  // stopAction's own last frame instead, on the theory that its
+  // clampWhenFinished target (used elsewhere in this file) would be a
+  // settled stance -- checked directly (rendered that exact frame in
+  // isolation) and it's still a wide, split-leg deceleration lunge, not
+  // actually standing still, which is exactly the same complaint in a
+  // different clip. outOfBoundsAction (blockerSadIdleClip, a genuine
+  // standing-idle loop rather than a movement transition) holds a real
+  // feet-together standing pose at any frame, frame 0 included -- same
+  // "set paused, don't animate" approach as the run cycle it replaces.
+  if (outOfBoundsAction) { outOfBoundsAction.enabled = true; activeAction = outOfBoundsAction; outOfBoundsAction.time = 0; }
   else if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   phase = 'kickoff';
   downReason = 'tackled';
