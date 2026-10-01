@@ -1222,7 +1222,7 @@ let hipsBindPos = null;
 let hipsBindQuat = null;
 let spineBone = null;
 let spineBindQuat = null;
-let rightHandBone = null; // the football is parented to this bone once caught -- see the Kickoff sequence section
+let heldBallMesh = null; // 'HeldFootball' node baked into player-kick.glb itself (real skinned geometry, weighted to mixamorig:RightHand) -- hidden until the catch, see the Kickoff sequence section
 let runnerKickClip = null; // player-kick.glb's own baked "run-up + kick" clip, already loaded for the runner's mesh but never read until the kickoff sequence needed it -- reused on a defender-model kicker
 let catchAction = null; // played once, on the runner's own mixer, the instant the kicked ball arrives
 let breathingIdleAction = null; // looped on the runner's own mixer while he waits for the kick/hang to play out -- see startReturn()
@@ -1331,11 +1331,12 @@ const charactersLoaded = Promise.all([
   model.traverse((o) => {
     if (o.isBone && o.name === 'mixamorigHips') hipsBone = o;
     if (o.isBone && o.name === 'mixamorigSpine') spineBone = o;
-    if (o.isBone && o.name === 'mixamorigRightHand') rightHandBone = o;
+    if (o.name === 'HeldFootball') heldBallMesh = o;
   });
   hipsBindPos = hipsBone ? hipsBone.position.clone() : null;
   hipsBindQuat = hipsBone ? hipsBone.quaternion.clone() : null;
   spineBindQuat = spineBone ? spineBone.quaternion.clone() : null;
+  if (heldBallMesh) heldBallMesh.visible = false; // only shown from the catch moment on
 
   mixer = new THREE.AnimationMixer(model);
   runAction = mixer.clipAction(runGltf.animations[0]);
@@ -2144,7 +2145,7 @@ function updateDefenderAnimations(dt) {
 // and only once he catches it does the player-controlled return begin. New
 // phases inserted before the existing 'play': 'kickoff' (run-up + kick,
 // camera on the kicker) -> 'hang' (ball flight, camera pans then holds on
-// the returner) -> 'catch' (catch animation, ball reparents to his hand) ->
+// the returner) -> 'catch' (catch animation, the carried-ball mesh baked into his own model is revealed) ->
 // 'play' (unchanged from here on). See the phase branches in tick().
 const KICKOFF_CONTACT_TIME = 0.55; // seconds into the kick clip's OWN timeline where the foot meets the ball -- same clip play-field-goal.js's own kicker uses, same empirically-found mark (see calibrateKickAnimation() there). Checked against the action's own .time, not real elapsed time, so it stays correct regardless of KICKOFF_TIME_SCALE.
 const KICKOFF_TIME_SCALE = 0.6; // the raw clip reads as too fast for this run-up+kick to actually register -- played slower, opposite of this file's other *_TIME_SCALE constants (which all speed a slow capture up)
@@ -2294,7 +2295,7 @@ function snapCameraToKicker() {
   camera.lookAt(camTarget);
 }
 
-let ball = null; // THREE.Mesh, scene-level during 'hang' -- reparented onto the runner's own forearm bone at the catch (see the 'hang' phase branch in tick())
+let ball = null; // THREE.Mesh, scene-level only during 'hang' (the kick/flight) -- removed at the catch, handing off to heldBallMesh (baked into player-kick.glb itself, see the 'hang' phase branch in tick())
 let ballStart = new THREE.Vector3();
 let ballEnd = new THREE.Vector3();
 let cameraPan = null; // { fromPos, fromTarget, toPos, toTarget } -- captured once at the 'kickoff' -> 'hang' transition, consumed by the 'hang' branch's per-frame lerp
@@ -2729,49 +2730,22 @@ function tick(now) {
       }
 
       if (phaseElapsed >= HANG_TIME) {
-        // Caught -- the ball leaves the scene and becomes a child of the
-        // runner's own HAND bone (not the forearm -- see below) so it
-        // rigidly follows that bone's animated transform with zero extra
-        // per-frame code, swinging naturally with the arm once he runs.
+        // Caught -- the free-flying scene-level ball (used for the kick/
+        // hang flight) is removed, and a SEPARATE ball baked directly into
+        // player-kick.glb's own mesh takes over: 'HeldFootball', real
+        // geometry weight-painted to mixamorig:RightHand alongside the
+        // rest of the character (added in Blender, see memory for the
+        // build script). This replaces TWO earlier attempts that bone-
+        // parented a plain THREE.Mesh prop onto the forearm, then the hand
+        // -- both eventually still clipped in the real in-game camera,
+        // because a RIGID prop's fixed offset can't account for every
+        // bone (wrist, fingers) that might rotate independently. Real
+        // skinned geometry deforms WITH the hand's actual skin weights,
+        // the same way his glove or jersey sleeve does, so it can't clip
+        // against his own hand by construction -- there's no separate
+        // "offset" to get wrong anymore.
         scene.remove(ball);
-        if (rightHandBone) {
-          rightHandBone.add(ball);
-          // The raw Mixamo armature's bones carry a ~0.01 WORLD scale (a
-          // standard import artifact -- the character still renders at the
-          // right size because skinning math doesn't go through this
-          // transform, but a plain non-skinned child object added directly
-          // to a bone DOES inherit it literally). Counter-scale by the
-          // bone's own world scale so the ball keeps the same absolute
-          // on-screen size it had at scene level.
-          const boneWorldScale = rightHandBone.getWorldScale(new THREE.Vector3());
-          ball.scale.set(1 / boneWorldScale.x, 1 / boneWorldScale.y, 1.5 / boneWorldScale.z);
-          // THE REAL CLIPPING BUG, finally fixed: every earlier round of
-          // this (parented to the FOREARM bone, chasing position offsets
-          // from (4,17,5) all the way to (7,8,9) to (4,16,7)) was clipping
-          // because mixamorigRightHand has its OWN independent wrist-
-          // rotation animation nested inside the forearm's swing -- a
-          // fixed local offset on the FOREARM can't track that extra
-          // rotation, so the ball's fixed position swept through the
-          // hand/wrist mesh at some points in the stride no matter how
-          // carefully the offset was tuned (coarse 25%-step sampling kept
-          // giving false "all clean" reads; only 12.5%-step sampling ever
-          // caught the actual clipping frames, and even then a position
-          // that looked clean in a flattering 3/4-front debug-camera shot
-          // still clipped in the game's real behind-the-runner chase cam).
-          // Parenting to the HAND bone instead eliminates the failure mode
-          // structurally: the ball now inherits the hand's own rotation
-          // too, so there's no independent motion left for a fixed offset
-          // to sweep through -- whatever the wrist is doing, the ball
-          // moves with it, every frame, by construction.
-          // Re-verified clean at 0/25/37.5/50/62.5/75% of the run cycle
-          // (37.5%/62.5% are the exact frames that clipped under the old
-          // forearm-parented approach) using the real in-game behind
-          // camera angle, not a flattering close-up -- genuinely no
-          // clipping at any sampled point this time, not just "no clipping
-          // from one convenient angle."
-          ball.position.set(1, 8, 7);
-          ball.rotation.set(0, 0, Math.PI / 2);
-        }
+        if (heldBallMesh) heldBallMesh.visible = true;
         phase = 'catch';
         phaseElapsed = 0;
       }
@@ -2882,7 +2856,8 @@ async function startReturn(returnConfig) {
   spawnDefenders(DEFENDER_FORMATION_COUNT, returnConfig.defenderSpeed ?? 1); // ?? not || -- a legitimate 0 defenderSpeed shouldn't get silently overridden to 1
   spawnBlockers(BLOCKER_COUNT);
   spawnKicker(returnConfig.defenderSpeed ?? 1); // same speed multiplier as the rest of the defenders -- he's promoted into that same array once he's kicked it (see promoteKickerToDefender())
-  if (ball) { if (ball.parent) ball.parent.remove(ball); ball = null; } // clear any leftover ball from the previous return (e.g. still parented to the forearm bone)
+  if (ball) { if (ball.parent) ball.parent.remove(ball); ball = null; } // clear any leftover flying ball from the previous return
+  if (heldBallMesh) heldBallMesh.visible = false; // hide the baked-in carried ball again until this return's own catch
   cameraPan = null;
   catchStarted = false;
   wasMoving = false;

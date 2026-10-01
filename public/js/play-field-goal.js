@@ -299,7 +299,14 @@ new GLTFLoader().load('/models/player-kick.glb', (gltf) => {
   const clip = gltf.animations[0];
   if (!clip) { console.warn('player-kick.glb has no animation clip -- falling back to the procedural tween'); return; }
   let hips = null;
-  model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') hips = o; });
+  model.traverse((o) => {
+    if (o.isBone && o.name === 'mixamorigHips') hips = o;
+    // 'HeldFootball' -- a carried-ball mesh baked into player-kick.glb for
+    // the kickoff-return game's catch sequence (weighted to the hand bone,
+    // see that file's own comment) -- this kicker has no catch, so keep it
+    // hidden rather than let it default to visible and float on his hand.
+    if (o.name === 'HeldFootball') o.visible = false;
+  });
   if (!hips) { console.warn('no hips bone found in player-kick.glb -- falling back to the procedural tween'); return; }
 
   const mixer = new THREE.AnimationMixer(model);
