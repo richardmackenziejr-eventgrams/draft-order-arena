@@ -2748,12 +2748,22 @@ function tick(now) {
           // the same absolute on-screen size it had at scene level.
           // Same reasoning applies to the local position offset below -- it
           // lands in bone-local units too, so it needs the same
-          // compensation or it ends up ~100x closer to the bone's own
-          // origin than intended (buried inside the forearm instead of
-          // offset into the hand).
+          // compensation. A first attempt used small (0.05,-0.15,0.1)
+          // pre-compensation inputs, mostly spread across X/Z with a tiny
+          // NEGATIVE Y -- but mixamorigRightHand's own local position under
+          // this bone is (0, 23.3, 0): the forearm's "down the arm" axis is
+          // local +Y almost entirely, so that offset pointed mostly
+          // sideways and slightly back toward the elbow, landing the ball
+          // up near the shoulder with visible daylight between it and an
+          // empty-looking hand (confirmed live per feedback: "floating
+          // behind him"). Re-tuned empirically (rendered close-up against
+          // the actual run cycle at several points in the stride) to
+          // ~75% of the way down the forearm toward the hand, with a
+          // small lateral/forward nudge to cradle it against the body
+          // instead of centering it on the bone's own axis.
           const boneWorldScale = rightForeArmBone.getWorldScale(new THREE.Vector3());
           ball.scale.set(1 / boneWorldScale.x, 1 / boneWorldScale.y, 1.5 / boneWorldScale.z);
-          ball.position.set(0.05 / boneWorldScale.x, -0.15 / boneWorldScale.y, 0.1 / boneWorldScale.z);
+          ball.position.set(1.5, 17, 2.5);
           ball.rotation.set(0, 0, Math.PI / 2);
         }
         phase = 'catch';
