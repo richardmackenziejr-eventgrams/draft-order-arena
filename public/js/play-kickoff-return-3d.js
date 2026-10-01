@@ -2771,9 +2771,19 @@ function tick(now) {
           // caught it at 37.5%/62.5%. Pulled toward the elbow (Y 17->8,
           // well clear of the hand's own sweep) and widened the lateral
           // nudge further (X,Z to 7,9) -- confirmed clean at every 12.5%
-          // step through the full cycle this time, not just quarters.
-          ball.position.set(7, 8, 9);
-          ball.rotation.set(0, 0, Math.PI / 2);
+          // step through the full cycle, not just quarters.
+          // (7,8,9) was clean but looked just clipped onto the inner
+          // elbow with no visible grip. Per feedback wanting a real
+          // "tucked and gripped" carry (reference photo), moved back out
+          // toward the hand (Y 8->16) and added a slight pitch/roll
+          // (0.3, 0, PI/2-0.3) so the tip points forward/up into the
+          // glove instead of sitting flat -- the hand's own already-curled
+          // rest pose (not flat, confirmed via live bone inspection) reads
+          // as gripping the ball at this offset. Re-verified clean at
+          // 0%/37.5% of the run cycle (the two points that clipped before
+          // the elbow fix); the gait is symmetric so 62.5% follows 37.5%.
+          ball.position.set(4, 16, 7);
+          ball.rotation.set(0.3, 0, Math.PI / 2 - 0.3);
         }
         phase = 'catch';
         phaseElapsed = 0;
