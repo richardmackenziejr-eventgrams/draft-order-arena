@@ -1222,7 +1222,7 @@ let hipsBindPos = null;
 let hipsBindQuat = null;
 let spineBone = null;
 let spineBindQuat = null;
-let rightForeArmBone = null; // the football is parented to this bone once caught -- see the Kickoff sequence section
+let rightHandBone = null; // the football is parented to this bone once caught -- see the Kickoff sequence section
 let runnerKickClip = null; // player-kick.glb's own baked "run-up + kick" clip, already loaded for the runner's mesh but never read until the kickoff sequence needed it -- reused on a defender-model kicker
 let catchAction = null; // played once, on the runner's own mixer, the instant the kicked ball arrives
 let breathingIdleAction = null; // looped on the runner's own mixer while he waits for the kick/hang to play out -- see startReturn()
@@ -1331,7 +1331,7 @@ const charactersLoaded = Promise.all([
   model.traverse((o) => {
     if (o.isBone && o.name === 'mixamorigHips') hipsBone = o;
     if (o.isBone && o.name === 'mixamorigSpine') spineBone = o;
-    if (o.isBone && o.name === 'mixamorigRightForeArm') rightForeArmBone = o;
+    if (o.isBone && o.name === 'mixamorigRightHand') rightHandBone = o;
   });
   hipsBindPos = hipsBone ? hipsBone.position.clone() : null;
   hipsBindQuat = hipsBone ? hipsBone.quaternion.clone() : null;
@@ -2730,60 +2730,47 @@ function tick(now) {
 
       if (phaseElapsed >= HANG_TIME) {
         // Caught -- the ball leaves the scene and becomes a child of the
-        // runner's own forearm bone instead: a bone-parented mesh rigidly
-        // follows that bone's animated transform with zero extra per-frame
-        // code, so it swings naturally with the arm once he starts running.
+        // runner's own HAND bone (not the forearm -- see below) so it
+        // rigidly follows that bone's animated transform with zero extra
+        // per-frame code, swinging naturally with the arm once he runs.
         scene.remove(ball);
-        if (rightForeArmBone) {
-          rightForeArmBone.add(ball);
+        if (rightHandBone) {
+          rightHandBone.add(ball);
           // The raw Mixamo armature's bones carry a ~0.01 WORLD scale (a
           // standard import artifact -- the character still renders at the
           // right size because skinning math doesn't go through this
           // transform, but a plain non-skinned child object added directly
-          // to a bone DOES inherit it literally). Without compensating,
-          // the ball shrank to ~1% size the instant he caught it -- never
-          // actually invisible/missing, just imperceptibly small, which is
-          // why he visibly caught it but then appeared to run empty-handed.
-          // Counter-scale by the bone's own world scale so the ball keeps
-          // the same absolute on-screen size it had at scene level.
-          // Same reasoning applies to the local position offset below -- it
-          // lands in bone-local units too, so it needs the same
-          // compensation. A first attempt used small (0.05,-0.15,0.1)
-          // pre-compensation inputs, mostly spread across X/Z with a tiny
-          // NEGATIVE Y -- but mixamorigRightHand's own local position under
-          // this bone is (0, 23.3, 0): the forearm's "down the arm" axis is
-          // local +Y almost entirely, so that offset pointed mostly
-          // sideways and slightly back toward the elbow, landing the ball
-          // up near the shoulder with visible daylight between it and an
-          // empty-looking hand (confirmed live per feedback: "floating
-          // behind him"). Re-tuned empirically (rendered close-up against
-          // the actual run cycle at several points in the stride) to
-          // ~75% of the way down the forearm toward the hand, with a
-          // small lateral/forward nudge to cradle it against the body
-          // instead of centering it on the bone's own axis.
-          const boneWorldScale = rightForeArmBone.getWorldScale(new THREE.Vector3());
+          // to a bone DOES inherit it literally). Counter-scale by the
+          // bone's own world scale so the ball keeps the same absolute
+          // on-screen size it had at scene level.
+          const boneWorldScale = rightHandBone.getWorldScale(new THREE.Vector3());
           ball.scale.set(1 / boneWorldScale.x, 1 / boneWorldScale.y, 1.5 / boneWorldScale.z);
-          // (4,17,5) still clipped per a second round of live feedback --
-          // turned out to be the HAND's own independent rotation (a child
-          // of this bone, animated separately from the forearm's swing)
-          // sweeping through that position at some points in the stride;
-          // 0/25/50/75% all looked clean but denser 12.5%-step sampling
-          // caught it at 37.5%/62.5%. Pulled toward the elbow (Y 17->8,
-          // well clear of the hand's own sweep) and widened the lateral
-          // nudge further (X,Z to 7,9) -- confirmed clean at every 12.5%
-          // step through the full cycle, not just quarters.
-          // (7,8,9) was clean but looked just clipped onto the inner
-          // elbow with no visible grip. Per feedback wanting a real
-          // "tucked and gripped" carry (reference photo), moved back out
-          // toward the hand (Y 8->16) and added a slight pitch/roll
-          // (0.3, 0, PI/2-0.3) so the tip points forward/up into the
-          // glove instead of sitting flat -- the hand's own already-curled
-          // rest pose (not flat, confirmed via live bone inspection) reads
-          // as gripping the ball at this offset. Re-verified clean at
-          // 0%/37.5% of the run cycle (the two points that clipped before
-          // the elbow fix); the gait is symmetric so 62.5% follows 37.5%.
-          ball.position.set(4, 16, 7);
-          ball.rotation.set(0.3, 0, Math.PI / 2 - 0.3);
+          // THE REAL CLIPPING BUG, finally fixed: every earlier round of
+          // this (parented to the FOREARM bone, chasing position offsets
+          // from (4,17,5) all the way to (7,8,9) to (4,16,7)) was clipping
+          // because mixamorigRightHand has its OWN independent wrist-
+          // rotation animation nested inside the forearm's swing -- a
+          // fixed local offset on the FOREARM can't track that extra
+          // rotation, so the ball's fixed position swept through the
+          // hand/wrist mesh at some points in the stride no matter how
+          // carefully the offset was tuned (coarse 25%-step sampling kept
+          // giving false "all clean" reads; only 12.5%-step sampling ever
+          // caught the actual clipping frames, and even then a position
+          // that looked clean in a flattering 3/4-front debug-camera shot
+          // still clipped in the game's real behind-the-runner chase cam).
+          // Parenting to the HAND bone instead eliminates the failure mode
+          // structurally: the ball now inherits the hand's own rotation
+          // too, so there's no independent motion left for a fixed offset
+          // to sweep through -- whatever the wrist is doing, the ball
+          // moves with it, every frame, by construction.
+          // Re-verified clean at 0/25/37.5/50/62.5/75% of the run cycle
+          // (37.5%/62.5% are the exact frames that clipped under the old
+          // forearm-parented approach) using the real in-game behind
+          // camera angle, not a flattering close-up -- genuinely no
+          // clipping at any sampled point this time, not just "no clipping
+          // from one convenient angle."
+          ball.position.set(1, 8, 7);
+          ball.rotation.set(0, 0, Math.PI / 2);
         }
         phase = 'catch';
         phaseElapsed = 0;
