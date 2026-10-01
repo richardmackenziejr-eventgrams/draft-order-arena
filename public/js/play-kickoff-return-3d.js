@@ -1225,6 +1225,7 @@ let spineBindQuat = null;
 let rightForeArmBone = null; // the football is parented to this bone once caught -- see the Kickoff sequence section
 let runnerKickClip = null; // player-kick.glb's own baked "run-up + kick" clip, already loaded for the runner's mesh but never read until the kickoff sequence needed it -- reused on a defender-model kicker
 let catchAction = null; // played once, on the runner's own mixer, the instant the kicked ball arrives
+let breathingIdleAction = null; // looped on the runner's own mixer while he waits for the kick/hang to play out -- see startReturn()
 let defenderTemplate = null; // the loaded (or null: not ready yet) defender scene -- each defender is its own SkeletonUtils.clone() of this
 let defenderRunClip = null; // same AnimationClip object the runner uses, shared across every defender's own AnimationMixer
 let defenderPushClip = null; // played by the tackler first, at the moment of impact, before the flex celebration -- see triggerTackle()
@@ -1320,7 +1321,8 @@ const charactersLoaded = Promise.all([
   loadGltfWithRetry('/models/blocker.glb'),
   new Promise((resolve) => new GLTFLoader().load('/models/sad-idle.glb', resolve, undefined, (err) => console.error('sad-idle animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/catch.glb', resolve, undefined, (err) => console.error('catch animation load failed', err))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf, sadIdleGltf, catchGltf]) => {
+  new Promise((resolve) => new GLTFLoader().load('/models/breathing-idle.glb', resolve, undefined, (err) => console.error('breathing-idle animation load failed', err))),
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf, sadIdleGltf, catchGltf, breathingIdleGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -1355,6 +1357,8 @@ const charactersLoaded = Promise.all([
   catchAction = mixer.clipAction(catchGltf.animations[0]);
   catchAction.setLoop(THREE.LoopOnce);
   catchAction.clampWhenFinished = true;
+  breathingIdleAction = mixer.clipAction(breathingIdleGltf.animations[0]);
+  breathingIdleAction.setLoop(THREE.LoopRepeat); // actually plays throughout the kickoff/hang wait, unlike the one-shot reaction clips -- see startReturn()
   spinLeftAction = mixer.clipAction(clipFromJson(spinLeftJson));
   spinRightAction = mixer.clipAction(clipFromJson(spinRightJson));
   [spinLeftAction, spinRightAction].forEach((a) => { a.setLoop(THREE.LoopOnce); a.clampWhenFinished = true; a.setEffectiveTimeScale(SPIN_TIME_SCALE); });
@@ -1405,7 +1409,7 @@ const charactersLoaded = Promise.all([
   // action from the blend. Without this, the turn/stop clips' poses were
   // silently bleeding into the straight run the whole time, which is what
   // was actually behind the persistent "running at an angle" report.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, breathingIdleAction, ...danceActions.map((d) => d.action)];
   allActions.forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
   runAction.enabled = true;
   activeAction = runAction;
@@ -2853,7 +2857,7 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, breathingIdleAction, ...danceActions.map((d) => d.action)];
   finishBlend();
   spin = null;
   spinCooldown = 0;
@@ -2865,16 +2869,16 @@ async function startReturn(returnConfig) {
   // Frame 0 of the run cycle is a mid-stride pose, not a standing one --
   // freezing there for the whole kickoff/hang wait read as him already
   // running in place before the ball even arrives. A first attempt held
-  // stopAction's own last frame instead, on the theory that its
-  // clampWhenFinished target (used elsewhere in this file) would be a
-  // settled stance -- checked directly (rendered that exact frame in
-  // isolation) and it's still a wide, split-leg deceleration lunge, not
-  // actually standing still, which is exactly the same complaint in a
-  // different clip. outOfBoundsAction (blockerSadIdleClip, a genuine
-  // standing-idle loop rather than a movement transition) holds a real
-  // feet-together standing pose at any frame, frame 0 included -- same
-  // "set paused, don't animate" approach as the run cycle it replaces.
-  if (outOfBoundsAction) { outOfBoundsAction.enabled = true; activeAction = outOfBoundsAction; outOfBoundsAction.time = 0; }
+  // stopAction's own last frame instead (still a mid-transition lunge,
+  // checked directly), then outOfBoundsAction (a real standing-still
+  // pose, but blockerSadIdleClip's own head-down posture read as
+  // dejected/looking-down per live feedback). breathingIdleAction (the
+  // user's own Mixamo "Breathing Idle" download) actually PLAYS here
+  // (unpaused, LoopRepeat) rather than freezing a single frame -- unlike
+  // the other candidates, this one is meant to loop continuously, so a
+  // real idle animation is both correct AND the obvious choice over
+  // picking a frame.
+  if (breathingIdleAction) { breathingIdleAction.enabled = true; activeAction = breathingIdleAction; breathingIdleAction.time = 0; breathingIdleAction.paused = false; }
   else if (runAction) { runAction.enabled = true; activeAction = runAction; runAction.time = 0; }
   phase = 'kickoff';
   downReason = 'tackled';
