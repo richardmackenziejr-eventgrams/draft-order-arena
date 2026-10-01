@@ -2736,7 +2736,24 @@ function tick(now) {
         scene.remove(ball);
         if (rightForeArmBone) {
           rightForeArmBone.add(ball);
-          ball.position.set(0.05, -0.15, 0.1);
+          // The raw Mixamo armature's bones carry a ~0.01 WORLD scale (a
+          // standard import artifact -- the character still renders at the
+          // right size because skinning math doesn't go through this
+          // transform, but a plain non-skinned child object added directly
+          // to a bone DOES inherit it literally). Without compensating,
+          // the ball shrank to ~1% size the instant he caught it -- never
+          // actually invisible/missing, just imperceptibly small, which is
+          // why he visibly caught it but then appeared to run empty-handed.
+          // Counter-scale by the bone's own world scale so the ball keeps
+          // the same absolute on-screen size it had at scene level.
+          // Same reasoning applies to the local position offset below -- it
+          // lands in bone-local units too, so it needs the same
+          // compensation or it ends up ~100x closer to the bone's own
+          // origin than intended (buried inside the forearm instead of
+          // offset into the hand).
+          const boneWorldScale = rightForeArmBone.getWorldScale(new THREE.Vector3());
+          ball.scale.set(1 / boneWorldScale.x, 1 / boneWorldScale.y, 1.5 / boneWorldScale.z);
+          ball.position.set(0.05 / boneWorldScale.x, -0.15 / boneWorldScale.y, 0.1 / boneWorldScale.z);
           ball.rotation.set(0, 0, Math.PI / 2);
         }
         phase = 'catch';
