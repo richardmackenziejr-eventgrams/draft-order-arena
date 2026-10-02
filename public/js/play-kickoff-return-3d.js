@@ -3166,25 +3166,26 @@ let teamCelebrationStarted = false; // guards the synced Thriller kickoff (once 
 // which read as the teammates already being visible at spawn instead of
 // running in from off-screen (live feedback: "spawned from like the back
 // of the endzone instead of running from outside of the camera view").
-const THRILLER_CAM_EXTRA_BACK = 4; // on top of CELEBRATION_CAM_BACK, further than the solo celebration's own +2.5 -- more room for 3 dancers AND more margin for the spawn offset below
-const TEAM_DANCER_SPAWN_OFFSET = 16; // yards either side of the runner -- comfortably outside frame at the wider team-celebration camera distance, not just barely past the edge
-const TEAM_DANCER_FLANK_OFFSET = 1.7; // yards either side of the runner once in position
+// Live feedback, two rounds: (1) a lateral-only run-in (spawn level with the
+// runner, slide in sideways) "still running in from behind where the player
+// is" -- reads as emerging beside him, not running UP the field; (2) even
+// after moving the spawn up-field, still looked like it was coming from the
+// side rather than "at the 10 yard line... and run up from there" -- the
+// lateral spawn offset was still doing most of the visual work. Fixed by
+// dropping the lateral offset entirely: they now spawn at the literal
+// 10-yard line (TEAM_DANCER_SPAWN_YARD_LINE), already at their final flank
+// X, and run STRAIGHT up-field (Z only) to the celebration spot -- a real
+// visible run up the field, not a diagonal or sideways one.
+// That spawn point needs to sit in front of the celebration camera (not
+// behind it, which pops them into frame already close -- see the git
+// history on this file for the exact math this was first gotten wrong by).
+// THRILLER_CAM_EXTRA_BACK bumped 4 -> 10 so the camera clears the 10-yard
+// line with margin (camera ends up ~16yd up-field of the celebration spot,
+// comfortably past the ~11yd-up-field 10-yard-line spawn).
+const THRILLER_CAM_EXTRA_BACK = 10; // on top of CELEBRATION_CAM_BACK
+const TEAM_DANCER_SPAWN_YARD_LINE = 10; // the actual 10-yard line, measured from the SCORING goal (same convention as kickerKickSpotZ elsewhere in this file)
+const TEAM_DANCER_FLANK_OFFSET = 1.7; // yards either side of the runner once in position -- also the spawn X now, since there's no lateral run-in anymore
 const TEAM_DANCER_RUNIN_SPEED = 7; // yards/s -- brisk jog, not a sprint; this is a quick stylized join, not a real run
-// Live feedback after the spawn-offset fix above shipped: "still running in
-// from behind where the player is" -- spawning at the SAME z as the runner
-// and only sliding in laterally reads as emerging right beside/behind him,
-// not as a visible run UP the field. Pulling the spawn further up-field (less
-// negative z, toward midfield) fixes that -- BUT the celebration camera only
-// sits (CELEBRATION_CAM_BACK + THRILLER_CAM_EXTRA_BACK) = 10yd up-field of
-// the runner's own celebration spot, looking further into the endzone from
-// there. A spawn point further up-field than that camera distance would
-// land BEHIND the camera itself (invisible until crossing it, then popping
-// into frame already close to him -- the same complaint, not a fix). The
-// user's own suggested landmark, the actual 10-yard line, sits ~11yd
-// up-field of a typical 1-yard-deep celebration stop -- just past that
-// safe distance. Used 6yd instead (comfortably inside the 10yd camera
-// margin) so they're visibly running up the WHOLE time, never popping in.
-const TEAM_DANCER_SPAWN_UPFIELD = 6; // yd up-field (toward midfield) of the runner's own celebration z
 
 function clearTeamDancers() {
   teamDancers.forEach((d) => scene.remove(d.group));
@@ -3195,29 +3196,39 @@ function clearTeamDancers() {
 function startThrillerCelebration() {
   const z = RUNNER_GROUP.position.z; // his resting celebration spot -- both teammates run in to this same z
   const runnerX = RUNNER_GROUP.position.x;
-  const spawnZ = z + TEAM_DANCER_SPAWN_UPFIELD; // up-field of the celebration spot -- see that constant's own comment
+  const spawnZ = -(fieldYards - TEAM_DANCER_SPAWN_YARD_LINE);
   [-1, 1].forEach((side) => {
     const model = cloneSkinnedScene(blockerTemplate);
     model.rotation.y = Math.PI; // same base-facing correction every character gets
+    // Same hips-bone capture every other moving character in this file uses
+    // (blockers/defenders/running referees) -- needed below to strip the
+    // Thriller clip's own baked root motion once dancing starts, the same
+    // way stripRootMotion() already does for the runner's own mixer (without
+    // it, the mesh walks forward inside the clip every loop and snaps back
+    // to the start on each repeat -- read as "disappearing and reappearing").
+    let hipsBone = null;
+    model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') hipsBone = o; });
+    const hipsBindPos = hipsBone ? hipsBone.position.clone() : null;
     const group = new THREE.Group();
     group.add(model);
-    const spawnX = runnerX + side * TEAM_DANCER_SPAWN_OFFSET;
     const targetX = runnerX + side * TEAM_DANCER_FLANK_OFFSET;
-    group.position.set(spawnX, 0, spawnZ);
-    // Faces the run-in direction immediately (same atan2(dx,dz)+Math.PI
-    // convention this template uses everywhere else it moves -- defenders/
-    // blockers/kicker), so there's no one-frame pop before updateTeamDancers()
-    // starts correcting it every frame below.
-    group.rotation.y = Math.atan2(targetX - spawnX, z - spawnZ) + Math.PI;
+    group.position.set(targetX, 0, spawnZ); // already at the final flank X -- the run-in is a straight line up-field, not diagonal
+    // Faces -Z (up-field, into the endzone -- the direction they're about to
+    // run) via this template's usual atan2(dx,dz)+Math.PI convention
+    // evaluated for a target straight ahead in -Z (dx=0): resolves to a flat
+    // 0, not Math.PI. Snaps to Math.PI (facing the camera) only once arrived
+    // -- see updateTeamDancers() below.
+    group.rotation.y = 0;
     scene.add(group);
     const dancerMixer = new THREE.AnimationMixer(model);
     dancerMixer.clipAction(defenderRunClip).play(); // run-in clip, same shared one every defender/blocker already uses
-    teamDancers.push({ group, mixer: dancerMixer, targetX, targetZ: z, dancing: false });
+    teamDancers.push({ group, mixer: dancerMixer, targetX, targetZ: z, hipsBone, hipsBindPos, dancing: false });
   });
 
   // Wider/further-back framing than the solo-celebration default -- three
-  // dancers side by side need more than the single-runner shot
-  // freezeCelebrationCamera() already set at the 'endzone' transition.
+  // dancers side by side (and now a visible run-up from the 10) need more
+  // than the single-runner shot freezeCelebrationCamera() already set at
+  // the 'endzone' transition.
   camera.position.set(runnerX, CELEBRATION_CAM_HEIGHT + 0.6, z + CELEBRATION_CAM_BACK + THRILLER_CAM_EXTRA_BACK);
   camTarget.set(runnerX, LOOK_HEIGHT + 0.3, z);
   camera.lookAt(camTarget);
@@ -3230,26 +3241,32 @@ function startThrillerCelebration() {
 function updateTeamDancers(dt) {
   if (teamDancers.length === 0) return;
   teamDancers.forEach((d) => {
-    if (d.dancing) { d.mixer.update(dt); return; }
-    const dx = d.targetX - d.group.position.x;
-    const dz = d.targetZ - d.group.position.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist > 0.05) {
-      const step = Math.min(dist, TEAM_DANCER_RUNIN_SPEED * dt);
-      d.group.position.x += (dx / dist) * step;
-      d.group.position.z += (dz / dist) * step;
-      d.group.rotation.y = Math.atan2(dx, dz) + Math.PI; // face travel direction -- same convention as defenders/blockers/kicker
-      d.mixer.update(dt);
-    } else {
-      d.group.position.x = d.targetX;
-      d.group.position.z = d.targetZ;
-      // Net 0 after cancelling the model's own PI correction -- faces +Z,
-      // the same direction the runner ends his own 'turn' phase facing (see
-      // that phase's own comment: spun to face the camera, which reads as
-      // away from the cheerleaders, who are stationed deeper in -Z).
-      d.group.rotation.y = Math.PI;
-      d.dancing = true;
+    if (!d.dancing) {
+      // Straight line up-field (X is already at its final flank value, set
+      // at spawn) -- a real visible run up the field, not a diagonal or
+      // sideways one.
+      const dz = d.targetZ - d.group.position.z;
+      if (Math.abs(dz) > 0.05) {
+        d.group.position.z += Math.sign(dz) * Math.min(Math.abs(dz), TEAM_DANCER_RUNIN_SPEED * dt);
+      } else {
+        d.group.position.z = d.targetZ;
+        // Net 0 after cancelling the model's own PI correction -- faces +Z,
+        // the same direction the runner ends his own 'turn' phase facing
+        // (see that phase's own comment: spun to face the camera, which
+        // reads as away from the cheerleaders, who are stationed deeper in -Z).
+        d.group.rotation.y = Math.PI;
+        d.dancing = true;
+      }
     }
+    d.mixer.update(dt);
+    // Strips whichever clip's own baked root motion every frame (the
+    // run-in clip during the chase up-field, the Thriller clip once
+    // dancing), same as stripRootMotion() already does for the runner's
+    // own mixer and updateDefenderAnimations() does for every defender --
+    // without it the mesh walks forward inside the clip and snaps back to
+    // the start on every loop (read live as the teammates "disappearing
+    // and reappearing in the endzone").
+    if (d.hipsBone && d.hipsBindPos) d.hipsBone.position.copy(d.hipsBindPos);
   });
   if (teamCelebrationStarted || !teamDancers.every((d) => d.dancing)) return;
   teamCelebrationStarted = true;
