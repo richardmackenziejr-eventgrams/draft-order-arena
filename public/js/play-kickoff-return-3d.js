@@ -1974,6 +1974,109 @@ window.addEventListener('keyup', (e) => {
 window.addEventListener('blur', () => heldKeys.clear());
 document.addEventListener('visibilitychange', () => { if (document.hidden) heldKeys.clear(); });
 
+// ---- Touch controls (phones/tablets) ---------------------------------------
+// Only when the PRIMARY pointer is a finger -- a touchscreen laptop keeps the
+// keyboard and doesn't get an overlay in the way. A one-thumb joystick drives
+// the exact same heldKeys set the arrow keys do (up = run forward, left/right
+// = steer, diagonals = both), and two buttons queue a spin / jump cut exactly
+// like the S / A keys, so none of the game logic knows touch exists.
+const isTouchPrimary = window.matchMedia('(pointer: coarse)').matches;
+const STICK_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+(function setupTouchControls() {
+  const ui = document.getElementById('kr3d-touch');
+  if (!ui || !isTouchPrimary) return;
+  ui.classList.add('on');
+  const stick = document.getElementById('kr3d-stick');
+  const knob = document.getElementById('kr3d-stick-knob');
+  let stickPointer = null;
+  const setKey = (k, on) => { if (on) heldKeys.add(k); else heldKeys.delete(k); };
+  function updateStick(e) {
+    const r = stick.getBoundingClientRect();
+    const R = r.width / 2;
+    let dx = (e.clientX - (r.left + R)) / R;
+    let dy = (e.clientY - (r.top + R)) / R;
+    const len = Math.hypot(dx, dy);
+    if (len > 1) { dx /= len; dy /= len; }
+    knob.style.transform = `translate(${dx * R * 0.55}px, ${dy * R * 0.55}px)`;
+    setKey('ArrowUp', dy < -0.3);
+    setKey('ArrowDown', dy > 0.6);
+    setKey('ArrowLeft', dx < -0.3);
+    setKey('ArrowRight', dx > 0.3);
+  }
+  function endStick(e) {
+    if (e.pointerId !== stickPointer) return;
+    stickPointer = null;
+    STICK_KEYS.forEach((k) => heldKeys.delete(k));
+    knob.style.transform = '';
+  }
+  stick.addEventListener('pointerdown', (e) => {
+    if (stickPointer !== null) return;
+    stickPointer = e.pointerId;
+    try { stick.setPointerCapture(e.pointerId); } catch (err) { /* stale pointer -- the drag still works while the finger stays over the stick */ }
+    updateStick(e);
+    e.preventDefault();
+  });
+  stick.addEventListener('pointermove', (e) => { if (e.pointerId === stickPointer) updateStick(e); });
+  stick.addEventListener('pointerup', endStick);
+  stick.addEventListener('pointercancel', endStick);
+  const bindAction = (id, fire) => {
+    const el = document.getElementById(id);
+    el.addEventListener('pointerdown', (e) => { e.preventDefault(); el.classList.add('down'); fire(); });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((t) => el.addEventListener(t, () => el.classList.remove('down')));
+  };
+  bindAction('kr3d-spin-btn', () => { spinQueued = true; });
+  bindAction('kr3d-cut-btn', () => { jumpCutQueued = true; });
+  ui.addEventListener('contextmenu', (e) => e.preventDefault()); // long-press shouldn't pop a menu mid-play
+})();
+
+// ---- Gamepad (Xbox / PlayStation / 8BitDo etc. via the standard mapping) -----
+// Same idea as the touch controls: the left stick (or D-pad) feeds the exact
+// heldKeys set the arrow keys do, and the face/shoulder buttons queue a spin
+// / jump cut like the S / A keys, so no game logic knows a controller exists.
+//   Left stick or D-pad  run forward / steer (stick up = forward, diagonals = both)
+//   X or RB              spin
+//   A or LB              jump cut
+//   Start                press the on-screen Start Return / Next Return button
+// Browsers only expose a pad after its first button press, which is also when
+// 'gamepadconnected' fires and the controller hint appears.
+const PAD_DEADZONE = 0.3;
+const PAD_DOWN_THRESHOLD = 0.6; // pulling DOWN needs a firmer push, same as the touch stick
+const padKeys = new Set(); // the heldKeys entries this pad is currently responsible for
+const padPrev = { spin: false, cut: false, start: false }; // last frame's button states, for rising-edge detection
+window.addEventListener('gamepadconnected', () => {
+  const hint = document.getElementById('kr3d-pad-hint');
+  if (hint) hint.hidden = false;
+});
+function pollGamepad() {
+  if (!navigator.getGamepads) return;
+  let pad = null;
+  try {
+    for (const p of navigator.getGamepads()) { if (p && p.connected) { pad = p; break; } }
+  } catch (e) { return; }
+  const want = new Set();
+  let spin = false, cut = false, start = false;
+  if (pad) {
+    const b = (i) => !!(pad.buttons[i] && pad.buttons[i].pressed);
+    const ax = pad.axes[0] || 0, ay = pad.axes[1] || 0;
+    if (ay < -PAD_DEADZONE || b(12)) want.add('ArrowUp');
+    if (ay > PAD_DOWN_THRESHOLD || b(13)) want.add('ArrowDown');
+    if (ax < -PAD_DEADZONE || b(14)) want.add('ArrowLeft');
+    if (ax > PAD_DEADZONE || b(15)) want.add('ArrowRight');
+    spin = b(2) || b(5);
+    cut = b(0) || b(4);
+    start = b(9);
+  }
+  for (const k of [...padKeys]) { if (!want.has(k)) { padKeys.delete(k); heldKeys.delete(k); } }
+  for (const k of want) { padKeys.add(k); heldKeys.add(k); }
+  if (spin && !padPrev.spin) spinQueued = true;
+  if (cut && !padPrev.cut) jumpCutQueued = true;
+  if (start && !padPrev.start) {
+    const btn = ['start-return-btn', 'next-return-btn'].map((id) => document.getElementById(id)).find((el) => el && el.style.display !== 'none' && !el.disabled);
+    if (btn) btn.click();
+  }
+  padPrev.spin = spin; padPrev.cut = cut; padPrev.start = start;
+}
+
 // ---- Debug overlay (?debug=1) ---------------------------------------------
 // Shows live held-key/steering/animation state on screen so a reported bug
 // can be diagnosed from what the player actually sees, instead of guessing
@@ -2970,7 +3073,12 @@ function tick(now) {
   lastFrameAt = now;
 
   if (running) {
-    if (!document.hasFocus()) heldKeys.clear(); // backstop for whatever blur doesn't catch
+    // Backstop for whatever blur doesn't catch. Skipped on touch devices:
+    // there the "keys" come from a finger on the joystick, not the OS's
+    // keyboard focus, and document.hasFocus() is unreliable on some mobile
+    // browsers/webviews -- it would wipe a held stick every frame.
+    if (!isTouchPrimary && !document.hasFocus()) heldKeys.clear();
+    pollGamepad();
     phaseElapsed += dt;
     let lateral = 0, movingForward = false, movingBackward = false;
     const wantSpin = spinQueued; // consumed (or dropped) every frame -- no buffering
@@ -3375,6 +3483,7 @@ function stopLoop() {
 
 function idleRenderTick() {
   if (running) return; // startReturn() has taken over via stopLoop()+tick()
+  pollGamepad(); // so Start can press the on-screen Start Return / Next Return button before a return is running
   renderer.render(scene, camera);
   animationHandle = requestAnimationFrame(idleRenderTick);
 }

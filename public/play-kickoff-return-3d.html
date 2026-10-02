@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Kickoff Return (3D preview) — Draft Order Arena</title>
+<title>Kickoff Return — Draft Order Arena</title>
 <link rel="stylesheet" href="/style.css" />
 <style>
   #kr3d-canvas-wrap { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius); overflow: hidden; background: #8ec9f0; }
@@ -11,6 +11,24 @@
   #kr3d-overlay { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; padding-top: 2%; pointer-events: none; }
   #kr3d-overlay-text { font: 800 56px/1.2 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #eaf3ec; text-shadow: 0 3px 10px rgba(0,0,0,0.7); text-align: center; }
   #kr3d-hud { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; font: 700 14px/1.2 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #eaf3ec; text-shadow: 0 1px 4px rgba(0,0,0,0.7); pointer-events: none; }
+
+  /* On-screen controls for phones/tablets (primary pointer is a finger). A
+     one-thumb joystick on the left (drag up = run forward, left/right =
+     steer, diagonals = both -- the core "angle toward a side" move) and two
+     round action buttons on the right. The overlay itself ignores touches so
+     the canvas below stays untouched; only the controls take them. */
+  #kr3d-touch { display: none; position: absolute; inset: 0; pointer-events: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  #kr3d-touch.on { display: block; }
+  #kr3d-stick { position: absolute; right: 3%; bottom: 7%; width: clamp(96px, 24vmin, 150px); aspect-ratio: 1; border-radius: 50%; background: rgba(0,0,0,0.28); border: 2px solid rgba(255,255,255,0.5); pointer-events: auto; touch-action: none; }
+  #kr3d-stick-knob { position: absolute; left: 30%; top: 30%; width: 40%; height: 40%; border-radius: 50%; background: rgba(255,255,255,0.7); box-shadow: 0 2px 6px rgba(0,0,0,0.4); pointer-events: none; }
+  #kr3d-actions { position: absolute; left: 3%; bottom: 7%; display: flex; align-items: flex-end; gap: 14px; }
+  .kr3d-act { width: clamp(64px, 17vmin, 100px); aspect-ratio: 1; border-radius: 50%; border: 2px solid rgba(255,255,255,0.7); background: rgba(20,60,120,0.55); color: #fff; font: 800 clamp(12px, 3.4vmin, 18px)/1 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; letter-spacing: 0.04em; pointer-events: auto; touch-action: none; padding: 0; cursor: pointer; }
+  .kr3d-act.down { background: rgba(60,140,255,0.85); transform: scale(0.94); }
+  .kr-hint-touch { display: none; }
+  @media (pointer: coarse) {
+    .kr-hint-desktop { display: none; }
+    .kr-hint-touch { display: block; }
+  }
 </style>
 </head>
 <body>
@@ -18,9 +36,9 @@
   <a class="logo" href="/">Draft Order <span>Arena</span></a>
 </header>
 <main class="kr-page">
-  <h1>Kickoff Return <span class="pill">3D preview</span></h1>
+  <h1>Kickoff Return</h1>
   <p class="lead" id="status-line">Loading…</p>
-  <p class="lead" style="font-size:0.9rem">Real kickoff formation now: watch the kick, then catch it and run. Not linked from the site yet.</p>
+  <p class="lead" style="font-size:0.9rem">Watch the kick, then catch it and run.</p>
 
   <div class="panel" id="game-panel" style="display:none">
     <p class="kr-return-info" id="return-info"></p>
@@ -30,9 +48,18 @@
         <span id="kr3d-goal">GOAL &rarr;</span>
       </div>
       <div id="kr3d-overlay"><div id="kr3d-overlay-text"></div></div>
+      <div id="kr3d-touch">
+        <div id="kr3d-stick"><div id="kr3d-stick-knob"></div></div>
+        <div id="kr3d-actions">
+          <button type="button" class="kr3d-act" id="kr3d-spin-btn">SPIN</button>
+          <button type="button" class="kr3d-act" id="kr3d-cut-btn">CUT</button>
+        </div>
+      </div>
     </div>
     <div class="kr-controls-row">
-      <p class="kr-hint"><strong>&uarr;</strong> run forward<br /><strong>&larr; &rarr;</strong> steer<br /><strong>S</strong> spin<br /><strong>A</strong> jump cut</p>
+      <p class="kr-hint kr-hint-desktop"><strong>&uarr;</strong> run forward<br /><strong>&larr; &rarr;</strong> steer<br /><strong>S</strong> spin<br /><strong>A</strong> jump cut</p>
+      <p class="kr-hint" id="kr3d-pad-hint" hidden><strong>Controller:</strong> left stick or D-pad to run &amp; steer<br /><strong>X / RB:</strong> spin &nbsp; <strong>A / LB:</strong> cut<br /><strong>Start:</strong> begin each return</p>
+      <p class="kr-hint kr-hint-touch"><strong>Right thumb:</strong> drag the stick to run &amp; steer<br /><strong>Left thumb:</strong> SPIN and CUT<br />Turn your phone sideways for a bigger view</p>
       <div class="kr-action-row">
         <button id="start-return-btn" class="btn" style="display:none">Start Return &rarr;</button>
         <button id="next-return-btn" class="btn" style="display:none">Next Return &rarr;</button>
@@ -57,6 +84,6 @@
   }
 }
 </script>
-<script type="module" src="/js/play-kickoff-return-3d.js?v=20261003b"></script>
+<script type="module" src="/js/play-kickoff-return-3d.js?v=20261003d"></script>
 </body>
 </html>

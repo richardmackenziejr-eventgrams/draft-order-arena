@@ -179,7 +179,7 @@ function gameStatusLine(gi) {
 }
 
 function gameLink(gi) {
-  const pageByType = { lottery: 'play-lottery.html', trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html', kickoffReturn: 'play-kickoff-return.html' };
+  const pageByType = { lottery: 'play-lottery.html', trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html', kickoffReturn: 'play-kickoff-return-3d.html' };
   const page = pageByType[gi.gameType];
   return `/${page}?instance=${gi.id}&league=${leagueId}`;
 }
@@ -300,7 +300,7 @@ document.getElementById('test-kickoff-return-btn').addEventListener('click', asy
   btn.disabled = true;
   try {
     const { instanceId } = await api('POST', `/api/leagues/${leagueId}/test-kickoff-return`, {});
-    window.location.href = `/play-kickoff-return.html?instance=${instanceId}&league=${leagueId}&member=solo-test`;
+    window.location.href = `/play-kickoff-return-3d.html?instance=${instanceId}&league=${leagueId}&member=solo-test`;
   } catch (err) {
     alert(err.message);
     btn.disabled = false;

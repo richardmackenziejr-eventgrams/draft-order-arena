@@ -9,7 +9,7 @@ if (!leagueId || !member) {
 document.getElementById('greeting').textContent = `Hi, ${member.name}!`;
 
 function gameLink(gi) {
-  const pageByType = { lottery: 'play-lottery.html', trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html', kickoffReturn: 'play-kickoff-return.html' };
+  const pageByType = { lottery: 'play-lottery.html', trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html', kickoffReturn: 'play-kickoff-return-3d.html' };
   return `/${pageByType[gi.gameType]}?instance=${gi.id}&league=${leagueId}&member=${member.id}`;
 }
 
