@@ -704,45 +704,48 @@ function buildCameraman(lengthYards) {
   scene.add(cameramanGroup);
 }
 
-// Standing photographers at the 10 and 25-yard lines (both sidelines) --
-// the user's own newer Rodin download, same no-rig static-prop shape as
+// Standing photographers at the 10 and 25-yard lines, on BOTH halves of
+// the field (near the returner's own goal AND the far/scoring goal) and
+// both sidelines -- 8 total. "Both sides" in the original request meant
+// both halves of the 50, not just left/right -- a first pass only built
+// the near half (4 total), confirmed missing by the user ("I saw the
+// cameramen on one half of the field but not on the other"). The far-half
+// z mirrors the near-half one around midfield (-(lengthYards - yard)),
+// same reflection every other far-side distance in this file already uses.
+// The user's own Rodin download, same no-rig static-prop shape as
 // cameramanTemplate above. z-values use this file's usual convention (z=0
-// is the returner's OWN goal line), so these sit on the near half of the
-// field, well short of the sideline-players/benches' own team-box span
-// (z=-30 to -70 on a 100yd field) -- no placement overlap with those.
-// Pushed into the SAME `cameramen` array the kneeling trio uses, so
-// updateCameraman() (below) tracks all of them with no changes needed.
+// is the returner's OWN goal line), so these sit outside the sideline-
+// players/benches' own team-box span (z=-30 to -70 on a 100yd field) --
+// no placement overlap with those. Pushed into the SAME `cameramen` array
+// the kneeling trio uses, so updateCameraman() (below) tracks all of them
+// with no changes needed.
 //
-// X was originally the real sideline distance (FIELD_WIDTH/2 + 1, matching
-// the standing sideline PLAYERS' own apron row) -- confirmed from live
-// screenshots to never actually be visible: the normal chase cam only sits
-// CHASE_BACK (5.5yd) behind the runner, which at a 60deg-vertical/16:9
-// camera works out to roughly a 5.6yd visible half-width either side of
-// him -- nowhere close to reaching the real sideline (~27yd out), so
-// nothing standing there (not just these cameramen -- benches, standing
-// players, etc. have the exact same issue) is ever clearly in frame during
-// normal play, only in the wide kickoff-formation and touchdown-celebration
-// shots. Per direct user choice (asked, since it trades literal sideline
-// realism for actually being seen tracking the runner -- the whole point
-// of this feature): pulled WAY in, inside that visible half-width, rather
-// than left at the real sideline distance.
+// X is the real sideline distance (FIELD_WIDTH/2 + 1, matching the
+// standing sideline PLAYERS' own apron row) -- briefly pulled in to 5yd
+// (inside the normal chase cam's own ~5.6yd visible half-width, so they'd
+// actually be seen) per an earlier request, but that put them visibly
+// standing ON the field itself, which reads as flatly broken -- reverted.
+// The underlying visibility problem is real (see below) but needs solving
+// with the CAMERA, not by moving them onto the playing field.
 let standingCameramanGroup = null;
 function buildStandingCameramen(lengthYards) {
   if (standingCameramanGroup) scene.remove(standingCameramanGroup);
   if (!standingCameramanTemplate) return;
   standingCameramanGroup = new THREE.Group();
 
-  const STANDING_CAMERAMAN_X = 5; // yd either side of center -- see the comment above for why this isn't the real sideline distance
+  const STANDING_CAMERAMAN_X = FIELD_WIDTH / 2 + 1; // same apron distance as the sideline players' own front row -- see the comment above
   [10, 25].forEach((yard) => {
-    [-1, 1].forEach((sign) => {
-      const model = standingCameramanTemplate.clone();
-      // Raw orientation already faces +Z, confirmed via a calibrated-arrow
-      // check (same technique the kneeling cameraman's own comment above
-      // describes) -- no base-yaw correction needed, same as that model.
-      model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-      model.position.set(sign * STANDING_CAMERAMAN_X, 0, -yard);
-      standingCameramanGroup.add(model);
-      cameramen.push(model);
+    [-yard, -(lengthYards - yard)].forEach((z) => {
+      [-1, 1].forEach((sign) => {
+        const model = standingCameramanTemplate.clone();
+        // Raw orientation already faces +Z, confirmed via a calibrated-arrow
+        // check (same technique the kneeling cameraman's own comment above
+        // describes) -- no base-yaw correction needed, same as that model.
+        model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+        model.position.set(sign * STANDING_CAMERAMAN_X, 0, z);
+        standingCameramanGroup.add(model);
+        cameramen.push(model);
+      });
     });
   });
 
