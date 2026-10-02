@@ -1640,6 +1640,31 @@ let teamCelebrationActions = []; // parallel to TEAM_CELEBRATION_PATHS, bound to
 let teamCelebrationClips = []; // the raw AnimationClip data (null where missing), rebound onto each teammate's OWN mixer fresh per celebration (see startTeamCelebration())
 let teamCelebrationIndex = 0; // which entry the current celebration picked
 
+// SOLO celebrations: just the runner, no teammates. Same animation-only
+// Mixamo-clip pipeline as the team ones, but these are acrobatic moves
+// (Flair goes down to the floor, Backflip leaves it) that live in the hips'
+// VERTICAL travel -- so unlike every other clip here they can't have their
+// root motion fully stripped (see stripRootMotion()/keepHipsHeight below).
+// hipsLiftM: height (meters) added to the rescaled hips height so the clip's
+// lowest mesh point lands exactly on the turf -- measured per clip on the
+// runner's model by stepping the whole loop and reading the skinned bounding
+// box (lift = -lowest point). Flair's hands/body dip ~16cm UNDER the floor on
+// their own (positive lift); Backflip's crouch and Tut's planted feet float
+// ~10-13cm ABOVE it after the proportional rescale (negative lift).
+const SOLO_CELEBRATIONS = [
+  { path: '/models/flair.glb', hipsLiftM: 0.16 },
+  { path: '/models/backflip.glb', hipsLiftM: -0.10 },
+  { path: '/models/tut-hip-hop-dance.glb', hipsLiftM: -0.13 },
+];
+let soloCelebrationActions = []; // parallel to SOLO_CELEBRATIONS, bound to the runner's own mixer -- null where a file failed to load
+// Hips height of the character Mixamo authored these clips on, in the clips'
+// own local units (cm, local -Z is up in this rig convention -- verified by
+// reading the GLBs' hips tracks vs. each model's bind pose). A clip's hips Z
+// divided by this is "how far through its own standing height" it is.
+const CLIP_STANDING_HIPS_Z = -95.9;
+let keepHipsHeight = false; // set while a solo celebration plays; cleared by startReturn()
+let hipsLiftLocal = 0; // that celebration's hipsLiftM in the hips' own local units (x100: the armature node is scaled 0.01)
+
 // A transient network hiccup on one file shouldn't strand a whole session on
 // the placeholder capsules -- retries once (with a short pause) before
 // actually giving up. Used for defender.glb specifically: it's by far the
@@ -1689,6 +1714,7 @@ const charactersLoaded = Promise.all([
   fetch('/models/jump-cut-left.json').then((r) => r.json()),
   fetch('/models/jump-cut-right.json').then((r) => r.json()),
   Promise.all(TEAM_CELEBRATION_PATHS.map((path) => new Promise((resolve) => new GLTFLoader().load(path, resolve, undefined, (err) => { console.error(`team celebration clip load failed: ${path}`, err); resolve(null); })))),
+  Promise.all(SOLO_CELEBRATIONS.map(({ path }) => new Promise((resolve) => new GLTFLoader().load(path, resolve, undefined, (err) => { console.error(`solo celebration clip load failed: ${path}`, err); resolve(null); })))),
   // Rodin-generated, Mixamo-rigged (33 bones -- a reduced rig, no per-finger
   // articulation beyond one representative digit each hand, but every bone
   // the shared running.glb clip actually drives is present and matches the
@@ -1703,7 +1729,7 @@ const charactersLoaded = Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/sad-idle.glb', resolve, undefined, (err) => console.error('sad-idle animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/catch.glb', resolve, undefined, (err) => console.error('catch animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/breathing-idle.glb', resolve, undefined, (err) => console.error('breathing-idle animation load failed', err))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, teamCelebrationGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf, sadIdleGltf, catchGltf, breathingIdleGltf]) => {
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, teamCelebrationGltfs, soloCelebrationGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf, sadIdleGltf, catchGltf, breathingIdleGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -1762,6 +1788,12 @@ const charactersLoaded = Promise.all([
     a.setLoop(THREE.LoopRepeat); // loops indefinitely until Next Return, same as any dance
     return a;
   });
+  soloCelebrationActions = soloCelebrationGltfs.map((g) => {
+    if (!g) return null;
+    const a = mixer.clipAction(g.animations[0]);
+    a.setLoop(THREE.LoopRepeat);
+    return a;
+  });
 
   if (defenderGltf) {
     defenderTemplate = defenderGltf.scene;
@@ -1798,7 +1830,7 @@ const charactersLoaded = Promise.all([
   // action from the blend. Without this, the turn/stop clips' poses were
   // silently bleeding into the straight run the whole time, which is what
   // was actually behind the persistent "running at an angle" report.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, breathingIdleAction, ...teamCelebrationActions.filter(Boolean)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, breathingIdleAction, ...teamCelebrationActions.filter(Boolean), ...soloCelebrationActions.filter(Boolean)];
   allActions.forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
   runAction.enabled = true;
   activeAction = runAction;
@@ -1884,6 +1916,17 @@ function setActiveAction(next) {
 // running motion sidesteps the bad data entirely.
 function stripRootMotion() {
   if (!hipsBone || !hipsBindPos) return;
+  if (keepHipsHeight) {
+    // Solo acrobatic celebration: still discard the sideways/forward travel
+    // (x, y), but keep the clip's vertical motion, rescaled to THIS model's
+    // own standing height (the clip was authored on a shorter character, so
+    // copying its raw height would sink him into the turf at the bottom of a
+    // Flair/Backflip).
+    const clipZ = hipsBone.position.z;
+    hipsBone.position.copy(hipsBindPos);
+    hipsBone.position.z = hipsBindPos.z * (clipZ / CLIP_STANDING_HIPS_Z) - hipsLiftLocal; // up is -Z in this rig, so lifting subtracts
+    return;
+  }
   hipsBone.position.copy(hipsBindPos);
 }
 
@@ -3291,6 +3334,8 @@ async function startReturn(returnConfig) {
   if (heldBallMesh) heldBallMesh.visible = false; // hide the baked-in carried ball again until this return's own catch
   if (droppedBall) { scene.remove(droppedBall.mesh); droppedBall = null; } // clear any ball dropped during the previous return
   clearTeamDancers(); // clear any teammates from a previous return's team celebration
+  keepHipsHeight = false; // back to the full root-motion strip for normal running
+  hipsLiftLocal = 0;
   cameraPan = null;
   catchStarted = false;
   wasMoving = false;
@@ -3298,7 +3343,7 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, breathingIdleAction, ...teamCelebrationActions.filter(Boolean)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, breathingIdleAction, ...teamCelebrationActions.filter(Boolean), ...soloCelebrationActions.filter(Boolean)];
   finishBlend();
   spin = null;
   spinCooldown = 0;
@@ -3483,14 +3528,7 @@ function updateTeamDancers(dt) {
   });
   if (!teamCelebrationStarted && teamDancers.every((d) => d.dancing)) {
     teamCelebrationStarted = true;
-    const runnerDanceAction = teamCelebrationActions[teamCelebrationIndex];
-    runnerDanceAction.time = 0;
-    runnerDanceAction.enabled = true;
-    runnerDanceAction.paused = false;
-    runnerDanceAction.play();
-    activeAction.paused = true;
-    activeAction.enabled = false;
-    activeAction = runnerDanceAction;
+    playRunnerCelebrationAction(teamCelebrationActions[teamCelebrationIndex]);
     teamDancers.forEach((d) => {
       d.mixer.stopAllAction(); // cut cleanly from the run-in clip, no blend into the dance
       const a = d.mixer.clipAction(teamCelebrationClips[teamCelebrationIndex]);
@@ -3516,18 +3554,69 @@ function updateTeamDancers(dt) {
   }
 }
 
-// Always runs a TEAM celebration (the old solo-dance pool was removed per a
-// direct ask), picked uniformly at random among whichever entries of
-// TEAM_CELEBRATION_PATHS actually loaded. If none are ready yet (assets
-// still loading), skips straight to finalizing -- the 'turn' phase's
-// about-face is still a complete-feeling celebration on its own.
+// Starts one of the RUNNER's own celebration actions from frame 0, parking
+// whatever he was doing. Shared by the team path (once both teammates have
+// arrived) and the solo path -- `time = 0` matters because startReturn()
+// leaves reused actions paused wherever they last were, and a Backflip
+// resuming mid-flip would be wrong.
+function playRunnerCelebrationAction(action) {
+  action.time = 0;
+  action.enabled = true;
+  action.paused = false;
+  action.play();
+  activeAction.paused = true;
+  activeAction.enabled = false;
+  activeAction = action;
+}
+
+// Which celebrations this contest has already used -- a touchdown never gets
+// a celebration that an earlier touchdown in the same contest already got
+// (5 returns, 5 celebrations, so a full contest sees each exactly once).
+// Keyed by the contest's own `instance` URL param and kept in sessionStorage,
+// so reloading the page mid-contest doesn't reset the deck and hand back a
+// repeat; plain in-memory fallback if storage is unavailable. Entry ids are
+// the clips' paths.
+const USED_CELEBRATIONS_KEY = 'kr3d-used-celebrations:' + (new URLSearchParams(location.search).get('instance') || 'default');
+const usedCelebrations = new Set();
+try { JSON.parse(sessionStorage.getItem(USED_CELEBRATIONS_KEY) || '[]').forEach((id) => usedCelebrations.add(id)); } catch (e) { /* storage blocked/corrupt -- start fresh */ }
+function persistUsedCelebrations() {
+  try { sessionStorage.setItem(USED_CELEBRATIONS_KEY, JSON.stringify([...usedCelebrations])); } catch (e) { /* in-memory set still works for this page load */ }
+}
+
+// Picks ONE celebration at random from everything that loaded and hasn't been
+// used yet this contest -- the team ones (TEAM_CELEBRATION_PATHS: two
+// teammates run up and join) and the solo ones (SOLO_CELEBRATIONS: just the
+// runner) share one pool. Team entries also need the blocker model and run
+// clip for the teammates. If the pool is empty (assets still loading), skips
+// straight to finalizing -- the 'turn' phase's about-face is still a
+// complete-feeling celebration on its own. If every ready entry has already
+// been used (more touchdowns than celebrations, or some files failed to
+// load), the deck reshuffles rather than leaving a touchdown with nothing.
 function startDancePhase() {
-  const readyIndexes = teamCelebrationActions.map((a, i) => (a ? i : -1)).filter((i) => i >= 0);
-  if (readyIndexes.length === 0 || !blockerTemplate || !defenderRunClip) {
+  const teamOk = blockerTemplate && defenderRunClip;
+  const pool = [];
+  teamCelebrationActions.forEach((a, i) => { if (a && teamOk) pool.push({ kind: 'team', index: i, id: TEAM_CELEBRATION_PATHS[i] }); });
+  soloCelebrationActions.forEach((a, i) => { if (a) pool.push({ kind: 'solo', index: i, id: SOLO_CELEBRATIONS[i].path }); });
+  if (pool.length === 0) {
     finalizeCelebration(fieldYards, true);
     return;
   }
-  teamCelebrationIndex = readyIndexes[Math.floor(Math.random() * readyIndexes.length)];
+  let fresh = pool.filter((e) => !usedCelebrations.has(e.id));
+  if (fresh.length === 0) {
+    usedCelebrations.clear();
+    fresh = pool;
+  }
+  const pick = fresh[Math.floor(Math.random() * fresh.length)];
+  usedCelebrations.add(pick.id);
+  persistUsedCelebrations();
+  if (pick.kind === 'solo') {
+    keepHipsHeight = true; // acrobatics live in the hips' vertical travel -- see stripRootMotion()
+    hipsLiftLocal = SOLO_CELEBRATIONS[pick.index].hipsLiftM * 100;
+    playRunnerCelebrationAction(soloCelebrationActions[pick.index]);
+    wait(600).then(() => finalizeCelebration(fieldYards, true));
+    return;
+  }
+  teamCelebrationIndex = pick.index;
   startTeamCelebration();
   // Gives the run-in and the first few synced beats time to actually read
   // before the result panel shows up, since the dance only starts looking
