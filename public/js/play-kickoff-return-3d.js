@@ -1259,6 +1259,24 @@ const DANCE_MODEL_PATHS = [
 ];
 let danceActions = [];
 
+// A TEAM celebration -- a separate pool from the solo dances above, kept
+// deliberately as its own thing (not folded into DANCE_MODEL_PATHS/
+// danceActions) so it's easy to grow into "a bunch of team celebrations"
+// later and eventually retire the solo ones without having to untangle
+// the two. First one: a 3-part Thriller routine, user's own Mixamo
+// downloads, retargeted (by them, on mixamo.com) onto a 33-bone reduced
+// rig -- same shape as blocker.glb/defender.glb, confirmed via a direct
+// bone-count check before conversion, so it plays on blockerTemplate
+// clones with no track-filtering needed (unlike the referee-walk-clip
+// case elsewhere in this file, where the rigs didn't already match).
+const THRILLER_MODEL_PATHS = [
+  '/models/thriller-part-2.glb',
+  '/models/thriller-part-3.glb',
+  '/models/thriller-part-4.glb',
+];
+let thrillerActions = []; // 3 actions bound to the RUNNER's own shared mixer, chained via playThrillerSequence() -- only populated once ALL 3 parts load successfully, see charactersLoaded .then()
+let thrillerClips = []; // the raw AnimationClip data for the same 3 parts, rebound onto each teammate's OWN mixer fresh per celebration (see startThrillerCelebration())
+
 // A transient network hiccup on one file shouldn't strand a whole session on
 // the placeholder capsules -- retries once (with a short pause) before
 // actually giving up. Used for defender.glb specifically: it's by far the
@@ -1308,6 +1326,7 @@ const charactersLoaded = Promise.all([
   fetch('/models/jump-cut-left.json').then((r) => r.json()),
   fetch('/models/jump-cut-right.json').then((r) => r.json()),
   Promise.all(DANCE_MODEL_PATHS.map((path) => new Promise((resolve) => new GLTFLoader().load(path, resolve, undefined, (err) => { console.error(`dance clip load failed: ${path}`, err); resolve(null); })))),
+  Promise.all(THRILLER_MODEL_PATHS.map((path) => new Promise((resolve) => new GLTFLoader().load(path, resolve, undefined, (err) => { console.error(`thriller clip load failed: ${path}`, err); resolve(null); })))),
   // Rodin-generated, Mixamo-rigged (33 bones -- a reduced rig, no per-finger
   // articulation beyond one representative digit each hand, but every bone
   // the shared running.glb clip actually drives is present and matches the
@@ -1322,7 +1341,7 @@ const charactersLoaded = Promise.all([
   new Promise((resolve) => new GLTFLoader().load('/models/sad-idle.glb', resolve, undefined, (err) => console.error('sad-idle animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/catch.glb', resolve, undefined, (err) => console.error('catch animation load failed', err))),
   new Promise((resolve) => new GLTFLoader().load('/models/breathing-idle.glb', resolve, undefined, (err) => console.error('breathing-idle animation load failed', err))),
-]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf, sadIdleGltf, catchGltf, breathingIdleGltf]) => {
+]).then(([runnerGltf, runGltf, rightTurnGltf, leftTurnGltf, stopGltf, turn180Gltf, rightStrafeGltf, leftStrafeGltf, fallingDownGltf, fallFlatGltf, spinLeftJson, spinRightJson, jumpCutLeftJson, jumpCutRightJson, danceGltfs, thrillerGltfs, defenderGltf, flexGltf, victoryGltf, pushGltf, blockerGltf, sadIdleGltf, catchGltf, breathingIdleGltf]) => {
   const model = runnerGltf.scene;
   model.rotation.y = Math.PI;
   model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -1376,6 +1395,24 @@ const charactersLoaded = Promise.all([
     .filter(Boolean);
   danceActions.forEach(({ action }) => action.setLoop(THREE.LoopRepeat));
 
+  // Only wire up the team celebration if ALL 3 parts loaded -- a partial
+  // Thriller (missing its own middle or ending) would read as broken in a
+  // way a missing SOLO dance option never would (that one just shrinks the
+  // random pool by one, invisibly).
+  if (thrillerGltfs.every(Boolean)) {
+    thrillerClips = thrillerGltfs.map((g) => g.animations[0]);
+    thrillerActions = thrillerClips.map((clip) => {
+      const a = mixer.clipAction(clip);
+      // LoopOnce + clampWhenFinished=false (not the usual reaction-clip
+      // pattern) -- playThrillerSequence()'s own 'finished' listener is
+      // what advances to the next part; clamping here would just freeze
+      // on the last frame of each part instead of chaining forward.
+      a.setLoop(THREE.LoopOnce);
+      a.clampWhenFinished = false;
+      return a;
+    });
+  }
+
   if (defenderGltf) {
     defenderTemplate = defenderGltf.scene;
     defenderTemplate.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -1410,7 +1447,7 @@ const charactersLoaded = Promise.all([
   // action from the blend. Without this, the turn/stop clips' poses were
   // silently bleeding into the straight run the whole time, which is what
   // was actually behind the persistent "running at an angle" report.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, breathingIdleAction, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, breathingIdleAction, ...danceActions.map((d) => d.action), ...thrillerActions];
   allActions.forEach((a) => { a.play(); a.paused = true; a.enabled = false; });
   runAction.enabled = true;
   activeAction = runAction;
@@ -2826,6 +2863,7 @@ function tick(now) {
     updateCameraman();
     updateSidelinePlayers(dt);
     updateDroppedBall(dt);
+    updateTeamDancers(dt);
     // Skipped during 'tackled': the fall clips' own baked root motion is
     // what actually drags him down to the ground -- stripping it every
     // frame like the run cycle needs would hold him rigidly standing
@@ -2899,6 +2937,7 @@ async function startReturn(returnConfig) {
   if (ball) { if (ball.parent) ball.parent.remove(ball); ball = null; } // clear any leftover flying ball from the previous return
   if (heldBallMesh) heldBallMesh.visible = false; // hide the baked-in carried ball again until this return's own catch
   if (droppedBall) { scene.remove(droppedBall.mesh); droppedBall = null; } // clear any ball dropped during the previous return
+  clearTeamDancers(); // clear any teammates from a previous return's Thriller celebration
   cameraPan = null;
   catchStarted = false;
   wasMoving = false;
@@ -2906,7 +2945,7 @@ async function startReturn(returnConfig) {
   // Reset directly rather than through setActiveAction() -- that always
   // unpauses whatever it switches to, which would start the run cycle
   // animating before the player has pressed anything.
-  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, breathingIdleAction, ...danceActions.map((d) => d.action)];
+  const allActions = [runAction, runRightTurnAction, runLeftTurnAction, rightStrafeAction, leftStrafeAction, spinLeftAction, spinRightAction, jumpCutLeftAction, jumpCutRightAction, fallingDownAction, fallFlatAction, stopAction, turn180Action, catchAction, outOfBoundsAction, breathingIdleAction, ...danceActions.map((d) => d.action), ...thrillerActions];
   finishBlend();
   spin = null;
   spinCooldown = 0;
@@ -2970,9 +3009,144 @@ async function startReturn(returnConfig) {
 // If no dance clips loaded (DANCE_MODEL_PATHS empty), skips straight to
 // finalizing -- the 'turn' phase's about-face is still a complete-feeling
 // celebration on its own.
+// ---- Team celebration: Thriller --------------------------------------
+// Two teammates (blockerTemplate clones -- same team color as the runner)
+// spawn just outside the celebration camera's own framing and run in to
+// flank him, then all three dance the same 3-part routine in sync. Kept
+// deliberately separate from the solo danceActions machinery above (own
+// spawn/cleanup, own camera framing) so this is easy to grow into several
+// team celebrations later without having to untangle it from the solo path.
+let teamDancers = []; // [{ group, mixer, targetX, dancing }] for the 2 teammates -- empty except during this celebration
+let teamCelebrationStarted = false; // guards the synced Thriller kickoff (once both teammates arrive) from firing more than once
+const TEAM_DANCER_SPAWN_OFFSET = 9; // yards either side of the runner -- outside the celebration camera's actual frame, not just off his shoulder
+const TEAM_DANCER_FLANK_OFFSET = 1.7; // yards either side of the runner once in position
+const TEAM_DANCER_RUNIN_SPEED = 7; // yards/s -- brisk jog, not a sprint; this is a quick stylized join, not a real run
+
+function clearTeamDancers() {
+  teamDancers.forEach((d) => scene.remove(d.group));
+  teamDancers = [];
+  teamCelebrationStarted = false;
+}
+
+// Plays a 3-part clip sequence on one mixer, chained via 'finished'
+// listeners (same handoff pattern already used for the tackling defender's
+// push -> flex reaction above), looping the whole routine once part 4 ends
+// -- matches the solo dances' own "loops until Next Return" behavior.
+// `actions` must be 3 THREE.AnimationAction instances off the SAME mixer,
+// in part order. `onPart`, if given, fires with each part's action right
+// as it starts (used for the runner's own activeAction bookkeeping).
+function playThrillerSequence(targetMixer, actions, onPart) {
+  let i = 0;
+  function playNext() {
+    const current = actions[i];
+    current.enabled = true;
+    current.paused = false;
+    current.time = 0;
+    current.play();
+    if (onPart) onPart(current);
+    const onFinished = (e) => {
+      if (e.action !== current) return;
+      targetMixer.removeEventListener('finished', onFinished);
+      i = (i + 1) % actions.length;
+      playNext();
+    };
+    targetMixer.addEventListener('finished', onFinished);
+  }
+  playNext();
+}
+
+function startThrillerCelebration() {
+  const z = RUNNER_GROUP.position.z; // his resting celebration spot -- both teammates run in to this same z
+  const runnerX = RUNNER_GROUP.position.x;
+  [-1, 1].forEach((side) => {
+    const model = cloneSkinnedScene(blockerTemplate);
+    model.rotation.y = Math.PI; // same base-facing correction every character gets
+    const group = new THREE.Group();
+    group.add(model);
+    // Net 0 after cancelling the model's own PI correction -- faces +Z,
+    // the same direction the runner ends his own 'turn' phase facing (see
+    // that phase's own comment: spun to face the camera, which reads as
+    // away from the cheerleaders, who are stationed deeper in -Z).
+    group.rotation.y = Math.PI;
+    group.position.set(runnerX + side * TEAM_DANCER_SPAWN_OFFSET, 0, z);
+    scene.add(group);
+    const dancerMixer = new THREE.AnimationMixer(model);
+    dancerMixer.clipAction(defenderRunClip).play(); // run-in clip, same shared one every defender/blocker already uses
+    teamDancers.push({ group, mixer: dancerMixer, targetX: runnerX + side * TEAM_DANCER_FLANK_OFFSET, dancing: false });
+  });
+
+  // Wider/further-back framing than the solo-celebration default -- three
+  // dancers side by side need more than the single-runner shot
+  // freezeCelebrationCamera() already set at the 'endzone' transition.
+  camera.position.set(runnerX, CELEBRATION_CAM_HEIGHT + 0.6, z + CELEBRATION_CAM_BACK + 2.5);
+  camTarget.set(runnerX, LOOK_HEIGHT + 0.3, z);
+  camera.lookAt(camTarget);
+}
+
+// Unconditional per-frame upkeep (same pattern as updateDroppedBall etc.)
+// -- advances each teammate's run-in, then kicks off the synced 3-way
+// Thriller sequence the instant both have actually arrived.
+function updateTeamDancers(dt) {
+  if (teamDancers.length === 0) return;
+  teamDancers.forEach((d) => {
+    if (d.dancing) { d.mixer.update(dt); return; }
+    const dx = d.targetX - d.group.position.x;
+    if (Math.abs(dx) > 0.05) {
+      d.group.position.x += Math.sign(dx) * Math.min(Math.abs(dx), TEAM_DANCER_RUNIN_SPEED * dt);
+      d.mixer.update(dt);
+    } else {
+      d.group.position.x = d.targetX;
+      d.dancing = true;
+    }
+  });
+  if (teamCelebrationStarted || !teamDancers.every((d) => d.dancing)) return;
+  teamCelebrationStarted = true;
+  playThrillerSequence(mixer, thrillerActions, (a) => {
+    activeAction.paused = true;
+    activeAction.enabled = false;
+    activeAction = a;
+  });
+  teamDancers.forEach((d) => {
+    d.mixer.stopAllAction(); // cut cleanly from the run-in clip, no blend into the dance
+    const dancerActions = thrillerClips.map((clip) => {
+      const a = d.mixer.clipAction(clip);
+      a.setLoop(THREE.LoopOnce);
+      a.clampWhenFinished = false;
+      return a;
+    });
+    playThrillerSequence(d.mixer, dancerActions);
+  });
+}
+
+// Picks a random dance and lets it keep looping indefinitely -- these are
+// full 15-17s routines (one's ~3.4s), not short loops, so there's no
+// fixed hold time that lands on a clean loop boundary within a snappy
+// celebration window; any flat timer just relocates the abrupt mid-motion
+// cutoff rather than avoiding it. Instead, finalize (submit + show the
+// result panel) after a brief beat but leave the dance running in the
+// background -- the player watches as long as they want and moves on by
+// clicking Next Return, which is what actually stops the animation loop
+// (via the fresh requestAnimationFrame chain startReturn() sets up).
+// If no dance clips loaded (DANCE_MODEL_PATHS empty), skips straight to
+// finalizing -- the 'turn' phase's about-face is still a complete-feeling
+// celebration on its own.
 function startDancePhase() {
-  if (danceActions.length === 0) {
+  const teamCelebrationReady = thrillerActions.length === THRILLER_MODEL_PATHS.length && blockerTemplate && defenderRunClip;
+  const pickCount = danceActions.length + (teamCelebrationReady ? 1 : 0);
+  if (pickCount === 0) {
     finalizeCelebration(fieldYards, true);
+    return;
+  }
+  // The team celebration counts as one more option in the same random
+  // pool as the solo dances -- same odds as any single solo dance getting
+  // picked. Trivial to reweight once there's more than one team option.
+  if (teamCelebrationReady && Math.random() < 1 / pickCount) {
+    startThrillerCelebration();
+    // Longer than the solo path's 600ms -- gives the run-in and the first
+    // few synced beats time to actually read before the result panel
+    // shows up, since the dance only starts looking like "a celebration"
+    // once both teammates have arrived.
+    wait(2600).then(() => finalizeCelebration(fieldYards, true));
     return;
   }
   const pick = danceActions[Math.floor(Math.random() * danceActions.length)];
