@@ -712,13 +712,27 @@ function buildCameraman(lengthYards) {
 // (z=-30 to -70 on a 100yd field) -- no placement overlap with those.
 // Pushed into the SAME `cameramen` array the kneeling trio uses, so
 // updateCameraman() (below) tracks all of them with no changes needed.
+//
+// X was originally the real sideline distance (FIELD_WIDTH/2 + 1, matching
+// the standing sideline PLAYERS' own apron row) -- confirmed from live
+// screenshots to never actually be visible: the normal chase cam only sits
+// CHASE_BACK (5.5yd) behind the runner, which at a 60deg-vertical/16:9
+// camera works out to roughly a 5.6yd visible half-width either side of
+// him -- nowhere close to reaching the real sideline (~27yd out), so
+// nothing standing there (not just these cameramen -- benches, standing
+// players, etc. have the exact same issue) is ever clearly in frame during
+// normal play, only in the wide kickoff-formation and touchdown-celebration
+// shots. Per direct user choice (asked, since it trades literal sideline
+// realism for actually being seen tracking the runner -- the whole point
+// of this feature): pulled WAY in, inside that visible half-width, rather
+// than left at the real sideline distance.
 let standingCameramanGroup = null;
 function buildStandingCameramen(lengthYards) {
   if (standingCameramanGroup) scene.remove(standingCameramanGroup);
   if (!standingCameramanTemplate) return;
   standingCameramanGroup = new THREE.Group();
 
-  const STANDING_CAMERAMAN_X = FIELD_WIDTH / 2 + 1; // same apron distance as the sideline players' own front row
+  const STANDING_CAMERAMAN_X = 5; // yd either side of center -- see the comment above for why this isn't the real sideline distance
   [10, 25].forEach((yard) => {
     [-1, 1].forEach((sign) => {
       const model = standingCameramanTemplate.clone();
@@ -3185,13 +3199,25 @@ let teamCelebrationStarted = false; // guards the synced Thriller kickoff (once 
 const THRILLER_CAM_EXTRA_BACK = 10; // on top of CELEBRATION_CAM_BACK
 const TEAM_DANCER_SPAWN_YARD_LINE = 10; // the actual 10-yard line, measured from the SCORING goal (same convention as kickerKickSpotZ elsewhere in this file)
 const TEAM_DANCER_FLANK_OFFSET = 1.7; // yards either side of the runner once in position -- also the spawn X now, since there's no lateral run-in anymore
-const TEAM_DANCER_RUNIN_SPEED = 7; // yards/s -- brisk jog, not a sprint; this is a quick stylized join, not a real run
+const TEAM_DANCER_RUNIN_SPEED = FORWARD_SPEED; // match the returner's own run speed, per request
 
 function clearTeamDancers() {
   teamDancers.forEach((d) => scene.remove(d.group));
   teamDancers = [];
   teamCelebrationStarted = false;
+  thrillerCamPan = null;
 }
+
+// Set once teamCelebrationStarted flips true (see updateTeamDancers() below)
+// -- eases the WIDE run-up framing (needs the extra room for the 10-yard-
+// line entrance to read) in to a closer final dance shot once they've
+// actually arrived and there's no more run-up left to show. Live feedback:
+// staying at the wide framing for the whole dance "moved back to the 10
+// yard line instead of staying on the 5 yard line" -- the close framing
+// below (CELEBRATION_CAM_BACK alone, no extra) lands almost exactly on the
+// literal 5-yard line the user described.
+let thrillerCamPan = null;
+const THRILLER_DANCE_CAM_PAN_DURATION = 1.5; // seconds -- same eased-lerp technique as the kickoff sequence's own camera pan (see CAMERA_PAN_DURATION)
 
 function startThrillerCelebration() {
   const z = RUNNER_GROUP.position.z; // his resting celebration spot -- both teammates run in to this same z
@@ -3268,22 +3294,39 @@ function updateTeamDancers(dt) {
     // and reappearing in the endzone").
     if (d.hipsBone && d.hipsBindPos) d.hipsBone.position.copy(d.hipsBindPos);
   });
-  if (teamCelebrationStarted || !teamDancers.every((d) => d.dancing)) return;
-  teamCelebrationStarted = true;
-  const runnerThrillerAction = thrillerActions[0];
-  runnerThrillerAction.time = 0;
-  runnerThrillerAction.enabled = true;
-  runnerThrillerAction.paused = false;
-  runnerThrillerAction.play();
-  activeAction.paused = true;
-  activeAction.enabled = false;
-  activeAction = runnerThrillerAction;
-  teamDancers.forEach((d) => {
-    d.mixer.stopAllAction(); // cut cleanly from the run-in clip, no blend into the dance
-    const a = d.mixer.clipAction(thrillerClips[0]);
-    a.setLoop(THREE.LoopRepeat);
-    a.play();
-  });
+  if (!teamCelebrationStarted && teamDancers.every((d) => d.dancing)) {
+    teamCelebrationStarted = true;
+    const runnerThrillerAction = thrillerActions[0];
+    runnerThrillerAction.time = 0;
+    runnerThrillerAction.enabled = true;
+    runnerThrillerAction.paused = false;
+    runnerThrillerAction.play();
+    activeAction.paused = true;
+    activeAction.enabled = false;
+    activeAction = runnerThrillerAction;
+    teamDancers.forEach((d) => {
+      d.mixer.stopAllAction(); // cut cleanly from the run-in clip, no blend into the dance
+      const a = d.mixer.clipAction(thrillerClips[0]);
+      a.setLoop(THREE.LoopRepeat);
+      a.play();
+    });
+    thrillerCamPan = { fromPos: camera.position.clone(), fromTarget: camTarget.clone(), elapsed: 0 };
+  }
+  // Eases the wide run-up framing in to the closer final dance shot -- see
+  // thrillerCamPan's own comment above. Recomputes the close end-point
+  // fresh every frame (cheap) rather than storing it, since the celebration
+  // spot/runnerX are already stable by the time this fires.
+  if (thrillerCamPan && thrillerCamPan.elapsed < THRILLER_DANCE_CAM_PAN_DURATION) {
+    thrillerCamPan.elapsed += dt;
+    const t = easeOutCubic(Math.min(1, thrillerCamPan.elapsed / THRILLER_DANCE_CAM_PAN_DURATION));
+    const runnerX = RUNNER_GROUP.position.x;
+    const z = teamDancers[0].targetZ;
+    const toPos = new THREE.Vector3(runnerX, CELEBRATION_CAM_HEIGHT + 0.6, z + CELEBRATION_CAM_BACK);
+    const toTarget = new THREE.Vector3(runnerX, LOOK_HEIGHT + 0.3, z);
+    camera.position.lerpVectors(thrillerCamPan.fromPos, toPos, t);
+    camTarget.lerpVectors(thrillerCamPan.fromTarget, toTarget, t);
+    camera.lookAt(camTarget);
+  }
 }
 
 // Always runs the team celebration now -- the old random pick against a
