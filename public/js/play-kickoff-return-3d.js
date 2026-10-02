@@ -2301,6 +2301,43 @@ let ballEnd = new THREE.Vector3();
 let cameraPan = null; // { fromPos, fromTarget, toPos, toTarget } -- captured once at the 'kickoff' -> 'hang' transition, consumed by the 'hang' branch's per-frame lerp
 let catchStarted = false; // the catch animation fires CATCH_ANTICIPATION seconds before the ball actually arrives, partway through 'hang' -- this just guards it firing once, see the 'hang' branch below
 
+// A tackle or touchdown ends the carry -- heldBallMesh (rigidly skinned to
+// his hand) goes invisible and a plain loose THREE.Mesh takes its place,
+// falling to the ground under simple gravity. Same geometry/material as
+// the kick-flight ball (SphereGeometry(0.11), scale (1,1,1.5), 0x8a4b26)
+// for visual consistency, just not reusing that ball object itself since
+// it's already long gone by the time anyone's tackled.
+let droppedBall = null; // { mesh, vy, atRest } -- stays non-null (mesh still in-scene, just frozen) once it lands, so startReturn() has something to clean up; only reset to null there
+const DROP_GRAVITY = 20; // yards/s^2 -- purely a "looks right" fall speed, not a real-world value
+function dropBall() {
+  if (!heldBallMesh || !heldBallMesh.visible) return; // already dropped (or never had it) this return -- don't spawn a second one
+  const worldPos = new THREE.Vector3();
+  heldBallMesh.getWorldPosition(worldPos);
+  heldBallMesh.visible = false;
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.11, 16, 12),
+    new THREE.MeshStandardMaterial({ color: 0x8a4b26, roughness: 0.5 })
+  );
+  mesh.scale.set(1, 1, 1.5);
+  mesh.castShadow = true;
+  mesh.position.copy(worldPos);
+  mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); // tumbling out of his hand, not landing in some fixed orientation
+  scene.add(mesh);
+  droppedBall = { mesh, vy: 0, atRest: false };
+}
+const DROP_GROUND_Y = 0.1; // yards -- rests a hair above the actual turf plane (same reasoning as the kicked ball's own radius) rather than half-sunk into it
+function updateDroppedBall(dt) {
+  if (!droppedBall || droppedBall.atRest) return;
+  droppedBall.vy -= DROP_GRAVITY * dt;
+  droppedBall.mesh.position.y += droppedBall.vy * dt;
+  droppedBall.mesh.rotation.x += dt * 6;
+  droppedBall.mesh.rotation.z += dt * 4;
+  if (droppedBall.mesh.position.y <= DROP_GROUND_Y) {
+    droppedBall.mesh.position.y = DROP_GROUND_Y;
+    droppedBall.atRest = true; // stop paying for per-frame updates -- mesh stays in the scene until startReturn() clears it
+  }
+}
+
 // Which way he goes down depends on where the hit came from, relative to
 // which way he's actually facing/running (RUNNER_GROUP's own local -Z,
 // same "forward = -Z" convention as the rest of this file -- see
@@ -2333,6 +2370,7 @@ function triggerTackle(defender) {
   setActiveAction(fallAction || stopAction); // fall back to stopAction if either clip somehow failed to load
   if (activeAction) activeAction.paused = false;
   document.getElementById('kr3d-overlay-text').textContent = 'TACKLED';
+  dropBall(); // jarred loose by the hit -- falls to the ground right where he was standing
 
   // The defender that actually made the hit gets his own moment -- swap his
   // mixer off the run cycle, onto the push (the moment of impact), then
@@ -2619,6 +2657,7 @@ function tick(now) {
         jumpCut = null;
         freezeCelebrationCamera();
         triggerRefereeCelebration();
+        dropBall(); // ball's down the instant he crosses the line, same as the real rule -- drops right there rather than waiting for the celebration dance to finish
 
         // Same "running in place" bug as the tackle path, on the other
         // branch: updateDefenders()'s state machine (movement) is gated to
@@ -2786,6 +2825,7 @@ function tick(now) {
     updateRefereeAnimations(dt);
     updateCameraman();
     updateSidelinePlayers(dt);
+    updateDroppedBall(dt);
     // Skipped during 'tackled': the fall clips' own baked root motion is
     // what actually drags him down to the ground -- stripping it every
     // frame like the run cycle needs would hold him rigidly standing
@@ -2858,6 +2898,7 @@ async function startReturn(returnConfig) {
   spawnKicker(returnConfig.defenderSpeed ?? 1); // same speed multiplier as the rest of the defenders -- he's promoted into that same array once he's kicked it (see promoteKickerToDefender())
   if (ball) { if (ball.parent) ball.parent.remove(ball); ball = null; } // clear any leftover flying ball from the previous return
   if (heldBallMesh) heldBallMesh.visible = false; // hide the baked-in carried ball again until this return's own catch
+  if (droppedBall) { scene.remove(droppedBall.mesh); droppedBall = null; } // clear any ball dropped during the previous return
   cameraPan = null;
   catchStarted = false;
   wasMoving = false;
