@@ -37,8 +37,13 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 2, -30); // placeholder, same reason
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-controls.minDistance = 4;
-controls.maxDistance = 90;
+// The kick cam is a fixed broadcast framing (updateDistance() sets it per kick) -- the player
+// only ever needs the one correct view, so zoom/orbit/pan are all off. OrbitControls stays
+// only as the thing that points the camera at its target.
+controls.enableZoom = false;
+controls.enableRotate = false;
+controls.enablePan = false;
+renderer.domElement.style.touchAction = 'auto'; // OrbitControls claims touch-action:none, which would stop a phone from scrolling the page past the canvas
 controls.maxPolarAngle = Math.PI * 0.49; // don't let it dip below the field
 controls.update();
 
@@ -533,11 +538,7 @@ function updateDistance(distanceYards) {
   // left-of-frame with the ball and goalpost centered, instead of the
   // kicker crowding the middle of the shot.
   camera.position.set(CAMERA_X, 3.2, kickerZ + 7);
-  // At true scale a deep kick puts the posts 60+ yards away, so tighten the lens
-  // as the kick gets longer (50° up close, ~36° at 55 yards) to keep them readable.
-  const lens = Math.min(1, Math.max(0, (distanceYards - 25) / 30));
-  camera.fov = 50 - lens * 14;
-  camera.updateProjectionMatrix();
+  if (camera.fov !== 50) { camera.fov = 50; camera.updateProjectionMatrix(); } // the end-zone cam widens the lens; the kick cam is always 50
   controls.target.set(0, 2, GOALPOST_Z + 12);
   controls.update();
 }
