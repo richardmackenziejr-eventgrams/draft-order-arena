@@ -38,6 +38,17 @@ header.site a.logo {
   letter-spacing: -0.02em;
 }
 
+/* The white Colosseum mark, drawn before the wordmark on every page (one place, no per-page markup). */
+header.site a.logo::before {
+  content: "";
+  display: inline-block;
+  vertical-align: middle;
+  width: 46px;
+  height: 27px;
+  background: url("/images/logo-colosseum.png") center / contain no-repeat;
+  margin-right: 12px;
+}
+
 header.site a.logo span { color: var(--accent); }
 
 main {
