@@ -1035,6 +1035,45 @@ function buildCheerleaders(lengthYards) {
       }
     });
   });
+
+  // Single row along EACH sideline, touchdown-side only, per a direct
+  // request: starts around the 35 (near the standing cameraman at the
+  // 25/far-side spot -- "35" is the user's own rough landmark, kept as
+  // given) and runs down through the endzone to its back line. Unlike the
+  // two squads above (which stand BEHIND the goal line facing back at the
+  // field), this row stands BESIDE the field along its length, so needs
+  // the inward-facing correction every sideline character uses -- same
+  // raw-+Z-at-rest convention as blocker/defender (before THEIR OWN
+  // Math.PI base correction, which cheerleaders never get at all), so the
+  // same +-90deg turns buildSidelinePlayers()'s own SIDES array uses apply
+  // directly here. X is offset one notch further out than the standing
+  // cameramen's own FIELD_WIDTH/2+1 (same "+2.3" second-row offset
+  // buildSidelinePlayers() already uses) specifically so this row's long
+  // span doesn't land directly on top of the far-side cameramen at z=-75/-90.
+  const CHEER_SIDELINE_X = FIELD_WIDTH / 2 + 2.3;
+  const CHEER_SIDELINE_START_Z = -(lengthYards - 35); // the 35-yard line
+  const CHEER_SIDELINE_END_Z = -(lengthYards + ENDZONE_DEPTH); // back of the endzone
+  const CHEER_SIDELINE_GAP = 2; // yd between neighbors -- same spacing as the back squads' own CHEER_ROW_GAP
+  const CHEER_SIDELINE_COUNT = Math.round(Math.abs(CHEER_SIDELINE_END_Z - CHEER_SIDELINE_START_Z) / CHEER_SIDELINE_GAP) + 1;
+  [-1, 1].forEach((sign) => {
+    const facingY = sign < 0 ? Math.PI / 2 : -Math.PI / 2; // same convention as buildSidelinePlayers()'s own SIDES array
+    for (let i = 0; i < CHEER_SIDELINE_COUNT; i++) {
+      const template = cheerleaderTemplates[i % CHEERLEADER_COUNT];
+      if (!template) continue; // that particular model hasn't loaded yet -- buildCheerleaders() reruns once it does
+      const model = cloneSkinnedScene(template);
+      model.rotation.y = facingY;
+      model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+      const mixer = new THREE.AnimationMixer(model);
+      mixer.clipAction(cheerCheeringClip).play();
+      mixer.setTime(Math.random() * cheerCheeringClip.duration);
+      const t = i / (CHEER_SIDELINE_COUNT - 1);
+      const z = CHEER_SIDELINE_START_Z + (CHEER_SIDELINE_END_Z - CHEER_SIDELINE_START_Z) * t;
+      model.position.set(sign * CHEER_SIDELINE_X, 0, z);
+      cheerleaderGroup.add(model);
+      cheerleaders.push({ mixer });
+    }
+  });
+
   scene.add(cheerleaderGroup);
 }
 
