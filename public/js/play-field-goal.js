@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { createSidelineCrew } from '/js/sideline-crew.js';
 import { createStadium, GOALPOST_SETBACK, ENDZONE_DEPTH, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js';
 
 const instanceId = qs('instance');
@@ -63,7 +64,10 @@ scene.add(sun);
 // real goalpost -- which sits behind a 10-yard endzone -- lands exactly there.
 const GOALPOST_Z = -54;
 const GOAL_LINE_Z = GOALPOST_Z + GOALPOST_SETBACK;
-createStadium(scene, { lengthYards: 100, goalLineZ: GOAL_LINE_Z });
+const stadium = createStadium(scene, { lengthYards: 100, goalLineZ: GOAL_LINE_Z });
+// Cheerleaders behind/beside the far endzone + photographers who follow the ball.
+const crew = createSidelineCrew(stadium.root, { lengthYards: 100 });
+let lastCrewFrameMs = performance.now();
 
 
 // A jersey-colored canvas texture with an optional name arched above a big
@@ -1572,6 +1576,10 @@ new ResizeObserver(resize).observe(wrap);
 let cameraLocked = false;
 function renderFrame() {
   if (!cameraLocked) controls.update();
+
+  const nowMs = performance.now();
+  crew.update(Math.min(0.1, (nowMs - lastCrewFrameMs) / 1000), ball.position); // clamp so a backgrounded tab doesn't fast-forward the cheers
+  lastCrewFrameMs = nowMs;
 
   if (kickPhase === 'power' && currentPowerStartedAt != null) {
     const elapsed = Date.now() - currentPowerStartedAt;
