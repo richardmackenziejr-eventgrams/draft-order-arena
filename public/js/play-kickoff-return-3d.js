@@ -225,6 +225,7 @@ function buildField(lengthYards) {
   scene.add(hashMesh);
 
   buildEndzoneMarkings(lengthYards);
+  buildYardNumbers(lengthYards);
   buildPylons(lengthYards);
   buildEndzoneStands(lengthYards);
   buildGoalposts(lengthYards);
@@ -235,6 +236,79 @@ function buildField(lengthYards) {
   buildStandingCameramen(lengthYards);
   buildSidelinePlayers(lengthYards);
   buildBenches(lengthYards);
+}
+
+// ---- Yard numbers ---------------------------------------------------------
+// Painted 10/20/30/40/50/40/30/20/10 markers near both sidelines, NFL style:
+// glyphs read upright from the NEAREST sideline (top of the numeral points
+// toward midfield), and every number except the 50 carries a small triangle
+// pointing at the nearer goal line. Same CanvasTexture technique as the
+// endzone lettering above. `arrow` is 'left' / 'right' (which side of the
+// numeral the triangle sits on, in the TEXT's own left-to-right frame) or null.
+function yardNumberTexture(text, arrow) {
+  const W = 640, H = 280;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  ctx.font = '900 300px Arial, Helvetica, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff';
+  const textW = ctx.measureText(text).width;
+  const ARROW_W = 110, GAP = 30;
+  const total = textW + (arrow ? ARROW_W + GAP : 0);
+  let x = (W - total) / 2;
+  const midY = H / 2 + 10;
+  const drawArrow = (ax, pointsLeft) => {
+    ctx.beginPath();
+    if (pointsLeft) { ctx.moveTo(ax, midY); ctx.lineTo(ax + ARROW_W, midY - 70); ctx.lineTo(ax + ARROW_W, midY + 70); }
+    else { ctx.moveTo(ax + ARROW_W, midY); ctx.lineTo(ax, midY - 70); ctx.lineTo(ax, midY + 70); }
+    ctx.closePath();
+    ctx.fill();
+  };
+  if (arrow === 'left') { drawArrow(x, true); x += ARROW_W + GAP; }
+  ctx.fillText(text, x, midY);
+  if (arrow === 'right') drawArrow(x + textW + GAP, false);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+const YARD_NUMBER_X = FIELD_WIDTH / 2 - SIDELINE_INSET - 13; // numerals sit ~12-14yd in from the drawn sideline, same as a real field
+const YARD_NUMBER_PLANE_W = 5.5, YARD_NUMBER_PLANE_H = YARD_NUMBER_PLANE_W * (280 / 640);
+const YARD_NUMBER_LINE_OFFSET = 2.6; // yd from the yard line to the label's center (label sits on the midfield side of its line)
+let yardNumbersGroup = null;
+function buildYardNumbers(lengthYards) {
+  if (yardNumbersGroup) scene.remove(yardNumbersGroup);
+  yardNumbersGroup = new THREE.Group();
+  const texCache = {};
+  const getTex = (text, arrow) => (texCache[text + '|' + arrow] ||= yardNumberTexture(text, arrow));
+  const geo = new THREE.PlaneGeometry(YARD_NUMBER_PLANE_W, YARD_NUMBER_PLANE_H);
+
+  for (let yd = 10; yd < lengthYards; yd += 10) {
+    const label = Math.min(yd, lengthYards - yd);
+    const isMid = yd * 2 === lengthYards;
+    const lineZ = -yd;
+    const goalDir = isMid ? 0 : (yd < lengthYards / 2 ? 1 : -1); // world-z direction toward the nearer goal line (+z = near end, -z = far end)
+    // side -1 = left sideline: text reads toward +z; side +1 = right: toward -z
+    // (derived from "glyph top points toward midfield, reading left-to-right as seen from that sideline").
+    [-1, 1].forEach((side) => {
+      const textRightDir = side < 0 ? 1 : -1;
+      const arrow = isMid ? null : (textRightDir === goalDir ? 'right' : 'left');
+      const mat = new THREE.MeshBasicMaterial({ map: getTex(String(label), arrow), transparent: true });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2; // lay flat; local +y (glyph top) -> world -z, local +x (reading direction) -> world +x
+      const holder = new THREE.Group();
+      holder.add(mesh);
+      holder.rotation.y = side < 0 ? -Math.PI / 2 : Math.PI / 2;
+      const midfieldSign = -goalDir; // label sits on the midfield side of its line
+      holder.position.set(side * YARD_NUMBER_X, 0.012, lineZ + midfieldSign * (isMid ? 0 : YARD_NUMBER_LINE_OFFSET));
+      yardNumbersGroup.add(holder);
+    });
+  }
+  scene.add(yardNumbersGroup);
 }
 
 // ---- Endzone color fill + "HOME" lettering --------------------------------
@@ -272,23 +346,14 @@ function buildEndzoneMarkings(lengthYards) {
   endzoneMarkingsGroup = new THREE.Group();
 
   const fillMat = new THREE.MeshStandardMaterial({ color: ENDZONE_FILL_COLOR, roughness: 0.95 });
-  // The NEAR endzone (where the returner catches the ball) is white instead
-  // of navy, per a direct request -- the sideline/hash-mark/yard-line
-  // strokes that poke into it (all pure white, unlit MeshBasicMaterial)
-  // vanish against a white fill instead of showing as stray marks inside
-  // the zone.
-  const nearFillMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   const textTex = endzoneTextTexture('HOME', `#${ENDZONE_TEXT_FILL.toString(16).padStart(6, '0')}`, '#ffffff');
   const textMat = new THREE.MeshBasicMaterial({ map: textTex, transparent: true });
 
-  // Both endzones get the same lettering -- it's the home team's stadium at
+  // Both endzones get the same treatment -- it's the home team's stadium at
   // both ends, same as a real one. Near end spans z=0..ENDZONE_DEPTH (center
   // ENDZONE_DEPTH/2); far end spans z=-lengthYards..-(lengthYards+ENDZONE_DEPTH)
   // (center -(lengthYards+ENDZONE_DEPTH/2)).
-  [
-    { z: -(lengthYards + ENDZONE_DEPTH / 2), mat: fillMat },
-    { z: ENDZONE_DEPTH / 2, mat: nearFillMat },
-  ].forEach(({ z, mat }) => {
+  [-(lengthYards + ENDZONE_DEPTH / 2), ENDZONE_DEPTH / 2].forEach((z) => {
     // y=0.005: above the bare striped field (y=0) but below the goal/back
     // lines and sideline (y=0.01-0.011) -- so the white boundary lines stay
     // visibly on top of the fill at the zone's own edges, same layering
@@ -296,7 +361,7 @@ function buildEndzoneMarkings(lengthYards) {
     // SIDELINE (FIELD_WIDTH - SIDELINE_INSET*2), not the true field edge --
     // using FIELD_WIDTH itself let the blue visibly spill a yard past the
     // white sideline mark on both sides, confirmed live.
-    const fill = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_WIDTH - SIDELINE_INSET * 2, ENDZONE_DEPTH), mat);
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_WIDTH - SIDELINE_INSET * 2, ENDZONE_DEPTH), fillMat);
     fill.rotation.x = -Math.PI / 2;
     fill.position.set(0, 0.005, z);
     fill.receiveShadow = true;
