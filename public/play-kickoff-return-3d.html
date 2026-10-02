@@ -7,6 +7,7 @@
 <link rel="icon" type="image/png" href="/favicon.png?v=20261003" />
 <link rel="stylesheet" href="/style.css?v=20261003c" />
 <style>
+  #kr3d-stage { position: relative; }
   #kr3d-canvas-wrap { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius); overflow: hidden; background: #8ec9f0; }
   #kr3d-canvas-wrap canvas { display: block; width: 100%; height: 100%; }
   #kr3d-overlay { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; padding-top: 2%; pointer-events: none; }
@@ -25,6 +26,16 @@
   #kr3d-actions { position: absolute; left: 3%; bottom: 7%; display: flex; align-items: flex-end; gap: 14px; }
   .kr3d-act { width: clamp(64px, 17vmin, 100px); aspect-ratio: 1; border-radius: 50%; border: 2px solid rgba(255,255,255,0.7); background: rgba(20,60,120,0.55); color: #fff; font: 800 clamp(12px, 3.4vmin, 18px)/1 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; letter-spacing: 0.04em; pointer-events: auto; touch-action: none; padding: 0; cursor: pointer; }
   .kr3d-act.down { background: rgba(60,140,255,0.85); transform: scale(0.94); }
+  /* Portrait phone: the picture is a short 16:9 strip, so the controls get
+     their own pad underneath it instead of covering the field. */
+  @media (orientation: portrait) {
+    #kr3d-touch.on { position: static; display: flex; flex-direction: row-reverse; justify-content: space-between; align-items: center; margin-top: 12px; padding: 0 2%; }
+    #kr3d-stick { position: relative; right: auto; bottom: auto; }
+    #kr3d-actions { position: static; }
+    #kr3d-stick { width: 120px; }
+    #kr3d-actions { gap: 14px; align-items: center; }
+    .kr3d-act { width: 74px; font-size: 15px; }
+  }
   .kr-hint-touch { display: none; }
   @media (pointer: coarse) {
     .kr-hint-desktop { display: none; }
@@ -43,12 +54,14 @@
 
   <div class="panel" id="game-panel" style="display:none">
     <p class="kr-return-info" id="return-info"></p>
+    <div id="kr3d-stage">
     <div id="kr3d-canvas-wrap">
       <div id="kr3d-hud">
         <span id="kr3d-yards"></span>
         <span id="kr3d-goal">GOAL &rarr;</span>
       </div>
       <div id="kr3d-overlay"><div id="kr3d-overlay-text"></div></div>
+    </div>
       <div id="kr3d-touch">
         <div id="kr3d-stick"><div id="kr3d-stick-knob"></div></div>
         <div id="kr3d-actions">
@@ -85,6 +98,6 @@
   }
 }
 </script>
-<script type="module" src="/js/play-kickoff-return-3d.js?v=20261003d"></script>
+<script type="module" src="/js/play-kickoff-return-3d.js?v=20261003e"></script>
 </body>
 </html>
