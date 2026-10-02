@@ -2199,6 +2199,22 @@ const DEFENDER_RECOVER_DURATION = 0.5; // seconds -- pause after a missed lunge 
 // past the runner (trailing him) is unleashed: pure pursuit, as before.
 const DEFENDER_LANE_DRIFT = 4; // yards -- max aim-point shift off lane center while still holding the lane (formation lanes are ~5.4yd wide, so this reaches just into a neighbor's)
 const DEFENDER_LANE_RELEASE_DIST = 12; // yards of downfield separation over which the leash loosens to nothing
+// The promoted kicker (11th defender, the last line of defense) is NOT part
+// of the line, so he gets no lane -- and giving him one (center of the field,
+// where he stands) is what stopped him ever reaching a sideline once lane
+// integrity shipped. He also leads the runner instead of chasing his current
+// spot: he aims KICKER_PURSUIT_LEAD * (his time-to-reach, capped at 1.5s) of
+// the runner's own velocity ahead of him, so a runner heading for the
+// sideline finds him already angling out to cut it off. Simulated against
+// runs along the sideline with the line defenders out of the picture: plain
+// pursuit let 92/100 through; leads of ~0.6-0.75 stopped all of them, ~0.9
+// overshoots (aims past where the runner ends up) and loses it again. 0.5 is
+// deliberately a notch under the sweet spot so he improves without becoming
+// a guaranteed stop -- and a spin/jump-cut burst briefly spikes the runner's
+// velocity, which fakes him out, same as it should.
+const KICKER_PURSUIT_LEAD = 0.5;
+let lastRunnerX = null, lastRunnerZ = null; // previous frame's runner position, for the velocity estimate below -- null until the first 'play' frame so a stale value from the last return can't read as a huge velocity
+let runnerVelX = 0, runnerVelZ = 0;
 const TACKLE_RESULT_DELAY = 0.8; // seconds -- brief beat on "TACKLED" before the result panel shows, same pacing idea as the touchdown celebration
 const DEFENDER_FORMATION_COUNT = 10; // real Dynamic Kickoff formation -- kicking team lines up on the receiving team's 40, evenly spaced, not the old testing-override random count
 const DEFENDER_LINE_Z = -40; // yards downfield of the returner's own goal line
@@ -2504,6 +2520,14 @@ function spawnDefenders(count, speedMultiplier) {
 // regardless of phase, so this function is never called twice in the same
 // frame and mixers never advance by more than one dt.
 function updateDefenders(dt) {
+  if (lastRunnerX !== null && dt > 0) {
+    runnerVelX = (RUNNER_GROUP.position.x - lastRunnerX) / dt;
+    runnerVelZ = (RUNNER_GROUP.position.z - lastRunnerZ) / dt;
+  } else {
+    runnerVelX = 0; runnerVelZ = 0;
+  }
+  lastRunnerX = RUNNER_GROUP.position.x;
+  lastRunnerZ = RUNNER_GROUP.position.z;
   for (const d of defenders) {
     if (d.blockCooldown > 0) d.blockCooldown -= dt;
     if (d.state === 'blocked') {
@@ -2531,17 +2555,27 @@ function updateDefenders(dt) {
         // still uses the true distance to the runner, so anyone he actually
         // runs at still commits.
         let aimX = RUNNER_GROUP.position.x;
-        if (dz > 0 && d.laneX !== undefined) {
+        let aimZ = RUNNER_GROUP.position.z;
+        if (d.leadsRunner) {
+          // The promoted kicker: no lane (he's the last line of defense, not
+          // part of the line) and he aims where the runner is HEADED, not
+          // where he is -- see KICKER_PURSUIT_LEAD.
+          const leadT = THREE.MathUtils.clamp(dist / d.speed, 0, 1.5) * KICKER_PURSUIT_LEAD;
+          const maxX = FIELD_WIDTH / 2 - 1;
+          aimX = THREE.MathUtils.clamp(aimX + runnerVelX * leadT, -maxX, maxX);
+          aimZ += runnerVelZ * leadT;
+        } else if (dz > 0 && d.laneX !== undefined) {
           const release = THREE.MathUtils.clamp(1 - dz / DEFENDER_LANE_RELEASE_DIST, 0, 1);
           const drift = DEFENDER_LANE_DRIFT + release * FIELD_WIDTH; // release=1 -> wider than the whole field, i.e. no leash
           aimX = d.laneX + THREE.MathUtils.clamp(RUNNER_GROUP.position.x - d.laneX, -drift, drift);
         }
         const mx = aimX - d.group.position.x;
-        const mdist = Math.hypot(mx, dz);
+        const mz = aimZ - d.group.position.z;
+        const mdist = Math.hypot(mx, mz);
         if (mdist > 1e-4) {
           d.group.position.x += (mx / mdist) * d.speed * dt;
-          d.group.position.z += (dz / mdist) * d.speed * dt;
-          d.group.rotation.y = Math.atan2(mx, dz) + Math.PI; // face travel direction -- same base-yaw convention as the runner's own model
+          d.group.position.z += (mz / mdist) * d.speed * dt;
+          d.group.rotation.y = Math.atan2(mx, mz) + Math.PI; // face travel direction -- same base-yaw convention as the runner's own model
         }
       }
     } else if (d.state === 'lunging') {
@@ -2698,7 +2732,7 @@ function promoteKickerToDefender() {
   kickerMixer.timeScale = 0; // held on frame 0 until the catch, same as every other defender -- see spawnDefenders()'s own comment
   defenders.push({
     group: kicker, mixer: kickerMixer, hipsBone: kickerHipsBone, hipsBindPos: kickerHipsBindPos,
-    laneX: kicker.position.x, // his lane is wherever he stands when he starts chasing -- see DEFENDER_LANE_DRIFT
+    leadsRunner: true, // no lane -- see KICKER_PURSUIT_LEAD
     speed: DEFENDER_BASE_SPEED * kickerSpeedMultiplier,
     state: 'chasing',
     lungeElapsed: 0, lungeTargetX: 0, lungeTargetZ: 0,
@@ -3368,6 +3402,7 @@ async function startReturn(returnConfig) {
   clearTeamDancers(); // clear any teammates from a previous return's team celebration
   keepHipsHeight = false; // back to the full root-motion strip for normal running
   hipsLiftLocal = 0;
+  lastRunnerX = null; lastRunnerZ = null; // fresh velocity estimate for the new return
   cameraPan = null;
   catchStarted = false;
   wasMoving = false;
