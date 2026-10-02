@@ -100,6 +100,11 @@ let sidelineBoredClip = null; // public/models/sideline-bored.glb -- user's own 
 let sidelineIdleClip = null; // public/models/sideline-idle.glb -- user's own Mixamo "Standing Idle" download, animation-only
 let sidelineLookingAroundClip = null; // public/models/sideline-looking-around.glb -- user's own Mixamo "Looking Around" download, animation-only
 let sidelinePlayers = []; // { mixer } for each spawned instance -- see buildSidelinePlayers()
+let benchTemplate = null; // public/models/bench.glb -- user's own Rodin download, a static mesh, no rig/animation at all
+let sittingTalkingClip = null; // public/models/sitting-talking.glb -- user's own Mixamo "Sitting Talking" download, animation-only
+let sittingAngryClip = null; // public/models/sitting-angry.glb -- user's own Mixamo "Sitting Angry" download, animation-only
+let sittingRubbingArmClip = null; // public/models/sitting-rubbing-arm.glb -- user's own Mixamo "Sitting Rubbing Arm" download, animation-only
+let sittingPlayers = []; // { mixer } for each spawned instance -- see buildBenches()
 
 function stripeTexture() {
   const c = document.createElement('canvas');
@@ -227,6 +232,7 @@ function buildField(lengthYards) {
   buildRunningReferees(lengthYards);
   buildCameraman(lengthYards);
   buildSidelinePlayers(lengthYards);
+  buildBenches(lengthYards);
 }
 
 // ---- Endzone color fill + "HOME" lettering --------------------------------
@@ -725,6 +731,14 @@ function updateCameraman() {
 // neighbors don't all mirror each other, plus a random start offset so even
 // two players on the SAME clip don't sync up.
 let sidelineGroup = null;
+// Real NFL sideline convention: the team-box/player area runs from each
+// team's own 30-yard line to midfield and on to the opponent's 30 -- a
+// 40yd-wide zone (20yd either side of midfield), not the narrower "40 to
+// 40" strip this used before. Shared by buildSidelinePlayers() and
+// buildBenches() below since both populate that same real-world span;
+// each derives its own instance count from this so the fill density stays
+// the same as before rather than just spreading the old count out thinner.
+const TEAM_AREA_HALF_SPREAD = 20; // yd either side of midfield (30-yard line to 30-yard line)
 function buildSidelinePlayers(lengthYards) {
   if (sidelineGroup) scene.remove(sidelineGroup);
   sidelinePlayers = [];
@@ -744,11 +758,9 @@ function buildSidelinePlayers(lengthYards) {
   // out-of-bounds limit) -- going further out than that puts players
   // inside the stand geometry, which is what a first attempt at this did
   // (they rendered fine, just invisible, swallowed by the riser mesh).
-  const NEAR_40 = -40; // 40yd from the returner's OWN goal line (z=0)
-  const FAR_40 = -(lengthYards - 40); // 40yd from the OPPONENT's goal line
-  const CENTER_Z = (NEAR_40 + FAR_40) / 2;
-  const FRONT_ROW_COUNT = 10;
+  const CENTER_Z = -lengthYards / 2; // midfield
   const ROW_GAP_Z = 2.2; // yd between neighbors in a row -- close to the previous single-row spacing
+  const FRONT_ROW_COUNT = Math.round((TEAM_AREA_HALF_SPREAD * 2) / ROW_GAP_Z) + 1;
   const FRONT_HALF_SPREAD = (ROW_GAP_Z * (FRONT_ROW_COUNT - 1)) / 2;
   // Third clip (Looking Around) is optional at build time -- filtered out
   // if it hasn't loaded yet rather than gating the whole feature on it, so
@@ -809,6 +821,107 @@ function buildSidelinePlayers(lengthYards) {
 
 function updateSidelinePlayers(dt) {
   for (const p of sidelinePlayers) p.mixer.update(dt);
+}
+
+// ---- Benches + sitting players ---------------------------------------------------
+// One row of bleacher benches per sideline (the user's own Rodin "bench"
+// download, a static mesh, same conversion pipeline as cameraman.glb),
+// positioned further out than the standing sideline players above --
+// "behind" them from the field's point of view, in the remaining strip of
+// apron before the stands. 3 seated players per bench, cycling through the
+// user's own three Mixamo "Sitting Talking"/"Sitting Angry"/"Sitting
+// Rubbing Arm" downloads. Reuses blockerTemplate/defenderTemplate, same
+// blue-left/red-right convention as buildSidelinePlayers() above.
+let benchGroup = null;
+// Model's own bounding box (measured once off the actual loaded scene):
+// size (1.9, 0.393, 0.32) in local (X,Y,Z) -- long axis is local X, pivot
+// already sits at the model's own ground level (min.y = 0).
+const BENCH_LENGTH = 1.9;
+// 0.32 (a guess, "a hair below the model's own 0.393 top") put sitters up
+// near backrest height, floating well above the actual seat and clipping
+// backward into the stand behind them -- a direct Blender vertex-height
+// histogram of bench.glb found the SEAT surface itself (where most of the
+// mesh's vertices actually cluster) sits around Y=0.18-0.20, not near the
+// 0.393 bounding-box top (that's the back rail, a small fraction of the
+// vertex count). Confirmed visually after the fix, see memory.
+const BENCH_SEAT_Y = 0.19;
+function buildBenches(lengthYards) {
+  if (benchGroup) scene.remove(benchGroup);
+  sittingPlayers = [];
+  if (!benchTemplate || !blockerTemplate || !defenderTemplate) return;
+  // Each sitter needs an actual clip to animate -- optional/graceful like
+  // sidelineLookingAroundClip above: build with whichever of the 3 have
+  // loaded so far rather than waiting on all three, upgrading on each
+  // clip's own independent load.
+  const clips = [sittingTalkingClip, sittingAngryClip, sittingRubbingArmClip].filter(Boolean);
+  if (clips.length === 0) return;
+  benchGroup = new THREE.Group();
+
+  const CENTER_Z = -lengthYards / 2; // midfield
+  const BENCH_GAP_Z = 4; // yd between bench centers -- real gaps between benches, not edge-to-edge (BENCH_LENGTH is only 1.9)
+  const BENCH_COUNT = Math.round((TEAM_AREA_HALF_SPREAD * 2) / BENCH_GAP_Z) + 1;
+  const BENCH_HALF_SPREAD = (BENCH_GAP_Z * (BENCH_COUNT - 1)) / 2;
+  const SEAT_OFFSETS = [-0.55, 0, 0.55]; // along the bench's own (rotated) length, one seat per sitter, within its 1.9yd span
+
+  // sign -1 = left sideline (blue, blocker.glb), +1 = right sideline (red,
+  // defender.glb) -- same convention and raw-orientation reasoning as
+  // buildSidelinePlayers() above.
+  const SIDES = [
+    { sign: -1, template: () => blockerTemplate, facingY: Math.PI / 2 },
+    { sign: 1, template: () => defenderTemplate, facingY: -Math.PI / 2 },
+  ];
+
+  SIDES.forEach(({ sign, template, facingY }) => {
+    // Between the standing rows (FIELD_WIDTH/2 + 1 / +2.3) and the stands'
+    // own front edge (FIELD_WIDTH/2 + 6) -- same apron-clearance reasoning
+    // as the sideline players' own comment above.
+    const BENCH_X = sign * (FIELD_WIDTH / 2 + 4.5);
+    let clipIndex = 0; // runs across every sitter on this side so neighbors (including bench-to-bench) alternate
+
+    for (let i = 0; i < BENCH_COUNT; i++) {
+      const benchZ = CENTER_Z + evenLineX(i, BENCH_COUNT, BENCH_HALF_SPREAD);
+      const bench = benchTemplate.clone();
+      bench.rotation.y = Math.PI / 2; // raw model's long axis is local X -- rotate it onto world Z, parallel to the sideline
+      bench.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      bench.position.set(BENCH_X, 0, benchZ);
+      benchGroup.add(bench);
+
+      SEAT_OFFSETS.forEach((seatOffset) => {
+        const model = cloneSkinnedScene(template());
+        model.rotation.y = facingY;
+        model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+
+        // Same reduced-rig/full-rig mismatch already hit with the referee's
+        // own walk clip -- filter each clip's tracks down to bones this
+        // model actually has before playing it.
+        const modelBoneNames = new Set();
+        model.traverse((o) => { if (o.isBone) modelBoneNames.add(o.name); });
+        const rawClip = clips[clipIndex % clips.length];
+        clipIndex++;
+        const tracks = rawClip.tracks.filter((t) => modelBoneNames.has(t.name.split('.')[0]));
+        const clip = new THREE.AnimationClip(rawClip.name, rawClip.duration, tracks);
+
+        const mixer = new THREE.AnimationMixer(model);
+        mixer.clipAction(clip).play();
+        mixer.setTime(Math.random() * clip.duration); // stagger each one's loop so neighbors don't sit in lockstep
+
+        const group = new THREE.Group();
+        group.add(model);
+        // seatOffset runs along the bench's own (now-rotated) length, i.e.
+        // world Z, same as benchZ's own axis.
+        group.position.set(BENCH_X, BENCH_SEAT_Y, benchZ + seatOffset);
+        benchGroup.add(group);
+
+        sittingPlayers.push({ mixer });
+      });
+    }
+  });
+
+  scene.add(benchGroup);
+}
+
+function updateSittingPlayers(dt) {
+  for (const p of sittingPlayers) p.mixer.update(dt);
 }
 
 // ---- Cheerleaders ---------------------------------------------------------
@@ -1176,6 +1289,24 @@ new GLTFLoader().load('/models/sideline-looking-around.glb', (gltf) => {
   buildSidelinePlayers(fieldYards);
 }, undefined, (err) => console.error('sideline looking-around animation load failed', err));
 
+new GLTFLoader().load('/models/bench.glb', (gltf) => {
+  benchTemplate = gltf.scene;
+  buildBenches(fieldYards);
+}, undefined, (err) => console.error('bench model load failed', err));
+
+new GLTFLoader().load('/models/sitting-talking.glb', (gltf) => {
+  sittingTalkingClip = gltf.animations[0];
+  buildBenches(fieldYards);
+}, undefined, (err) => console.error('sitting-talking animation load failed', err));
+new GLTFLoader().load('/models/sitting-angry.glb', (gltf) => {
+  sittingAngryClip = gltf.animations[0];
+  buildBenches(fieldYards);
+}, undefined, (err) => console.error('sitting-angry animation load failed', err));
+new GLTFLoader().load('/models/sitting-rubbing-arm.glb', (gltf) => {
+  sittingRubbingArmClip = gltf.animations[0];
+  buildBenches(fieldYards);
+}, undefined, (err) => console.error('sitting-rubbing-arm animation load failed', err));
+
 // ---- Runner -------------------------------------------------------------
 const RUNNER_GROUP = new THREE.Group();
 scene.add(RUNNER_GROUP);
@@ -1263,19 +1394,21 @@ let danceActions = [];
 // deliberately as its own thing (not folded into DANCE_MODEL_PATHS/
 // danceActions) so it's easy to grow into "a bunch of team celebrations"
 // later and eventually retire the solo ones without having to untangle
-// the two. First one: a 3-part Thriller routine, user's own Mixamo
-// downloads, retargeted (by them, on mixamo.com) onto a 33-bone reduced
+// the two. First one: Thriller Part 2 only, looped -- user's own Mixamo
+// download, retargeted (by them, on mixamo.com) onto a 33-bone reduced
 // rig -- same shape as blocker.glb/defender.glb, confirmed via a direct
 // bone-count check before conversion, so it plays on blockerTemplate
 // clones with no track-filtering needed (unlike the referee-walk-clip
 // case elsewhere in this file, where the rigs didn't already match).
+// Parts 3/4 were converted and briefly wired up too (chained via
+// 'finished' listeners into one long routine), but simplified back down
+// to just Part 2 on repeat per a direct ask -- if a multi-part routine
+// comes back later, the old chaining approach is in git history.
 const THRILLER_MODEL_PATHS = [
   '/models/thriller-part-2.glb',
-  '/models/thriller-part-3.glb',
-  '/models/thriller-part-4.glb',
 ];
-let thrillerActions = []; // 3 actions bound to the RUNNER's own shared mixer, chained via playThrillerSequence() -- only populated once ALL 3 parts load successfully, see charactersLoaded .then()
-let thrillerClips = []; // the raw AnimationClip data for the same 3 parts, rebound onto each teammate's OWN mixer fresh per celebration (see startThrillerCelebration())
+let thrillerActions = []; // 1 action bound to the RUNNER's own shared mixer -- only populated once it loads successfully, see charactersLoaded .then()
+let thrillerClips = []; // the raw AnimationClip data for the same clip, rebound onto each teammate's OWN mixer fresh per celebration (see startThrillerCelebration())
 
 // A transient network hiccup on one file shouldn't strand a whole session on
 // the placeholder capsules -- retries once (with a short pause) before
@@ -1395,20 +1528,11 @@ const charactersLoaded = Promise.all([
     .filter(Boolean);
   danceActions.forEach(({ action }) => action.setLoop(THREE.LoopRepeat));
 
-  // Only wire up the team celebration if ALL 3 parts loaded -- a partial
-  // Thriller (missing its own middle or ending) would read as broken in a
-  // way a missing SOLO dance option never would (that one just shrinks the
-  // random pool by one, invisibly).
   if (thrillerGltfs.every(Boolean)) {
     thrillerClips = thrillerGltfs.map((g) => g.animations[0]);
     thrillerActions = thrillerClips.map((clip) => {
       const a = mixer.clipAction(clip);
-      // LoopOnce + clampWhenFinished=false (not the usual reaction-clip
-      // pattern) -- playThrillerSequence()'s own 'finished' listener is
-      // what advances to the next part; clamping here would just freeze
-      // on the last frame of each part instead of chaining forward.
-      a.setLoop(THREE.LoopOnce);
-      a.clampWhenFinished = false;
+      a.setLoop(THREE.LoopRepeat); // just loops Part 2 indefinitely -- same as any solo dance
       return a;
     });
   }
@@ -1428,6 +1552,7 @@ const charactersLoaded = Promise.all([
   }
   blockerSadIdleClip = sadIdleGltf.animations[0];
   buildSidelinePlayers(fieldYards); // blockerTemplate is one of its 3 dependencies (the other 2 -- the idle clips -- load independently and may arrive before or after this)
+  buildBenches(fieldYards); // blockerTemplate/defenderTemplate are 2 of its 4 dependencies -- without this retry, benches never appear whenever bench.glb/the sitting clips (which load independently, above) happen to resolve before this Promise.all does
   buildRunningReferees(fieldYards); // rightStrafeClip/leftStrafeClip are 2 of its 3 dependencies (the third, refereeTemplate, loads independently -- see its own loader below)
   runnerKickClip = runnerGltf.animations[0]; // player-kick.glb's own baked run-up+kick clip -- applied to a defender-model kicker in spawnKicker()
 
@@ -2862,6 +2987,7 @@ function tick(now) {
     updateRefereeAnimations(dt);
     updateCameraman();
     updateSidelinePlayers(dt);
+    updateSittingPlayers(dt);
     updateDroppedBall(dt);
     updateTeamDancers(dt);
     // Skipped during 'tackled': the fall clips' own baked root motion is
@@ -3018,7 +3144,18 @@ async function startReturn(returnConfig) {
 // team celebrations later without having to untangle it from the solo path.
 let teamDancers = []; // [{ group, mixer, targetX, dancing }] for the 2 teammates -- empty except during this celebration
 let teamCelebrationStarted = false; // guards the synced Thriller kickoff (once both teammates arrive) from firing more than once
-const TEAM_DANCER_SPAWN_OFFSET = 9; // yards either side of the runner -- outside the celebration camera's actual frame, not just off his shoulder
+// Camera is a 60deg-vertical PerspectiveCamera at 16:9 -- half-horizontal-
+// FOV works out to ~45.7deg (tan ~1.026), so the visible half-width at
+// distance D is roughly D*1.026. The celebration camera sits
+// (CELEBRATION_CAM_BACK + THRILLER_CAM_EXTRA_BACK) from the dancers, so
+// this offset needs real margin past that, not just "a bit more than the
+// visible edge" -- a first attempt at 9yd against an ~8.5yd camera
+// distance (visible half-width ~8.7yd) was only marginally outside frame,
+// which read as the teammates already being visible at spawn instead of
+// running in from off-screen (live feedback: "spawned from like the back
+// of the endzone instead of running from outside of the camera view").
+const THRILLER_CAM_EXTRA_BACK = 4; // on top of CELEBRATION_CAM_BACK, further than the solo celebration's own +2.5 -- more room for 3 dancers AND more margin for the spawn offset below
+const TEAM_DANCER_SPAWN_OFFSET = 16; // yards either side of the runner -- comfortably outside frame at the wider team-celebration camera distance, not just barely past the edge
 const TEAM_DANCER_FLANK_OFFSET = 1.7; // yards either side of the runner once in position
 const TEAM_DANCER_RUNIN_SPEED = 7; // yards/s -- brisk jog, not a sprint; this is a quick stylized join, not a real run
 
@@ -3026,33 +3163,6 @@ function clearTeamDancers() {
   teamDancers.forEach((d) => scene.remove(d.group));
   teamDancers = [];
   teamCelebrationStarted = false;
-}
-
-// Plays a 3-part clip sequence on one mixer, chained via 'finished'
-// listeners (same handoff pattern already used for the tackling defender's
-// push -> flex reaction above), looping the whole routine once part 4 ends
-// -- matches the solo dances' own "loops until Next Return" behavior.
-// `actions` must be 3 THREE.AnimationAction instances off the SAME mixer,
-// in part order. `onPart`, if given, fires with each part's action right
-// as it starts (used for the runner's own activeAction bookkeeping).
-function playThrillerSequence(targetMixer, actions, onPart) {
-  let i = 0;
-  function playNext() {
-    const current = actions[i];
-    current.enabled = true;
-    current.paused = false;
-    current.time = 0;
-    current.play();
-    if (onPart) onPart(current);
-    const onFinished = (e) => {
-      if (e.action !== current) return;
-      targetMixer.removeEventListener('finished', onFinished);
-      i = (i + 1) % actions.length;
-      playNext();
-    };
-    targetMixer.addEventListener('finished', onFinished);
-  }
-  playNext();
 }
 
 function startThrillerCelebration() {
@@ -3078,14 +3188,15 @@ function startThrillerCelebration() {
   // Wider/further-back framing than the solo-celebration default -- three
   // dancers side by side need more than the single-runner shot
   // freezeCelebrationCamera() already set at the 'endzone' transition.
-  camera.position.set(runnerX, CELEBRATION_CAM_HEIGHT + 0.6, z + CELEBRATION_CAM_BACK + 2.5);
+  camera.position.set(runnerX, CELEBRATION_CAM_HEIGHT + 0.6, z + CELEBRATION_CAM_BACK + THRILLER_CAM_EXTRA_BACK);
   camTarget.set(runnerX, LOOK_HEIGHT + 0.3, z);
   camera.lookAt(camTarget);
 }
 
 // Unconditional per-frame upkeep (same pattern as updateDroppedBall etc.)
-// -- advances each teammate's run-in, then kicks off the synced 3-way
-// Thriller sequence the instant both have actually arrived.
+// -- advances each teammate's run-in, then starts the synced Thriller loop
+// (all three mixers, same dt every frame -> stays in lockstep with zero
+// manual sync) the instant both have actually arrived.
 function updateTeamDancers(dt) {
   if (teamDancers.length === 0) return;
   teamDancers.forEach((d) => {
@@ -3101,20 +3212,19 @@ function updateTeamDancers(dt) {
   });
   if (teamCelebrationStarted || !teamDancers.every((d) => d.dancing)) return;
   teamCelebrationStarted = true;
-  playThrillerSequence(mixer, thrillerActions, (a) => {
-    activeAction.paused = true;
-    activeAction.enabled = false;
-    activeAction = a;
-  });
+  const runnerThrillerAction = thrillerActions[0];
+  runnerThrillerAction.time = 0;
+  runnerThrillerAction.enabled = true;
+  runnerThrillerAction.paused = false;
+  runnerThrillerAction.play();
+  activeAction.paused = true;
+  activeAction.enabled = false;
+  activeAction = runnerThrillerAction;
   teamDancers.forEach((d) => {
     d.mixer.stopAllAction(); // cut cleanly from the run-in clip, no blend into the dance
-    const dancerActions = thrillerClips.map((clip) => {
-      const a = d.mixer.clipAction(clip);
-      a.setLoop(THREE.LoopOnce);
-      a.clampWhenFinished = false;
-      return a;
-    });
-    playThrillerSequence(d.mixer, dancerActions);
+    const a = d.mixer.clipAction(thrillerClips[0]);
+    a.setLoop(THREE.LoopRepeat);
+    a.play();
   });
 }
 
