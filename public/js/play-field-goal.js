@@ -781,6 +781,11 @@ function buildDirectionArrowMesh() {
 const directionArrow = buildDirectionArrowMesh();
 scene.add(directionArrow);
 
+// Every piece of the two meters (rebuilt per kick, so some of these are null until then).
+function setMetersVisible(v) {
+  [powerFrame, powerTrack, powerMarker, powerSweetMesh, directionTrack, directionArrow].forEach((m) => { if (m) m.visible = v; });
+}
+
 // Slides the arrow to position t along the curve (0 = left end, 1 = right
 // end) and banks it to match the aim direction, like a real gauge needle
 // following a bowed track rather than just teleporting along it.
@@ -1096,8 +1101,9 @@ function showFrozenResult(k) {
     controls.enabled = false;
     camera.position.copy(END_CAM_POS);
     camera.lookAt(END_CAM_TARGET);
-    camera.fov = 50;
+    camera.fov = END_CAM_FOV;
     camera.updateProjectionMatrix();
+    setMetersVisible(false);
     if (windArrow) windArrow.visible = false;
     if (windLabel) windLabel.visible = false;
   }
@@ -1385,6 +1391,7 @@ function resetPose() {
   }
   tee.visible = true;
   ball.visible = true;
+  setMetersVisible(true); // renderKick() then sets the marker/arrow to whichever phase is live
   ball.position.x = 0;
   ball.position.y = BALL_REST_Y;
   ball.scale.set(1, 1, 1.5);
@@ -1398,8 +1405,12 @@ function resetPose() {
 // goalpost looking back toward the kicker, so both uprights and both
 // referees are in frame together when the result actually happens, instead
 // of it playing out somewhere off past the edge of the kick-cam's view.
-const END_CAM_POS = new THREE.Vector3(0, 3, GOALPOST_Z - 4);
-const END_CAM_TARGET = new THREE.Vector3(0, 3, GOALPOST_Z + 2);
+// Pulled back as far as the new stands allow (their front edge is ~7.8yd behind the
+// post) with a wide lens, so the 4.6yd-wide result popup hanging in the uprights
+// fits in frame instead of spilling off the top.
+const END_CAM_POS = new THREE.Vector3(0, 3.2, GOALPOST_Z - 6.5);
+const END_CAM_TARGET = new THREE.Vector3(0, 3.6, GOALPOST_Z + 2);
+const END_CAM_FOV = 62;
 
 // Plays the full approach/swing/flight/referee-signal sequence for a kick
 // whose outcome the server has already decided, then shows the result
@@ -1422,6 +1433,7 @@ async function performKick(outcome, distanceYards) {
   // enough down the field to be worth following there.
   function fireContact() {
     tee.visible = false;
+    setMetersVisible(false); // the kick is made -- the meters have done their job and would just hang in the end-zone shot
     const followBall = true;
     if (followBall) {
       cameraLocked = true; // hand the camera fully to this animation until the next renderKick()'s resetPose() gives it back
@@ -1448,7 +1460,7 @@ async function performKick(outcome, distanceYards) {
         camera.position.lerpVectors(camStartPos, END_CAM_POS, ct);
         const lookTarget = new THREE.Vector3().lerpVectors(camStartTarget, END_CAM_TARGET, ct);
         camera.lookAt(lookTarget);
-        camera.fov = THREE.MathUtils.lerp(camStartFov, 50, ct); // widen back out from the long-kick lens
+        camera.fov = THREE.MathUtils.lerp(camStartFov, END_CAM_FOV, ct); // ease from the kick-cam lens to the wide end-zone lens
         camera.updateProjectionMatrix();
       }
     });
