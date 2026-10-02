@@ -272,14 +272,23 @@ function buildEndzoneMarkings(lengthYards) {
   endzoneMarkingsGroup = new THREE.Group();
 
   const fillMat = new THREE.MeshStandardMaterial({ color: ENDZONE_FILL_COLOR, roughness: 0.95 });
+  // The NEAR endzone (where the returner catches the ball) is white instead
+  // of navy, per a direct request -- the sideline/hash-mark/yard-line
+  // strokes that poke into it (all pure white, unlit MeshBasicMaterial)
+  // vanish against a white fill instead of showing as stray marks inside
+  // the zone.
+  const nearFillMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   const textTex = endzoneTextTexture('HOME', `#${ENDZONE_TEXT_FILL.toString(16).padStart(6, '0')}`, '#ffffff');
   const textMat = new THREE.MeshBasicMaterial({ map: textTex, transparent: true });
 
-  // Both endzones get the same treatment -- it's the home team's stadium at
+  // Both endzones get the same lettering -- it's the home team's stadium at
   // both ends, same as a real one. Near end spans z=0..ENDZONE_DEPTH (center
   // ENDZONE_DEPTH/2); far end spans z=-lengthYards..-(lengthYards+ENDZONE_DEPTH)
   // (center -(lengthYards+ENDZONE_DEPTH/2)).
-  [-(lengthYards + ENDZONE_DEPTH / 2), ENDZONE_DEPTH / 2].forEach((z) => {
+  [
+    { z: -(lengthYards + ENDZONE_DEPTH / 2), mat: fillMat },
+    { z: ENDZONE_DEPTH / 2, mat: nearFillMat },
+  ].forEach(({ z, mat }) => {
     // y=0.005: above the bare striped field (y=0) but below the goal/back
     // lines and sideline (y=0.01-0.011) -- so the white boundary lines stay
     // visibly on top of the fill at the zone's own edges, same layering
@@ -287,7 +296,7 @@ function buildEndzoneMarkings(lengthYards) {
     // SIDELINE (FIELD_WIDTH - SIDELINE_INSET*2), not the true field edge --
     // using FIELD_WIDTH itself let the blue visibly spill a yard past the
     // white sideline mark on both sides, confirmed live.
-    const fill = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_WIDTH - SIDELINE_INSET * 2, ENDZONE_DEPTH), fillMat);
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_WIDTH - SIDELINE_INSET * 2, ENDZONE_DEPTH), mat);
     fill.rotation.x = -Math.PI / 2;
     fill.position.set(0, 0.005, z);
     fill.receiveShadow = true;
