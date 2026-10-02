@@ -234,7 +234,7 @@ ul.clean li:last-child { border-bottom: none; }
 .trivia-feedback.correct { color: var(--accent); }
 .trivia-feedback.incorrect { color: var(--danger); }
 
-/* --- Field Goal Kick: 3D scene (Three.js), two-click retro kicker mechanic --- */
+/* --- Field Goal Kick: 3D scene (Three.js), two-click kicker mechanic --- */
 .fg-kick-info { text-align: center; font-weight: 800; font-size: 1.3rem; margin: 0 0 10px; }
 #fg3d-canvas-wrap {
   width: 100%;

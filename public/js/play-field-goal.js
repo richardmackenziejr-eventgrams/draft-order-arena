@@ -1,5 +1,5 @@
 // Field Goal Kick — 3D. A low-poly stadium/field/kicker scene (Three.js)
-// driving the same two-click retro kicker mechanic as every other game here:
+// driving a two-click kicker mechanic:
 // stop a power meter in the sweet spot, then stop a direction meter to split
 // the uprights, with wind pushing the actual landing spot off wherever you
 // aimed. Ported from an earlier pure-visual prototype (fg3d-test.js) — this

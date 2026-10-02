@@ -7,12 +7,8 @@
 // to a lunge, and tackle -- the tackler plays a Push clip then a Flex
 // celebration, everyone else plays Victory. Blockers (see "Blockers")
 // engage a chasing/lunging defender and hold it in place for a few seconds
-// before it resumes the chase. See play-kickoff-return.js, the real 2D
-// game, which stays live and untouched independently of this one for now
-// -- the two were originally meant as permanent separate games (free
-// "Retro Kick Return" vs. this paid 3D tier), but the user has since
-// decided to eliminate the free tier and have this 3D game replace Retro
-// once it's ready to swap in. That swap hasn't happened yet.
+// before it resumes the chase. This is the only Kickoff Return game; the
+// earlier 2D version has been removed.
 //
 // Wired into the REAL server/game engine (same instance/member/API calls
 // as the 2D version) so the difficulty ladder and scoring were already
