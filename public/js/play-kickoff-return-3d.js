@@ -234,6 +234,7 @@ function buildField(lengthYards) {
   buildRunningReferees(lengthYards);
   buildCameraman(lengthYards);
   buildStandingCameramen(lengthYards);
+  buildCoaches(lengthYards);
   buildSidelinePlayers(lengthYards);
   buildBenches(lengthYards);
 }
@@ -844,6 +845,64 @@ function updateCameraman() {
   }
 }
 
+// ---- Head coaches ------------------------------------------------------------
+// One per team, at midfield on that team's own sideline (blue = left/-X like
+// the blocker-model sideline players, red = right/+X like the defender-model
+// ones). The user's own Rodin characters, auto-rigged on Mixamo (33-bone
+// reduced rig, same as every other Mixamo character here) with Mixamo's
+// "Pointing" clip baked into each GLB (mesh + armature + animations[0], same
+// shape as player-kick.glb) -- so unlike the animation-only clips elsewhere,
+// each coach plays the clip authored against ITS OWN rig. Raw orientation
+// faces +Z (same Mixamo export convention as the cameramen/cheerleaders), so
+// facing the runner is just group.rotation.y = atan2(dx,dz), same formula as
+// updateCameraman(). Each GLB's own loader calls buildCoaches() on arrival
+// (no other dependencies, so no multi-trigger retry wiring needed).
+const coachTemplates = { blue: null, red: null }; // { scene, clip } once loaded
+let coachGroup = null;
+let coaches = []; // { group, mixer, hipsBone, hipsBindPos }
+const COACH_X = FIELD_WIDTH / 2 + 0.35; // just outside the true field edge, in front of the sideline players' own rows
+function buildCoaches(lengthYards) {
+  if (coachGroup) scene.remove(coachGroup);
+  coaches = [];
+  coachGroup = new THREE.Group();
+  // Standing in a gap between two neighboring sideline players (they sit at
+  // midfield +/- 2.2yd multiples, the back row staggered by half that) rather
+  // than dead center, where one of them already stands.
+  const z = -lengthYards / 2 + 1.1;
+  [{ key: 'blue', sign: -1 }, { key: 'red', sign: 1 }].forEach(({ key, sign }) => {
+    const t = coachTemplates[key];
+    if (!t) return;
+    const model = cloneSkinnedScene(t.scene);
+    model.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    // Same hips capture/reset every other Mixamo character here uses -- the
+    // pointing clip carries baked hip translation that would otherwise drag
+    // him around within the loop and snap back on each repeat.
+    let hipsBone = null;
+    model.traverse((o) => { if (o.isBone && o.name === 'mixamorigHips') hipsBone = o; });
+    const hipsBindPos = hipsBone ? hipsBone.position.clone() : null;
+    const mixer = new THREE.AnimationMixer(model);
+    const action = mixer.clipAction(t.clip);
+    action.setLoop(THREE.LoopRepeat);
+    action.play();
+    const group = new THREE.Group();
+    group.add(model);
+    group.position.set(sign * COACH_X, 0, z);
+    coachGroup.add(group);
+    coaches.push({ group, mixer, hipsBone, hipsBindPos });
+  });
+  scene.add(coachGroup);
+}
+
+function updateCoaches(dt) {
+  for (const c of coaches) {
+    c.mixer.update(dt);
+    if (c.hipsBone && c.hipsBindPos) c.hipsBone.position.copy(c.hipsBindPos);
+    const dx = RUNNER_GROUP.position.x - c.group.position.x;
+    const dz = RUNNER_GROUP.position.z - c.group.position.z;
+    if (Math.abs(dx) > 1e-4 || Math.abs(dz) > 1e-4) c.group.rotation.y = Math.atan2(dx, dz);
+  }
+}
+
 // ---- Sideline players --------------------------------------------------------
 // LEFT sideline (-X) reuses blocker.glb (already blue); RIGHT sideline (+X)
 // reuses defender.glb (already red, same Mixamo-rig convention -- see
@@ -1443,6 +1502,13 @@ new GLTFLoader().load('/models/standing-cameraman.glb', (gltf) => {
   standingCameramanTemplate = gltf.scene;
   buildStandingCameramen(fieldYards);
 }, undefined, (err) => console.error('standing cameraman model load failed', err));
+
+['blue', 'red'].forEach((key) => {
+  new GLTFLoader().load(`/models/coach-${key}.glb`, (gltf) => {
+    coachTemplates[key] = { scene: gltf.scene, clip: gltf.animations[0] };
+    buildCoaches(fieldYards);
+  }, undefined, (err) => console.error(`${key} coach model load failed`, err));
+});
 
 new GLTFLoader().load('/models/sideline-bored.glb', (gltf) => {
   sidelineBoredClip = gltf.animations[0];
@@ -3142,6 +3208,7 @@ function tick(now) {
     updateCheerleaderAnimations(dt);
     updateRefereeAnimations(dt);
     updateCameraman();
+    updateCoaches(dt);
     updateSidelinePlayers(dt);
     updateSittingPlayers(dt);
     updateDroppedBall(dt);
