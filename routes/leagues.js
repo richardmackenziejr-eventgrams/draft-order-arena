@@ -1,6 +1,6 @@
 const express = require('express');
 const store = require('../lib/store');
-const { listModules, getModule } = require('../lib/gameEngine');
+const { listModules, getModule, isKnownGameType } = require('../lib/gameEngine');
 const { checkAndFinalizeCompetition } = require('../lib/competition');
 
 const router = express.Router();
@@ -202,19 +202,12 @@ router.post('/competitions/:id/start', async (req, res) => {
 
   competition.games.forEach((giId) => {
     const gi = db.gameInstances[giId];
+    if (!isKnownGameType(gi.gameType)) return; // a game type removed from the app, left over in saved data
     const mod = getModule(gi.gameType);
     const init = mod.initInstance(gi.config, members);
     gi.config = init.config;
     gi.state = init.state;
     gi.status = init.status;
-
-    // Weighted lottery in async mode has no "play" step — resolve it immediately.
-    if (gi.gameType === 'lottery' && gi.mode === 'async') {
-      const order = mod.runDraw(members, gi.config.odds);
-      gi.state.order = order;
-      gi.results = mod.toResults(order);
-      gi.status = 'completed';
-    }
   });
 
   competition.status = 'active';
@@ -228,7 +221,10 @@ router.get('/competitions/:id', async (req, res) => {
   const competition = db.competitions[req.params.id];
   if (!competition) return res.status(404).json({ error: 'Competition not found.' });
   const league = db.leagues[competition.leagueId];
-  const games = competition.games.map((giId) => publicGameInstance(db.gameInstances[giId]));
+  const games = competition.games
+    .map((giId) => db.gameInstances[giId])
+    .filter((gi) => gi && isKnownGameType(gi.gameType)) // hide any removed game type still in saved data
+    .map(publicGameInstance);
   res.json({ competition, games, league: { id: league.id, name: league.name, members: league.members } });
 });
 
@@ -237,18 +233,10 @@ function summarizeCompetition(c) {
   return { id: c.id, name: c.name, status: c.status, gameCount: c.games.length };
 }
 
-// Strip mode-specific spoilers (e.g. an un-revealed lottery order, trivia answer key).
+// Strip mode-specific spoilers (e.g. the trivia answer key).
 function publicGameInstance(gi) {
   const mod = getModule(gi.gameType);
   const base = { id: gi.id, gameType: gi.gameType, gameName: mod.name, mode: gi.mode, status: gi.status, config: gi.config };
-  if (gi.gameType === 'lottery') {
-    return {
-      ...base,
-      revealedPicks: gi.state.revealedPicks || [],
-      totalPicks: (gi.state.order || []).length,
-      results: gi.status === 'completed' ? gi.results : [],
-    };
-  }
   if (gi.gameType === 'trivia' || gi.gameType === 'fieldGoal' || gi.gameType === 'kickoffReturn') {
     const players = (gi.state && gi.state.players) || {};
     const completedBy = Object.entries(players).filter(([, p]) => p.completed).map(([mid]) => mid);

@@ -18,7 +18,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use('/api', leaguesRouter);
-app.use('/api', gamesRouter(io));
+app.use('/api', gamesRouter());
 
 liveRooms.setup(io);
 

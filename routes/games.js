@@ -1,6 +1,6 @@
 const express = require('express');
 const store = require('../lib/store');
-const { getModule } = require('../lib/gameEngine');
+const { getModule, isKnownGameType } = require('../lib/gameEngine');
 const { checkAndFinalizeCompetition } = require('../lib/competition');
 const trivia = require('../lib/gameEngine/trivia');
 const fieldGoal = require('../lib/gameEngine/fieldGoal');
@@ -16,15 +16,17 @@ function checkMembership(db, gi, memberId) {
   return { ok: true, league };
 }
 
-// Routes need `io` to broadcast the live lottery reveal, so this module is a
-// factory: server.js calls games(io) to get the mounted router.
-module.exports = function gamesRouter(io) {
+module.exports = function gamesRouter() {
   const router = express.Router();
 
   router.get('/game-instances/:id', async (req, res) => {
     const db = await store.load();
     const gi = db.gameInstances[req.params.id];
     if (!gi) return res.status(404).json({ error: 'Game instance not found.' });
+    // A game type that's been removed from the app (e.g. the old 40 Yard Dash
+    // lottery) can still be sitting in saved data -- answer cleanly instead of
+    // letting viewForMember() throw on an unknown type.
+    if (!isKnownGameType(gi.gameType)) return res.status(410).json({ error: 'This game is no longer available.' });
     const memberId = req.query.memberId;
 
     // Viewing a trivia question is what starts its 10-second clock — record
@@ -284,85 +286,14 @@ module.exports = function gamesRouter(io) {
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
-  // Commissioner triggers the live, animated lottery reveal — picks are announced
-  // one at a time (last pick to first) with a short delay between each, broadcast
-  // over the game's Socket.IO room so every spectator sees the same sequence.
-  router.post('/game-instances/:id/lottery/run', async (req, res) => {
-    const db = await store.load();
-    const gi = db.gameInstances[req.params.id];
-    if (!gi || gi.gameType !== 'lottery') return res.status(404).json({ error: 'Lottery game not found.' });
-    if (gi.mode !== 'live') return res.status(400).json({ error: 'Only live-mode lotteries need to be triggered — async ones resolve automatically.' });
-    if (gi.status === 'completed') return res.status(400).json({ error: 'This draw has already happened.' });
-    if (gi.status === 'revealing') return res.status(400).json({ error: 'This draw is already running.' });
-
-    const mod = getModule('lottery');
-    const league = db.leagues[db.competitions[gi.competitionId].leagueId];
-    const order = gi.state.order || mod.runDraw(league.members, gi.config.odds);
-    gi.state.order = order;
-    gi.state.revealedPicks = [];
-    gi.status = 'revealing';
-    await store.save(db);
-
-    const room = `game:${gi.id}`;
-    io.to(room).emit('lottery:started', { totalPicks: order.length });
-    revealNextPick(gi.id, order, 0, room);
-
-    res.status(202).json({ status: 'revealing' });
-  });
-
-  // Runs outside any request's lifecycle (a chain of setTimeouts), so a transient
-  // DB hiccup here is wrapped rather than left to crash the whole process as an
-  // uncaught exception — it just stops that one draw's reveal.
-  // Picks are revealed best to worst (pick #1 first) — first to finish the
-  // race wins the top pick, matching how the race actually reads.
-  function revealNextPick(giId, order, positionIndex, room) {
-    if (positionIndex >= order.length) {
-      finishReveal(giId, order, room).catch((err) => console.error('Lottery reveal finish failed:', err));
-      return;
-    }
-    setTimeout(() => {
-      revealOnePick(giId, order, positionIndex, room).catch((err) => console.error('Lottery reveal step failed:', err));
-    }, 1800);
-  }
-
-  async function revealOnePick(giId, order, positionIndex, room) {
-    const db = await store.load();
-    const gi = db.gameInstances[giId];
-    if (!gi || gi.status !== 'revealing') return; // safety: instance vanished/changed
-    gi.state.revealedPicks.push({ pick: positionIndex + 1, memberId: order[positionIndex] });
-    await store.save(db);
-    io.to(room).emit('lottery:reveal', { pick: positionIndex + 1, memberId: order[positionIndex] });
-    revealNextPick(giId, order, positionIndex + 1, room);
-  }
-
-  async function finishReveal(giId, order, room) {
-    const db = await store.load();
-    const gi = db.gameInstances[giId];
-    const mod = getModule('lottery');
-    gi.results = mod.toResults(order);
-    gi.status = 'completed';
-    checkAndFinalizeCompetition(db, gi.competitionId);
-    await store.save(db);
-    io.to(room).emit('lottery:complete', { results: gi.results });
-  }
-
   return router;
 };
 
 // Strip spoilers based on who's asking (an un-submitted member shouldn't see the
-// trivia answer key; a live reveal in progress shouldn't leak un-revealed picks).
+// trivia answer key).
 function viewForMember(gi, memberId) {
   const mod = getModule(gi.gameType);
   const base = { id: gi.id, gameType: gi.gameType, gameName: mod.name, mode: gi.mode, status: gi.status, config: gi.config };
-
-  if (gi.gameType === 'lottery') {
-    return {
-      ...base,
-      revealedPicks: gi.state.revealedPicks || [],
-      totalPicks: (gi.state.order || []).length,
-      results: gi.status === 'completed' ? gi.results : [],
-    };
-  }
 
   if (gi.gameType === 'trivia') {
     const players = gi.state.players || {};
