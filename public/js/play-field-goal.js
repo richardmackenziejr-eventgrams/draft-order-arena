@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { createStadium, GOALPOST_SETBACK, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js';
 
 const instanceId = qs('instance');
 const leagueId = qs('league');
@@ -54,98 +55,16 @@ sun.shadow.camera.near = 1;
 sun.shadow.camera.far = 120;
 scene.add(sun);
 
-// ---- Field -------------------------------------------------------------
-const FIELD_HALF_WIDTH = 15;
-const NEAR_Z = 20;   // camera-side edge of the visible field
-const FAR_Z = -62;   // just past the goal line
-const GOAL_LINE_Z = -52;
+// ---- Field + stadium ---------------------------------------------------------
+// Same field/stands as Kickoff Return (see stadium.js): 100-yard striped field,
+// yard numbers, HOME endzones, pylons, and the crowd stands all the way round.
+// 1 world unit = 1 yard. GOALPOST_Z is the gameplay anchor (ball flight, camera
+// targets, popup card are all measured from it); the field is placed so its
+// real goalpost -- which sits behind a 10-yard endzone -- lands exactly there.
+const GOALPOST_Z = -54;
+const GOAL_LINE_Z = GOALPOST_Z + GOALPOST_SETBACK;
+createStadium(scene, { lengthYards: 100, goalLineZ: GOAL_LINE_Z });
 
-function stripeTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d');
-  const stripeH = canvas.height / 10;
-  for (let i = 0; i < 10; i++) {
-    ctx.fillStyle = i % 2 === 0 ? '#2f6b3f' : '#356f43';
-    ctx.fillRect(0, i * stripeH, canvas.width, stripeH);
-  }
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(1, 6);
-  return tex;
-}
-
-// A wide grass apron behind/beside the marked field -- the field plane
-// above only spans the actual playing surface (30 units wide), but the
-// stands sit well outside that (out past x=+-35 once past the curved
-// corners), leaving open ground between the field edge and the stands
-// with nothing drawn there but the sky-color background. This fills that
-// gap with turf instead of a band of "empty sky at ground level".
-const apron = new THREE.Mesh(
-  new THREE.PlaneGeometry(140, (NEAR_Z - FAR_Z) + 50),
-  new THREE.MeshStandardMaterial({ color: 0x2f6b3f, roughness: 0.95 })
-);
-apron.rotation.x = -Math.PI / 2;
-apron.position.set(0, -0.02, (NEAR_Z + FAR_Z) / 2);
-scene.add(apron);
-
-const field = new THREE.Mesh(
-  new THREE.PlaneGeometry(FIELD_HALF_WIDTH * 2, NEAR_Z - FAR_Z),
-  new THREE.MeshStandardMaterial({ map: stripeTexture(), roughness: 0.95 })
-);
-field.rotation.x = -Math.PI / 2;
-field.position.set(0, 0, (NEAR_Z + FAR_Z) / 2);
-field.receiveShadow = true;
-scene.add(field);
-
-// Yard lines (simple thin white strips every 10 units) + the goal line.
-const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-for (let z = NEAR_Z - 5; z > FAR_Z; z -= 10) {
-  const line = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_HALF_WIDTH * 2 - 1, 0.15), lineMat);
-  line.rotation.x = -Math.PI / 2;
-  line.position.set(0, 0.01, z);
-  scene.add(line);
-}
-const goalLine = new THREE.Mesh(new THREE.PlaneGeometry(FIELD_HALF_WIDTH * 2 - 1, 0.3), lineMat);
-goalLine.rotation.x = -Math.PI / 2;
-goalLine.position.set(0, 0.011, GOAL_LINE_Z);
-scene.add(goalLine);
-
-// ---- Goalpost ------------------------------------------------------------
-const postMat = new THREE.MeshStandardMaterial({ color: 0xffd400, roughness: 0.4, metalness: 0.2 });
-const goalpost = new THREE.Group();
-const CROSSBAR_Y = 3.05;      // ~10ft
-const UPRIGHT_TOP_Y = 8.5;    // tall uprights, easy to spot from the tee
-const UPRIGHT_HALF_SPAN = 2.82; // ~18.5ft actual width, in "half" units
-
-const basePole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, CROSSBAR_Y, 12), postMat);
-basePole.position.y = CROSSBAR_Y / 2;
-basePole.castShadow = true;
-goalpost.add(basePole);
-
-const crossbar = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.1, 0.1, UPRIGHT_HALF_SPAN * 2, 12),
-  postMat
-);
-crossbar.rotation.z = Math.PI / 2;
-crossbar.position.y = CROSSBAR_Y;
-crossbar.castShadow = true;
-goalpost.add(crossbar);
-
-[-1, 1].forEach((side) => {
-  const upright = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.09, 0.09, UPRIGHT_TOP_Y - CROSSBAR_Y, 12),
-    postMat
-  );
-  upright.position.set(side * UPRIGHT_HALF_SPAN, (CROSSBAR_Y + UPRIGHT_TOP_Y) / 2, 0);
-  upright.castShadow = true;
-  goalpost.add(upright);
-});
-
-goalpost.position.set(0, 0, GOAL_LINE_Z - 2);
-scene.add(goalpost);
 
 // A jersey-colored canvas texture with an optional name arched above a big
 // number — used for the torso's box faces so the kicker reads as an actual
@@ -515,7 +434,7 @@ function syncRefereeAnimToCurrentPose(ref) {
 
 const referees = [-1, 1].map((side) => {
   const ref = buildReferee();
-  ref.position.set(side * (UPRIGHT_HALF_SPAN + 1.6), 0, GOAL_LINE_Z + 3);
+  ref.position.set(side * (UPRIGHT_HALF_SPAN + 1.6), 0, GOALPOST_Z + 5);
   ref.rotation.y = Math.PI; // face back toward the kicker
   scene.add(ref);
 
@@ -572,162 +491,7 @@ ball.position.y = BALL_REST_Y;
 ball.castShadow = true;
 scene.add(ball);
 
-// ---- Stadium: crowd stand model + light stanchions -------------------------
-const concreteMat = new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.95 });
-
-const STAND_HEIGHT = 8;
-const STAND_DEPTH = NEAR_Z - FAR_Z + 30;
-
-[-1, 1].forEach((side) => {
-  // Stadium light stanchions at each end of the stand, poking up above the
-  // roofline — mostly a silhouette against the sky, but it sells "stadium"
-  // a lot harder than bare stands do.
-  [-1, 1].forEach((endSide) => {
-    const poleX = side * (FIELD_HALF_WIDTH + 6);
-    const poleZ = (NEAR_Z + FAR_Z) / 2 + endSide * (STAND_DEPTH / 2 - 4);
-
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 14, 8), concreteMat);
-    pole.position.set(poleX, 7, poleZ);
-    scene.add(pole);
-
-    const fixture = new THREE.Mesh(
-      new THREE.BoxGeometry(1.6, 0.8, 0.4),
-      new THREE.MeshStandardMaterial({ color: 0xfff8e0, emissive: 0xfff2c0, emissiveIntensity: 0.6 })
-    );
-    fixture.position.set(poleX, 14, poleZ);
-    scene.add(fixture);
-  });
-});
-
-// A stand behind the goalpost too, so missing a kick doesn't sail off into
-// empty sky — closes out the "bowl" on the one side that was still open.
-const BACK_STAND_Z = FAR_Z - 4;
-
-// Real 3D stand sections (Rodin-generated from a ChatGPT crowd photo, via
-// image-to-3D) tiled along each stand's length, replacing a flat
-// crowd-photo-textured box. The model is a single static mesh (no
-// skeleton), so gltf.scene.clone() correctly shares its geometry/material/
-// textures across every tile instead of duplicating them in memory.
-//
-// Scaled uniformly (never stretched non-uniformly) off the model's own
-// real bounding-box height to match STAND_HEIGHT, so its proportions stay
-// true to the source photo -- tiled side by side along the needed length
-// instead, the same way the earlier flat-texture version repeated.
-const STAND_MODEL_BBOX = { w: 1.8945350050926208, h: 0.5554050207138062, d: 0.9296950101852417 };
-const STAND_MODEL_SCALE = STAND_HEIGHT / STAND_MODEL_BBOX.h;
-const STAND_MODEL_TILE_LEN = STAND_MODEL_BBOX.w * STAND_MODEL_SCALE;
-// Local-Z offset from the model's pivot to its crowd-facing (front) edge --
-// used below to chain tiles by their front edge instead of their
-// centerline (see placeSweptTile).
-const STAND_MODEL_FRONT_LOCAL_Z = 0.4630330204963684;
-const STAND_MODEL_FRONT_OFFSET = STAND_MODEL_FRONT_LOCAL_Z * STAND_MODEL_SCALE;
-
-// A real, purpose-built curved corner (Rodin-generated: a two-tier
-// grandstand modeled as an actual L-shaped/curved footprint, not a rigid
-// straight tile rotated to approximate one) -- replaces the earlier
-// faceted-rotation approximation, which read as angled straight panels
-// bolted together rather than a genuine bend.
-const CORNER_BBOX_H = 0.6803219318389893;
-const CORNER_SCALE = STAND_HEIGHT / CORNER_BBOX_H;
-
-let straightGltf = null;
-let cornerGltf = null;
-function buildStadiumStands() {
-  if (!straightGltf || !cornerGltf) return;
-
-  function addStraightTile(x, z, rotationY) {
-    const tile = straightGltf.scene.clone();
-    tile.scale.setScalar(STAND_MODEL_SCALE);
-    tile.rotation.y = rotationY;
-    tile.position.set(x, 0, z);
-    scene.add(tile);
-  }
-
-  // The corner model's two arms are NOT mirror images of each other in the
-  // source file (it's a single right-handed L), so the left corner needs an
-  // actual mirror (negative X scale), not just a rotation -- a rotation
-  // can't turn a right-handed shape into its left-handed reflection. A
-  // negative scale on one axis flips the mesh's winding order, which would
-  // make it invisible from the "wrong" side under normal backface culling,
-  // so the mirrored copy's materials are set to double-sided.
-  function addCornerTile(x, z, mirror) {
-    const tile = cornerGltf.scene.clone();
-    tile.scale.set(CORNER_SCALE * mirror, CORNER_SCALE, CORNER_SCALE);
-    if (mirror < 0) {
-      tile.traverse((o) => {
-        if (o.isMesh) {
-          o.material = o.material.clone();
-          o.material.side = THREE.DoubleSide;
-        }
-      });
-    }
-    tile.position.set(x, 0, z);
-    scene.add(tile);
-  }
-
-  // Chains a straight tile forward from `edge` (its trailing front-edge
-  // point) by its own front-edge offset -- same technique used to close
-  // the gap between the center tile and the corners: chaining on the
-  // crowd-facing edge, not the centerline, because the model has real
-  // depth and an angled/differently-shaped neighbor's centerline doesn't
-  // predict where its front face actually lands.
-  function addStraightFromEdge(edge, mirror) {
-    const sweep = Math.PI / 2;
-    const rotationY = mirror === 1 ? -sweep : sweep;
-    const dir = mirror === 1
-      ? new THREE.Vector3(Math.cos(sweep), 0, Math.sin(sweep))
-      : new THREE.Vector3(-Math.cos(sweep), 0, Math.sin(sweep));
-    const front = new THREE.Vector3(Math.sin(rotationY), 0, Math.cos(rotationY));
-    const frontEdgeCenter = edge.clone().addScaledVector(dir, STAND_MODEL_TILE_LEN / 2);
-    const origin = frontEdgeCenter.clone().addScaledVector(front, -STAND_MODEL_FRONT_OFFSET);
-    addStraightTile(origin.x, origin.z, rotationY);
-    return edge.clone().addScaledVector(dir, STAND_MODEL_TILE_LEN);
-  }
-
-  // ONE straight section spanning the width directly behind the endzone
-  // (not two tiles meeting at a center seam) -- the curve starts from ITS
-  // edges, matching a real stadium's layout: straight behind the goalpost,
-  // curving only at the corners, straight again down each sideline.
-  addStraightTile(0, BACK_STAND_Z, 0);
-
-  // Corner placement: tuned by hand against the actual model (its hinge
-  // point isn't exactly at its local origin, and unlike the straight
-  // tiles' bounding box, this one-off asset has no clean formula for it)
-  // so its arm sits flush against the center tile with no gap.
-  const CORNER_X = 12.8;
-  const CORNER_Z = -65.7;
-  addCornerTile(CORNER_X, CORNER_Z, 1);
-  addCornerTile(-CORNER_X, CORNER_Z, -1);
-
-  // The corner's far arm tapers to a narrow tip rather than ending in a
-  // flat cross-section sized to match the straight tiles, so the
-  // continuing sideline run starts from a conservative point well inside
-  // the corner's stable (non-tapered) cross-section -- overlapping the
-  // corner's own tail generously rather than chasing an exact seam.
-  // Overlap is invisible; a gap isn't, and exactly where the sideline
-  // picks up doesn't matter as long as it connects cleanly.
-  const SIDELINE_ANCHOR_X = 16;
-  const SIDELINE_ANCHOR_Z = -70;
-  const targetZ = NEAR_Z + 10;
-
-  [1, -1].forEach((mirror) => {
-    let edge = new THREE.Vector3(SIDELINE_ANCHOR_X * mirror, 0, SIDELINE_ANCHOR_Z);
-    let guard = 0;
-    while (edge.z < targetZ && guard < 20) {
-      edge = addStraightFromEdge(edge, mirror);
-      guard++;
-    }
-  });
-}
-
-new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
-  straightGltf = gltf;
-  buildStadiumStands();
-}, undefined, (err) => console.error('stadium stand model load failed', err));
-new GLTFLoader().load('/models/stadium-corner.glb', (gltf) => {
-  cornerGltf = gltf;
-  buildStadiumStands();
-}, undefined, (err) => console.error('stadium corner model load failed', err));
+// (Stadium -- field, stands, goalposts -- comes from the shared stadium.js, created in the Field section above.)
 
 // ---- Kick distance positioning ---------------------------------------------
 // Distance now comes from the server (one value per kick, shared by every
@@ -749,8 +513,8 @@ const DEFAULT_DISTANCE = 40; // used only for the initial framing before the fir
 // stretch toward the 55yd max, so the farthest kick unambiguously reads as
 // the farthest view.
 const DISTANCE_CURVE_POWER = 2.4;
-const BALL_Z_AT_MIN_DISTANCE = GOAL_LINE_Z + 2 + MIN_DISTANCE * 0.85;
-const BALL_Z_AT_MAX_DISTANCE = GOAL_LINE_Z + 2 + MAX_DISTANCE * 0.85;
+const BALL_Z_AT_MIN_DISTANCE = GOALPOST_Z + 4 + MIN_DISTANCE * 0.85;
+const BALL_Z_AT_MAX_DISTANCE = GOALPOST_Z + 4 + MAX_DISTANCE * 0.85;
 
 function kickerZFor(distanceYards) {
   const t = (distanceYards - MIN_DISTANCE) / (MAX_DISTANCE - MIN_DISTANCE);
@@ -778,7 +542,7 @@ function updateDistance(distanceYards) {
   // left-of-frame with the ball and goalpost centered, instead of the
   // kicker crowding the middle of the shot.
   camera.position.set(CAMERA_X, 3.2, kickerZ + 7);
-  controls.target.set(0, 2, GOAL_LINE_Z + 10);
+  controls.target.set(0, 2, GOALPOST_Z + 12);
   controls.update();
 }
 
@@ -1172,10 +936,10 @@ function showResultPopup(outcome) {
   const geo = new THREE.PlaneGeometry(4.6, 1.9);
 
   const front = new THREE.Mesh(geo, resultPopupTexture(text, color));
-  front.position.set(0, 5, GOAL_LINE_Z - 2 + 0.02); // faces +z, toward the kick cam / kicker side
+  front.position.set(0, 5, GOALPOST_Z + 0.02); // faces +z, toward the kick cam / kicker side
 
   const back = new THREE.Mesh(geo, resultPopupTexture(text, color));
-  back.position.set(0, 5, GOAL_LINE_Z - 2 - 0.02);
+  back.position.set(0, 5, GOALPOST_Z - 0.02);
   back.rotation.y = Math.PI; // faces -z, toward the end-zone cam
 
   resultPopup = new THREE.Group();
@@ -1510,7 +1274,7 @@ function wait(ms) {
 // the kick's distance so the peak is always comfortably above the crossbar
 // (3.05) at the moment the ball actually crosses the goalpost's plane.
 function ballFlightFor(outcome, startPos, distanceYards) {
-  const goalpostZ = GOAL_LINE_Z - 2;
+  const goalpostZ = GOALPOST_Z;
   const peakHeight = 5 + distanceYards * 0.1;
 
   if (outcome === 'short') {
@@ -1640,8 +1404,8 @@ function resetPose() {
 // goalpost looking back toward the kicker, so both uprights and both
 // referees are in frame together when the result actually happens, instead
 // of it playing out somewhere off past the edge of the kick-cam's view.
-const END_CAM_POS = new THREE.Vector3(0, 3, GOAL_LINE_Z - 10);
-const END_CAM_TARGET = new THREE.Vector3(0, 3, GOAL_LINE_Z);
+const END_CAM_POS = new THREE.Vector3(0, 3, GOALPOST_Z - 4);
+const END_CAM_TARGET = new THREE.Vector3(0, 3, GOALPOST_Z + 2);
 
 // Plays the full approach/swing/flight/referee-signal sequence for a kick
 // whose outcome the server has already decided, then shows the result
@@ -1675,7 +1439,7 @@ async function performKick(outcome, distanceYards) {
       if (windLabel) windLabel.visible = false;
     }
     const camStartPos = camera.position.clone();
-    const camStartTarget = new THREE.Vector3(0, 2, GOAL_LINE_Z + 10); // matches updateDistance()'s kick-cam target
+    const camStartTarget = new THREE.Vector3(0, 2, GOALPOST_Z + 12); // matches updateDistance()'s kick-cam target
     const flight = ballFlightFor(outcome, new THREE.Vector3(ball.position.x, ball.position.y, ballStartZ), distanceYards);
     const ballFlight = tween(flight.duration, (fu) => {
       const p = bezier2(flight.p0, flight.p1, flight.p2, fu);
