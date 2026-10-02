@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { createStadium, GOALPOST_SETBACK, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js';
+import { createStadium, GOALPOST_SETBACK, ENDZONE_DEPTH, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js';
 
 const instanceId = qs('instance');
 const leagueId = qs('league');
@@ -27,7 +27,7 @@ wrap.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8ec9f0);
-scene.fog = new THREE.Fog(0x8ec9f0, 35, 95);
+scene.fog = new THREE.Fog(0x8ec9f0, 60, 170); // pushed out for the true-scale field: a 55-yard kick puts the posts ~65 yards from the camera
 
 const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 500);
 camera.position.set(-2, 3.2, 13); // placeholder — updateDistance() below sets the real framing
@@ -494,32 +494,19 @@ scene.add(ball);
 // (Stadium -- field, stands, goalposts -- comes from the shared stadium.js, created in the Field section above.)
 
 // ---- Kick distance positioning ---------------------------------------------
-// Distance now comes from the server (one value per kick, shared by every
-// league member) — there's no manual control here anymore. Stylized, not to
-// real-world scale — a true 55-yard kick would put the kicker so far from
-// the goalpost it'd vanish into the fog. Compressing the range keeps every
-// distance clearly readable while still visibly farther apart from each
-// other.
-const MIN_DISTANCE = 25;
-const MAX_DISTANCE = 55;
+// Distance comes from the server (one value per kick, shared by every league
+// member) — there's no manual control here anymore. The field is drawn at true
+// scale (1 unit = 1 yard, painted yard lines/numbers), and a field goal's
+// distance is measured from the BACK of the endzone to the ball: the 10-yard
+// endzone plus the 7 yards the holder sits behind the line of scrimmage. So a
+// 47-yard kick is snapped from the 30-yard line (LOS = distance - 17) with the
+// ball spotted at the 37 -- and the ball's world Z is simply the back line's Z
+// plus the distance.
 const DEFAULT_DISTANCE = 40; // used only for the initial framing before the first kick loads
-
-// Apparent size is roughly 1/distance, so equal *yardage* steps do NOT read
-// as equal *visual* steps — a straight linear mapping left most of the
-// perceptible "pulling back" concentrated in the 25-40yd stretch, so 40yd
-// already looked close to as far as it gets. This curve keeps every kick
-// under ~40yd clustered close to the goalpost (matching how close a 25-40yd
-// attempt should feel) and saves the dramatic pull-back for the last
-// stretch toward the 55yd max, so the farthest kick unambiguously reads as
-// the farthest view.
-const DISTANCE_CURVE_POWER = 2.4;
-const BALL_Z_AT_MIN_DISTANCE = GOALPOST_Z + 4 + MIN_DISTANCE * 0.85;
-const BALL_Z_AT_MAX_DISTANCE = GOALPOST_Z + 4 + MAX_DISTANCE * 0.85;
+const BACK_LINE_Z = GOAL_LINE_Z - ENDZONE_DEPTH;
 
 function kickerZFor(distanceYards) {
-  const t = (distanceYards - MIN_DISTANCE) / (MAX_DISTANCE - MIN_DISTANCE);
-  const curved = Math.pow(t, DISTANCE_CURVE_POWER);
-  return BALL_Z_AT_MIN_DISTANCE + (BALL_Z_AT_MAX_DISTANCE - BALL_Z_AT_MIN_DISTANCE) * curved;
+  return BACK_LINE_Z + distanceYards;
 }
 
 // A real kicker sets up a couple of steps behind and to the side of the
@@ -542,6 +529,11 @@ function updateDistance(distanceYards) {
   // left-of-frame with the ball and goalpost centered, instead of the
   // kicker crowding the middle of the shot.
   camera.position.set(CAMERA_X, 3.2, kickerZ + 7);
+  // At true scale a deep kick puts the posts 60+ yards away, so tighten the lens
+  // as the kick gets longer (50° up close, ~36° at 55 yards) to keep them readable.
+  const lens = Math.min(1, Math.max(0, (distanceYards - 25) / 30));
+  camera.fov = 50 - lens * 14;
+  camera.updateProjectionMatrix();
   controls.target.set(0, 2, GOALPOST_Z + 12);
   controls.update();
 }
@@ -1104,6 +1096,8 @@ function showFrozenResult(k) {
     controls.enabled = false;
     camera.position.copy(END_CAM_POS);
     camera.lookAt(END_CAM_TARGET);
+    camera.fov = 50;
+    camera.updateProjectionMatrix();
     if (windArrow) windArrow.visible = false;
     if (windLabel) windLabel.visible = false;
   }
@@ -1439,6 +1433,7 @@ async function performKick(outcome, distanceYards) {
       if (windLabel) windLabel.visible = false;
     }
     const camStartPos = camera.position.clone();
+    const camStartFov = camera.fov;
     const camStartTarget = new THREE.Vector3(0, 2, GOALPOST_Z + 12); // matches updateDistance()'s kick-cam target
     const flight = ballFlightFor(outcome, new THREE.Vector3(ball.position.x, ball.position.y, ballStartZ), distanceYards);
     const ballFlight = tween(flight.duration, (fu) => {
@@ -1453,6 +1448,8 @@ async function performKick(outcome, distanceYards) {
         camera.position.lerpVectors(camStartPos, END_CAM_POS, ct);
         const lookTarget = new THREE.Vector3().lerpVectors(camStartTarget, END_CAM_TARGET, ct);
         camera.lookAt(lookTarget);
+        camera.fov = THREE.MathUtils.lerp(camStartFov, 50, ct); // widen back out from the long-kick lens
+        camera.updateProjectionMatrix();
       }
     });
     const refSignal = wait(flight.duration * 0.6).then(() => animateRefereeSignal(outcome === 'made'));
