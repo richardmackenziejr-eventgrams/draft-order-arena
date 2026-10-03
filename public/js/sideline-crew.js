@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinnedScene } from 'three/addons/utils/SkeletonUtils.js';
-import { FIELD_WIDTH, ENDZONE_DEPTH, SIDELINE_INSET } from '/js/stadium.js';
+import { FIELD_WIDTH, ENDZONE_DEPTH, SIDELINE_INSET } from '/js/stadium.js?v=2';
 
 const CHEERLEADER_COUNT = 4;
 
@@ -127,28 +127,34 @@ export function createSidelineCrew(root, { lengthYards = 100 } = {}) {
     applyQuality();
   }
 
-  const loadFail = (what) => (err) => console.error(`${what} failed to load`, err);
+  // `ready` resolves once every model/clip has loaded (or failed -- the crowd is decoration, the game plays without it).
+  const loadAsset = (url, what, onLoad) => new Promise((resolve) => {
+    new GLTFLoader().load(url, (gltf) => { onLoad(gltf); resolve(); }, undefined, (err) => { console.error(`${what} failed to load`, err); resolve(); });
+  });
+  const loads = [];
   for (let i = 0; i < CHEERLEADER_COUNT; i++) {
-    new GLTFLoader().load(`/models/cheerleader-${i + 1}.glb`, (gltf) => {
+    loads.push(loadAsset(`/models/cheerleader-${i + 1}.glb`, `cheerleader ${i + 1} model`, (gltf) => {
       cheerTemplates[i] = gltf.scene;
       buildCheerleaders();
-    }, undefined, loadFail(`cheerleader ${i + 1} model`));
+    }));
   }
-  new GLTFLoader().load('/models/cheer-cheering.glb', (gltf) => {
+  loads.push(loadAsset('/models/cheer-cheering.glb', 'cheer animation', (gltf) => {
     cheerClip = gltf.animations[0];
     buildCheerleaders();
-  }, undefined, loadFail('cheer animation'));
-  new GLTFLoader().load('/models/cameraman.glb', (gltf) => {
+  }));
+  loads.push(loadAsset('/models/cameraman.glb', 'cameraman model', (gltf) => {
     cameramanTemplate = gltf.scene;
     buildCameramen();
-  }, undefined, loadFail('cameraman model'));
-  new GLTFLoader().load('/models/standing-cameraman.glb', (gltf) => {
+  }));
+  loads.push(loadAsset('/models/standing-cameraman.glb', 'standing cameraman model', (gltf) => {
     standingCameramanTemplate = gltf.scene;
     buildCameramen();
-  }, undefined, loadFail('standing cameraman model'));
+  }));
+  const ready = Promise.all(loads);
 
   const local = new THREE.Vector3();
   return {
+    ready,
     // dt: seconds since the last frame. target: world-space point the photographers should follow.
     setQuality(level) { quality = level; applyQuality(); },
     update(dt, target) {

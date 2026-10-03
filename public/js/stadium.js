@@ -401,14 +401,14 @@ export function createStadium(scene, { lengthYards = 100, goalLineZ = -lengthYar
     });
   }
 
-  new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
-    straightGltf = gltf;
-    buildStands();
-  }, undefined, (err) => console.error('stadium stand model load failed', err));
-  new GLTFLoader().load('/models/stadium-corner.glb', (gltf) => {
-    cornerGltf = gltf;
-    buildStands();
-  }, undefined, (err) => console.error('stadium corner model load failed', err));
+  // `ready` resolves once both stand models have loaded (or failed -- the field still plays without them).
+  const loadStand = (url, label, onLoad) => new Promise((resolve) => {
+    new GLTFLoader().load(url, (gltf) => { onLoad(gltf); buildStands(); resolve(); }, undefined, (err) => { console.error(label + ' failed to load', err); resolve(); });
+  });
+  const ready = Promise.all([
+    loadStand('/models/stadium-stand.glb', 'stadium stand model', (gltf) => { straightGltf = gltf; }),
+    loadStand('/models/stadium-corner.glb', 'stadium corner model', (gltf) => { cornerGltf = gltf; }),
+  ]);
 
-  return { root, goalpostZ: goalLineZ - GOALPOST_SETBACK };
+  return { root, goalpostZ: goalLineZ - GOALPOST_SETBACK, ready };
 }

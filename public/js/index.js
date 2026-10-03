@@ -7,7 +7,7 @@ function modePill(mode) {
 // of an icon/emoji standing in for it — one static shot per category, not
 // per game, since category and game are currently 1:1.
 function thumbFor(category, name) {
-  return `<img class="game-thumb" src="/images/game-shots/${category}.png?v=20261003" alt="${escapeHtml(name)} screenshot" loading="lazy">`;
+  return `<img class="game-thumb" src="/images/game-shots/${category}.png?v=20261004" alt="${escapeHtml(name)} screenshot" loading="lazy">`;
 }
 
 async function loadGames() {

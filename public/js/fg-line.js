@@ -119,7 +119,7 @@ export function createFieldGoalLine(scene, { blockTimeSec = 5.0 } = {}) {
   const BREAK_AT = breakFreeAt(blockTimeSec);
   const ARRIVE_AT = arriveAt(blockTimeSec);
 
-  Promise.all([
+  const loadedPromise = Promise.all([
     loader('/models/lineman.glb'), loader('/models/dlineman.glb'),
     loader('/models/defender.glb'), loader('/models/blocker.glb'),
     loader('/models/football-stance.glb'), loader('/models/push.glb'), loader('/models/running.glb'),
@@ -137,7 +137,7 @@ export function createFieldGoalLine(scene, { blockTimeSec = 5.0 } = {}) {
     assets.fallOffset = hipsOffsetOf(assets.fall);
     [assets.ol, assets.dl, assets.red, assets.blue].forEach((t) => t.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } }));
     build();
-  });
+  }).catch((err) => console.error('field goal line failed to build', err));
 
   function makeChar(templateKey, template, clipNames, loops) {
     const model = cloneSkinned(template);
@@ -448,6 +448,7 @@ export function createFieldGoalLine(scene, { blockTimeSec = 5.0 } = {}) {
       if (!assets) return;
       if (hikeT == null || hikeT < BREAK_AT) breakCancelled = true;
     },
+    loaded: loadedPromise, // resolves once every model/clip is in (or something failed)
     arriveAt: ARRIVE_AT,
     breakAt: BREAK_AT,
     get ready() { return !!assets; },

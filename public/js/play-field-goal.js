@@ -10,9 +10,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { createSidelineCrew } from '/js/sideline-crew.js?v=2';
-import { createFieldGoalLine, LOS_YARDS_AHEAD, BALL_REST_Y } from '/js/fg-line.js?v=5';
-import { createStadium, GOALPOST_SETBACK, ENDZONE_DEPTH, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js';
+import { createSidelineCrew } from '/js/sideline-crew.js?v=3';
+import { createFieldGoalLine, LOS_YARDS_AHEAD, BALL_REST_Y } from '/js/fg-line.js?v=6';
+import { createStadium, GOALPOST_SETBACK, ENDZONE_DEPTH, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js?v=2';
 
 const instanceId = qs('instance');
 const leagueId = qs('league');
@@ -20,6 +20,15 @@ const memberId = qs('member');
 document.getElementById('back-link').href = '/'; // "Home" -- always the site's main page, not back into this league specifically
 
 const wrap = document.getElementById('fg3d-canvas-wrap');
+
+// Every model the kick scene needs reports in here (the stadium, crowd and line report through
+// their own `ready`/`loaded` promises) -- the Hike button waits on all of them (see sceneReady below).
+const loadWaits = [];
+function trackedLoad(url, label, onLoad) {
+  loadWaits.push(new Promise((resolve) => {
+    new GLTFLoader().load(url, (gltf) => { try { onLoad(gltf); } finally { resolve(); } }, undefined, (err) => { console.error(label + ' failed to load', err); resolve(); });
+  }));
+}
 
 // ---- Renderer / scene / camera -------------------------------------------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -225,7 +234,7 @@ scene.add(kicker);
 // frame), which performKick() below uses to drive the run-up instead of a
 // generic tween -- see calibrateKickAnimation() for how that's extracted.
 kicker.children.forEach((child) => { child.visible = false; });
-new GLTFLoader().load('/models/player-kick.glb', (gltf) => {
+trackedLoad('/models/player-kick.glb', 'kicker model', (gltf) => {
   const model = gltf.scene;
   // Real-world height from Rodin's own bounding box (~1.896) vs. this
   // figure's procedural height (helmet top ~2.12) -- scale up to match.
@@ -252,7 +261,7 @@ new GLTFLoader().load('/models/player-kick.glb', (gltf) => {
   action.setLoop(THREE.LoopOnce);
 
   kicker.userData.kickAnim = calibrateKickAnimation({ kicker, model, mixer, action, clip, hips });
-}, undefined, (err) => console.error('kicker model load failed', err));
+});
 
 // The clip's own root motion doesn't travel the exact distance/direction
 // this scene's run-up needs (real kickers set up wherever the scene's
@@ -462,7 +471,7 @@ const referees = [-1, 1].map((side) => {
   // below still works if this hasn't loaded, or fails to, in time) and
   // stand the loaded model in the same spot.
   ref.children.forEach((child) => { child.visible = false; });
-  new GLTFLoader().load('/models/referee.glb', (gltf) => {
+  trackedLoad('/models/referee.glb', 'referee model', (gltf) => {
     const model = gltf.scene;
     // Real-world height from Rodin's own bounding box (~1.898) vs. this
     // figure's procedural height (cap top ~2.17) -- scale up to match.
@@ -483,7 +492,7 @@ const referees = [-1, 1].map((side) => {
       bindRight: rightArm.rotation.clone(),
     };
     syncRefereeAnimToCurrentPose(ref); // starts in bind pose (T-pose) -- match whatever pose the scene is actually in by now
-  }, undefined, (err) => console.error('referee model load failed', err));
+  });
 
   return ref;
 });
@@ -509,6 +518,24 @@ ball.position.y = BALL_REST_Y;
 ball.castShadow = true;
 scene.add(ball);
 line.setBall(ball); // the line moves it (on the ground at the LOS, snapped back to the holder) until the kick is struck
+
+// ---- Don't let the player hike into a half-built scene ----------------------------------------
+// The stadium, crowd, linemen, holder, kicker and referees all stream in over the network. Until
+// they're all here -- plus a few rendered frames so the GPU has uploaded them -- the Hike button
+// stays disabled and reads "Loading…". (If something stalls for good, it unlocks after 25s anyway
+// so the player is never stuck.)
+let sceneReady = false;
+const nextFrames = (n) => new Promise((resolve) => {
+  const step = () => (--n <= 0 ? resolve() : requestAnimationFrame(step));
+  requestAnimationFrame(step);
+});
+Promise.race([
+  Promise.all([stadium.ready, crew.ready, line.loaded, ...loadWaits]).then(() => nextFrames(3)),
+  new Promise((resolve) => setTimeout(resolve, 25000)),
+]).then(() => {
+  sceneReady = true;
+  if (kickPhase === 'ready') { actionBtn.textContent = 'Hike!'; actionBtn.disabled = false; }
+});
 
 // (Stadium -- field, stands, goalposts -- comes from the shared stadium.js, created in the Field section above.)
 
@@ -568,6 +595,13 @@ const POWER_SWEET_HALF_MID = 0.09;    // 40-49 yards
 const POWER_SWEET_HALF_SHORT = 0.14;  // under 40 yards
 const LONG_DISTANCE_THRESHOLD = 50;
 const MID_DISTANCE_THRESHOLD = 40;
+
+// The power marker starts at the TOP of the bar and sweeps down (the raw wave starts at the bottom),
+// so it runs half a period ahead -- must match powerPosition() in lib/gameEngine/fieldGoal.js, which
+// scores the click off the same formula.
+function powerWave(elapsedMs) {
+  return trianglePosition(elapsedMs + powerPeriodMs / 2, powerPeriodMs);
+}
 
 function trianglePosition(elapsedMs, periodMs) {
   const cycle = ((elapsedMs % periodMs) + periodMs) % periodMs;
@@ -889,7 +923,7 @@ function rebuildWindIndicator() {
   // camera height) was picked by directly checking its projected screen
   // position at 25/40/55yd — comfortably inside the frame with margin at
   // all three, instead of guessing from screenshots.
-  const pos = new THREE.Vector3(0, camera.position.y + 6, camera.position.z - 18);
+  const pos = new THREE.Vector3(0, camera.position.y + 5.3, camera.position.z - 18); // was +6: sat right at the top edge, and slipped out of frame on a phone held sideways
   const WIND_SCALE = 3.5;
   if (windDir !== 'calm') {
     windArrow = buildWindArrowMesh();
@@ -1102,11 +1136,11 @@ function renderKick(gi, { trustLocalPowerSnap = false } = {}) {
     powerMarker.visible = true;
     powerMarkerMat.color.set(0xffffff);
     powerMarkerMat.emissive.set(0xffffff);
-    updatePowerMarkerPosition(0);
+    updatePowerMarkerPosition(1); // parked at the top, where it starts when the hike releases it
     directionArrow.visible = false;
     currentPowerStartedAt = null;
-    actionBtn.textContent = 'Hike!';
-    actionBtn.disabled = false;
+    actionBtn.textContent = sceneReady ? 'Hike!' : 'Loading…';
+    actionBtn.disabled = !sceneReady;
     return;
   }
 
@@ -1237,6 +1271,7 @@ async function playOutcome(outcome) {
 actionBtn.addEventListener('click', async () => {
   if (actionBtn.disabled) return;
   if (kickPhase === 'ready') {
+    if (!sceneReady) return;
     actionBtn.disabled = true;
     try {
       const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/hike`, { memberId });
@@ -1265,7 +1300,7 @@ actionBtn.addEventListener('click', async () => {
     // than where it was actually clicked. Moving off 'power' immediately
     // freezes it at the snapped position for the remainder of the request.
     kickPhase = 'power-locking';
-    lastLockedPowerT = trianglePosition(elapsedMs, powerPeriodMs);
+    lastLockedPowerT = powerWave(elapsedMs);
     paintPowerMarker(lastLockedPowerT, currentDistance); // color + position, from THIS client's own clock
     try {
       const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/power-stop`, { memberId, elapsedMs });
@@ -1751,7 +1786,7 @@ function renderFrame() {
 
   if (kickPhase === 'power' && currentPowerStartedAt != null) {
     const elapsed = Date.now() - currentPowerStartedAt;
-    currentPowerT = trianglePosition(elapsed, powerPeriodMs);
+    currentPowerT = powerWave(elapsed);
     updatePowerMarkerPosition(currentPowerT);
   } else if (kickPhase === 'direction' && directionCurve && currentDirectionStartedAt != null) {
     const elapsed = Date.now() - currentDirectionStartedAt;
