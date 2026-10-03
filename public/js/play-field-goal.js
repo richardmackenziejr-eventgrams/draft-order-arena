@@ -11,7 +11,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createSidelineCrew } from '/js/sideline-crew.js';
-import { createFieldGoalLine, LOS_YARDS_AHEAD, BALL_REST_Y } from '/js/fg-line.js?v=3';
+import { createFieldGoalLine, LOS_YARDS_AHEAD, BALL_REST_Y } from '/js/fg-line.js?v=4';
 import { createStadium, GOALPOST_SETBACK, ENDZONE_DEPTH, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js';
 
 const instanceId = qs('instance');
@@ -78,7 +78,7 @@ let lastCrewFrameMs = performance.now();
 // Seconds the player has after the hike to finish BOTH clicks before the pass
 // rush gets there -- must match BLOCK_TIME_MS in lib/gameEngine/fieldGoal.js
 // (the server is what actually enforces it).
-const BLOCK_TIME_S = 6;
+const BLOCK_TIME_S = 5.2;
 // 7 offensive + 7 defensive linemen at the line of scrimmage, plus two
 // edge players (red rushers + blue blockers) -- one red breaks free if the player takes too long. See fg-line.js.
 const line = createFieldGoalLine(scene, { blockTimeSec: BLOCK_TIME_S });
@@ -1334,7 +1334,7 @@ function showDone(message) {
 // hikeClientT0 is the performance.now() reading of the moment of the hike, derived
 // from the SERVER's own hike timestamp and clock (serverNow - hikedAt) so a player's
 // wrong system clock can't shift it. Everything on the line is a function of
-// seconds-since-hike, and the 6-second deadline counts from the same zero.
+// seconds-since-hike, and the 5.2-second deadline counts from the same zero.
 let renderedKickIndex = null;
 let hikeClientT0 = null;
 let blockWatch = null;
