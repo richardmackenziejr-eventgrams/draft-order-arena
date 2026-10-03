@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createSidelineCrew } from '/js/sideline-crew.js?v=3';
+import { setupFullscreenToggle } from '/js/fullscreen.js?v=1';
 import { createFieldGoalLine, LOS_YARDS_AHEAD, BALL_REST_Y } from '/js/fg-line.js?v=6';
 import { createStadium, GOALPOST_SETBACK, ENDZONE_DEPTH, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js?v=2';
 
@@ -20,6 +21,7 @@ const memberId = qs('member');
 document.getElementById('back-link').href = '/'; // "Home" -- always the site's main page, not back into this league specifically
 
 const wrap = document.getElementById('fg3d-canvas-wrap');
+setupFullscreenToggle(document.getElementById('kick-panel')); // "Full screen" button for computers (see fullscreen.js)
 
 // Every model the kick scene needs reports in here (the stadium, crowd and line report through
 // their own `ready`/`loaded` promises) -- the Hike button waits on all of them (see sceneReady below).

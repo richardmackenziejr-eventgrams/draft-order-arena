@@ -18,6 +18,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinnedScene } from 'three/addons/utils/SkeletonUtils.js';
+import { setupFullscreenToggle } from '/js/fullscreen.js?v=1';
 
 const instanceId = qs('instance');
 const leagueId = qs('league');
@@ -30,6 +31,7 @@ let currentReturnConfig = null;
 
 // ---- Three.js scene ---------------------------------------------------
 const canvasWrap = document.getElementById('kr3d-canvas-wrap');
+setupFullscreenToggle(document.getElementById('game-panel')); // "Full screen" button for computers (see fullscreen.js)
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8ec9f0);
 scene.fog = new THREE.Fog(0x8ec9f0, 40, 120);

@@ -258,6 +258,43 @@ ul.clean li:last-child { border-bottom: none; }
 }
 #fg3d-result { font-weight: bold; font-size: 1.1em; margin: 8px 0 0; text-align: center; }
 
+/* --- Bigger game picture on computers, and a full screen toggle (Field Goal Kick + Kickoff Return) ---
+   On a big monitor the picture used to sit in the site's ~780px column. On a wide, fine-pointer
+   screen the page opens up and the 16:9 picture grows -- capped by the window's height too, so the
+   picture, title and buttons still fit without scrolling. Phones/tablets (coarse pointer) keep the
+   existing layout. */
+@media (min-width: 1100px) and (pointer: fine) {
+  main.game-wide { max-width: 1240px; }
+  main.game-wide #fg3d-canvas-wrap,
+  main.game-wide .fg3d-kick-row,
+  main.game-wide #kr3d-stage {
+    max-width: max(720px, min(1160px, calc((100vh - 400px) * 16 / 9)));
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+/* The toggle (added by js/fullscreen.js) sits in the panel's top-right corner. */
+.panel.fs-host { position: relative; }
+.fs-toggle { position: absolute; top: 12px; right: 12px; z-index: 5; padding: 6px 12px; font-size: 0.85rem; }
+/* A phone held sideways already shows the game nearly full screen -- no button there. */
+@media (orientation: landscape) and (pointer: coarse) { .fs-toggle { display: none !important; } }
+/* While fullscreen: the panel IS the screen. The 16:9 picture is as big as fits next to the info line
+   above it and the buttons / result text below it. */
+#kick-panel:fullscreen, #game-panel:fullscreen {
+  display: flex !important; flex-direction: column; align-items: center; justify-content: center;
+  width: 100vw; height: 100vh; margin: 0; padding: 16px; border: 0; border-radius: 0;
+  background: var(--bg); overflow: auto;
+}
+#kick-panel:-webkit-full-screen, #game-panel:-webkit-full-screen {
+  display: flex !important; flex-direction: column; align-items: center; justify-content: center;
+  width: 100vw; height: 100vh; margin: 0; padding: 16px; border: 0; border-radius: 0;
+  background: var(--bg); overflow: auto;
+}
+#kick-panel:fullscreen #fg3d-canvas-wrap { max-width: none; width: min(100%, calc((100vh - 160px) * 16 / 9)); }
+#kick-panel:-webkit-full-screen #fg3d-canvas-wrap { max-width: none; width: min(100%, calc((100vh - 160px) * 16 / 9)); }
+#game-panel:fullscreen #kr3d-stage { max-width: none; width: min(100%, calc((100vh - 200px) * 16 / 9)); }
+#game-panel:-webkit-full-screen #kr3d-stage { max-width: none; width: min(100%, calc((100vh - 200px) * 16 / 9)); }
+
 /* --- Kickoff Return: real-time canvas dodge game --- */
 .kr-return-info { text-align: center; font-weight: 800; font-size: 1.3rem; margin: 0 0 10px; }
 #kr-canvas-wrap {
