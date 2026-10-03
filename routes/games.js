@@ -36,8 +36,8 @@ module.exports = function gamesRouter() {
       trivia.presentCurrentQuestion(gi.state, memberId);
       await store.save(db);
     }
-    // Viewing a field goal kick is what starts its power meter — same idea
-    // as trivia above.
+    // Viewing a field goal kick is what rolls it (its distance/wind) — same
+    // idea as trivia above. The meter and block clock wait for the hike.
     if (gi.gameType === 'fieldGoal' && memberId && gi.status !== 'completed') {
       fieldGoal.presentCurrentKick(gi.state, memberId);
       await store.save(db);
@@ -139,6 +139,46 @@ module.exports = function gamesRouter() {
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
+  // The hike: snaps the ball, which arms the power meter and the pass-rush
+  // block clock together (nothing runs before this). Idempotent.
+  router.post('/game-instances/:id/field-goal/hike', async (req, res) => {
+    const { memberId } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'fieldGoal') return res.status(404).json({ error: 'Field goal game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This field goal contest is already finished.' });
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
+
+    const result = fieldGoal.hike(gi.state, memberId);
+    if (result && result.error) return res.status(400).json({ error: result.error });
+
+    await store.save(db);
+    res.json({ gameInstance: viewForMember(gi, memberId) });
+  });
+
+  // The client's countdown ran out with the kick still unresolved -- the pass
+  // rusher got there. Server checks its own clock before agreeing.
+  router.post('/game-instances/:id/field-goal/timeout', async (req, res) => {
+    const { memberId } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'fieldGoal') return res.status(404).json({ error: 'Field goal game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This field goal contest is already finished.' });
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
+
+    const outcome = fieldGoal.timeoutBlock(gi.state, memberId);
+    if (outcome && outcome.error) return res.status(400).json({ error: outcome.error });
+
+    await store.save(db);
+    res.json({ outcome, gameInstance: viewForMember(gi, memberId) });
+  });
+
   // Restarts whichever meter is currently running — the client calls this
   // when it notices its tab was backgrounded mid-meter (the animation
   // pauses while backgrounded like any browser tab, but real elapsed time
@@ -197,9 +237,9 @@ module.exports = function gamesRouter() {
 
     const player = fieldGoal.advanceToNext(gi.state, memberId);
     if (player && player.error) return res.status(400).json({ error: player.error });
-    // Start the new current kick's power meter now — the client renders it
-    // immediately from this response without a follow-up GET, so nothing
-    // else would ever set powerStartedAt for it.
+    // Roll the new current kick now — the client renders it immediately from
+    // this response without a follow-up GET. (Its meter and block clock don't
+    // start until the player hikes -- see /field-goal/hike.)
     fieldGoal.presentCurrentKick(gi.state, memberId);
 
     if (gi.isTest) {

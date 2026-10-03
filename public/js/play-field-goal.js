@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createSidelineCrew } from '/js/sideline-crew.js';
+import { createFieldGoalLine, LOS_YARDS_AHEAD } from '/js/fg-line.js?v=2';
 import { createStadium, GOALPOST_SETBACK, ENDZONE_DEPTH, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js';
 
 const instanceId = qs('instance');
@@ -73,6 +74,14 @@ const stadium = createStadium(scene, { lengthYards: 100, goalLineZ: GOAL_LINE_Z 
 // Cheerleaders behind/beside the far endzone + photographers who follow the ball.
 const crew = createSidelineCrew(stadium.root, { lengthYards: 100 });
 let lastCrewFrameMs = performance.now();
+
+// Seconds the player has after the hike to finish BOTH clicks before the pass
+// rush gets there -- must match BLOCK_TIME_MS in lib/gameEngine/fieldGoal.js
+// (the server is what actually enforces it).
+const BLOCK_TIME_S = 6;
+// 7 offensive + 7 defensive linemen at the line of scrimmage, plus two
+// edge players (red rushers + blue blockers) -- one red breaks free if the player takes too long. See fg-line.js.
+const line = createFieldGoalLine(scene, { blockTimeSec: BLOCK_TIME_S });
 
 
 // A jersey-colored canvas texture with an optional name arched above a big
@@ -522,6 +531,7 @@ function kickerZFor(distanceYards) {
 // ball, then approaches forward into it — not standing right at the same
 // depth as the ball, which reads as if he's in front of it instead.
 const KICKER_SETUP_OFFSET = 1.6;
+let rusherSide = 1; // which end's red edge player breaks free of his block -- alternates kick to kick (see renderKick)
 
 // Moves the kicker/ball back for longer kicks and pulls the camera back
 // along with them (like a broadcast "kick cam" riding behind the kicker),
@@ -533,6 +543,7 @@ function updateDistance(distanceYards) {
   kicker.position.z = kickerZ;
   tee.position.z = ballZ;
   ball.position.z = ballZ;
+  line.setSpot(0, ballZ, rusherSide);
   // Sitting to the right of the kicker (rather than further left, past him)
   // reads as the familiar broadcast "kick cam" angle — the kicker ends up
   // left-of-frame with the ball and goalpost centered, instead of the
@@ -930,7 +941,8 @@ let resultPopup = null;
 function showResultPopup(outcome) {
   hideResultPopup();
   const made = outcome === 'made';
-  const text = made ? 'GOOD!' : 'NO GOOD';
+  const blocked = outcome === 'blocked';
+  const text = made ? 'GOOD!' : (blocked ? 'BLOCKED!' : 'NO GOOD');
   const color = made ? '#4ade80' : '#ef4444';
   // Every outcome (including 'short') now follows the ball to the same
   // close-up end-zone cam, so one size fits all -- no more special-casing
@@ -940,12 +952,18 @@ function showResultPopup(outcome) {
   const front = new THREE.Mesh(geo, resultPopupTexture(text, color));
   front.position.set(0, 5, GOALPOST_Z + 0.02); // faces +z, toward the kick cam / kicker side
 
-  const back = new THREE.Mesh(geo, resultPopupTexture(text, color));
-  back.position.set(0, 5, GOALPOST_Z - 0.02);
-  back.rotation.y = Math.PI; // faces -z, toward the end-zone cam
-
   resultPopup = new THREE.Group();
-  resultPopup.add(front, back);
+  if (blocked) {
+    // A blocked kick never leaves the line, so the camera stays on the kick cam:
+    // hang the card in front of the kicker instead of out in the uprights.
+    front.position.set(0, 3.6, tee.position.z - 3);
+    resultPopup.add(front);
+  } else {
+    const back = new THREE.Mesh(geo, resultPopupTexture(text, color));
+    back.position.set(0, 5, GOALPOST_Z - 0.02);
+    back.rotation.y = Math.PI; // faces -z, toward the end-zone cam
+    resultPopup.add(front, back);
+  }
   scene.add(resultPopup);
 }
 
@@ -980,7 +998,7 @@ let currentDirectionStartedAt = null;
 // marker/arrow — freezing it at the snapped position instead of it sliding
 // on for the whole round-trip and landing wherever real time moved on to
 // once the response came back.
-let kickPhase = 'power'; // 'power' | 'power-locking' | 'direction' | 'direction-locking' | 'flight' | 'result'
+let kickPhase = 'ready'; // 'ready' (waiting on the hike) | 'power' | 'power-locking' | 'direction' | 'direction-locking' | 'flight' | 'result'
 let currentPowerT = 0.5;
 let currentDirectionT = 0.5;
 
@@ -993,6 +1011,7 @@ function outcomeText(outcome, distance) {
   if (outcome.outcome === 'short') return "NO GOOD — didn't have the distance. Time the power meter's green zone better.";
   if (outcome.outcome === 'wide-left') return 'WIDE LEFT!';
   if (outcome.outcome === 'wide-right') return 'WIDE RIGHT!';
+  if (outcome.outcome === 'blocked') return 'BLOCKED! You took too long — the rush got through. Lock power and direction before the defender breaks free.';
   return outcome.outcome;
 }
 
@@ -1051,6 +1070,19 @@ function renderKick(gi, { trustLocalPowerSnap = false } = {}) {
   actionBtn.style.display = '';
   if (resultEl) resultEl.textContent = '';
 
+  // A different kick than the one on screen: everyone back to their stance, no hike clock.
+  // (renderKick also runs mid-play -- after the power click -- and must NOT reset the line then.)
+  const newKick = renderedKickIndex !== k.index;
+  renderedKickIndex = k.index;
+  rusherSide = k.index % 2 === 0 ? 1 : -1;
+  if (newKick || k.phase === 'ready') {
+    stopBlockWatch();
+    hikeClientT0 = null;
+    line.setRushOutcome(null);
+    line.setSpot(0, tee.position.z, rusherSide);
+    line.reset();
+  }
+
   if (k.phase === 'result') {
     showFrozenResult(k); // already resolved (e.g. a page reload) — restore instantly, don't replay
     return;
@@ -1060,6 +1092,23 @@ function renderKick(gi, { trustLocalPowerSnap = false } = {}) {
   rebuildPowerMeter(k.distance);
   rebuildDirectionMeter();
   rebuildWindIndicator();
+
+  if (k.phase === 'ready') {
+    // Set at the line, waiting on the hike: meters parked, nothing running.
+    kickPhase = 'ready';
+    lastLockedPowerT = null;
+    powerMarker.visible = true;
+    powerMarkerMat.color.set(0xffffff);
+    powerMarkerMat.emissive.set(0xffffff);
+    updatePowerMarkerPosition(0);
+    directionArrow.visible = false;
+    currentPowerStartedAt = null;
+    actionBtn.textContent = 'Hike!';
+    actionBtn.disabled = false;
+    return;
+  }
+
+  syncHikeClock(k); // the play is live (a hike this session, or a reload mid-play) -- start/refresh the block countdown
 
   if (k.phase === 'direction') {
     // Power's already locked — freeze its marker right where it landed
@@ -1094,6 +1143,26 @@ function showFrozenResult(k) {
   resetPose();
   rebuildWindIndicator();
   const attempt = k.attempt;
+
+  if (attempt.outcome === 'blocked') {
+    // Never left the line: stay on the kick cam, ball batted down behind the tee, rusher
+    // celebrating, everyone else still pushing.
+    tee.visible = false;
+    const b = blockedBallLanding();
+    ball.position.set(b.x, b.y, b.z);
+    setMetersVisible(false);
+    line.setRushOutcome('blocked');
+    hikeClientT0 = performance.now() - 99000; // far enough along that everyone is in their final state
+    showResultPopup('blocked');
+    if (resultEl) {
+      resultEl.textContent = outcomeText(attempt, k.distance);
+      resultEl.style.color = '#ef4444';
+    }
+    kickPhase = 'result';
+    actionBtn.style.display = 'none';
+    nextKickBtn.style.display = 'inline-block';
+    return;
+  }
 
   const startPos = new THREE.Vector3(ball.position.x, ball.position.y, ball.position.z);
   tee.visible = false;
@@ -1148,8 +1217,33 @@ function showFrozenResult(k) {
   nextKickBtn.style.display = 'inline-block';
 }
 
+// Plays out a resolved attempt (made / missed / blocked) and shows the result UI.
+async function playOutcome(outcome) {
+  stopBlockWatch();
+  actionBtn.disabled = true;
+  kickPhase = 'flight';
+  await performKick(outcome.outcome, outcome.distance); // ball flight + ref signal, using the server's real outcome
+  if (resultEl) {
+    resultEl.textContent = outcomeText(outcome, outcome.distance);
+    resultEl.style.color = outcome.made ? '#4ade80' : '#ef4444';
+  }
+  actionBtn.style.display = 'none';
+  nextKickBtn.style.display = 'inline-block';
+}
+
 actionBtn.addEventListener('click', async () => {
   if (actionBtn.disabled) return;
+  if (kickPhase === 'ready') {
+    actionBtn.disabled = true;
+    try {
+      const { gameInstance: gi } = await api('POST', `/api/game-instances/${instanceId}/field-goal/hike`, { memberId });
+      renderKick(gi); // phase is now 'power': meter starts, linemen stand up and engage, the block clock is running
+    } catch (err) {
+      alert(err.message);
+      actionBtn.disabled = false;
+    }
+    return;
+  }
   if (kickPhase === 'power') {
     // Measured first, before anything else runs — this is what the player
     // actually saw the instant they clicked.
@@ -1176,7 +1270,12 @@ actionBtn.addEventListener('click', async () => {
       // what was clicked — don't let the repaint below override it with
       // the server's independently-recomputed powerPos (see
       // lastLockedPowerT's comment for why those can legitimately differ).
-      renderKick(gi, { trustLocalPowerSnap: true });
+      const ck = gi.currentKick;
+      if (ck && ck.phase === 'result' && ck.attempt && ck.attempt.outcome === 'blocked') {
+        await playOutcome(ck.attempt); // the click landed after the deadline -- the rusher got there first
+      } else {
+        renderKick(gi, { trustLocalPowerSnap: true });
+      }
     } catch (err) {
       alert(err.message);
       kickPhase = 'power'; // let the meter resume live so a retry click measures real elapsed time again
@@ -1189,14 +1288,7 @@ actionBtn.addEventListener('click', async () => {
     updateDirectionArrowPosition(trianglePosition(elapsedMs, directionPeriodMs));
     try {
       const { outcome } = await api('POST', `/api/game-instances/${instanceId}/field-goal/direction-stop`, { memberId, elapsedMs });
-      kickPhase = 'flight';
-      await performKick(outcome.outcome, outcome.distance); // ball flight + ref signal, using the server's real outcome
-      if (resultEl) {
-        resultEl.textContent = outcomeText(outcome, outcome.distance);
-        resultEl.style.color = outcome.made ? '#4ade80' : '#ef4444';
-      }
-      actionBtn.style.display = 'none';
-      nextKickBtn.style.display = 'inline-block';
+      await playOutcome(outcome);
     } catch (err) {
       alert(err.message);
       kickPhase = 'direction';
@@ -1233,6 +1325,55 @@ function showDone(message) {
   // Hidden until the player has actually finished their kicks -- per
   // direction, no easy way to wander off mid-game.
   document.getElementById('back-link').style.display = '';
+}
+
+// ---- Hike clock + pass-rush deadline -------------------------------------------
+// hikeClientT0 is the performance.now() reading of the moment of the hike, derived
+// from the SERVER's own hike timestamp and clock (serverNow - hikedAt) so a player's
+// wrong system clock can't shift it. Everything on the line is a function of
+// seconds-since-hike, and the 6-second deadline counts from the same zero.
+let renderedKickIndex = null;
+let hikeClientT0 = null;
+let blockWatch = null;
+let blockSending = false;
+
+function hikeSeconds() {
+  return hikeClientT0 == null ? null : (performance.now() - hikeClientT0) / 1000;
+}
+
+function syncHikeClock(k) {
+  if (hikeClientT0 == null && k.hikedAt != null && k.serverNow != null) {
+    hikeClientT0 = performance.now() - (k.serverNow - k.hikedAt);
+  }
+  if (!blockWatch) blockWatch = setInterval(checkBlockDeadline, 100);
+}
+
+function stopBlockWatch() {
+  if (blockWatch) clearInterval(blockWatch);
+  blockWatch = null;
+  blockSending = false;
+}
+
+// Once the deadline passes with the kick still unresolved, tell the server --
+// which checks its own clock -- and play out the block. While a click is in
+// flight ('*-locking') hold off: that click may still beat the deadline.
+async function checkBlockDeadline() {
+  if (blockSending || hikeClientT0 == null) return;
+  if (kickPhase !== 'power' && kickPhase !== 'direction') return;
+  if (hikeSeconds() < BLOCK_TIME_S) return;
+  blockSending = true;
+  try {
+    const { outcome } = await api('POST', `/api/game-instances/${instanceId}/field-goal/timeout`, { memberId });
+    await playOutcome(outcome);
+  } catch (err) {
+    console.warn('block timeout call failed, will retry', err);
+    blockSending = false; // try again on the next tick (e.g. the server's clock was a hair behind ours)
+  }
+}
+
+// Where a batted-down ball ends up: a couple of yards back toward the kicker, away from the rusher's side.
+function blockedBallLanding() {
+  return { x: -rusherSide * 1.6, y: 0.12, z: tee.position.z + 1.8 };
 }
 
 // ---- Kick animation ---------------------------------------------------------
@@ -1430,6 +1571,7 @@ async function performKick(outcome, distanceYards) {
   const approachAngle = -0.45; // angled toward the ball at the start of the run
 
   let flightAndFollowUp = Promise.resolve();
+  line.setRushOutcome(outcome === 'blocked' ? 'blocked' : 'late');
 
   // Shared by both the animated and procedural-fallback paths below: tee
   // disappears, camera hands off to follow the ball to the end zone, wind
@@ -1439,6 +1581,20 @@ async function performKick(outcome, distanceYards) {
   function fireContact() {
     tee.visible = false;
     setMetersVisible(false); // the kick is made -- the meters have done their job and would just hang in the end-zone shot
+
+    if (outcome === 'blocked') {
+      // The rusher gets a hand on it: the ball is batted up and back toward the kicker, camera stays put.
+      const p0 = new THREE.Vector3(ball.position.x, ball.position.y, ballStartZ);
+      const land = blockedBallLanding();
+      const p2 = new THREE.Vector3(land.x, land.y, land.z);
+      const p1 = new THREE.Vector3((p0.x + p2.x) / 2, 3.4, (p0.z + p2.z) / 2);
+      flightAndFollowUp = tween(900, (fu) => {
+        ball.position.copy(bezier2(p0, p1, p2, easeOutQuad(fu)));
+        ball.rotation.z += 0.45;
+      });
+      return;
+    }
+    line.cancelRushIfNotStarted(hikeSeconds()); // a kick that beat the deadline: a red who hasn't broken free yet never does -- his block holds
     const followBall = true;
     if (followBall) {
       cameraLocked = true; // hand the camera fully to this animation until the next renderKick()'s resetPose() gives it back
@@ -1579,7 +1735,9 @@ function renderFrame() {
   if (!cameraLocked) controls.update();
 
   const nowMs = performance.now();
-  crew.update(Math.min(0.1, (nowMs - lastCrewFrameMs) / 1000), ball.position); // clamp so a backgrounded tab doesn't fast-forward the cheers
+  const frameDt = Math.min(0.1, (nowMs - lastCrewFrameMs) / 1000); // clamp so a backgrounded tab doesn't fast-forward the cheers
+  crew.update(frameDt, ball.position);
+  line.update(frameDt, hikeSeconds());
   lastCrewFrameMs = nowMs;
 
   if (kickPhase === 'power' && currentPowerStartedAt != null) {
