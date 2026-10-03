@@ -34,8 +34,18 @@ export function createSidelineCrew(root, { lengthYards = 100 } = {}) {
   const cheerGroup = new THREE.Group();
   const cameramanGroup = new THREE.Group();
   root.add(cheerGroup, cameramanGroup);
-  let cheerMixers = [];
+  let cheerMixers = []; // parallel to cheerGroup.children
   let cameramen = [];
+  let quality = 0;      // 0 full | 1 no shadows, cheers animate at 1/3 rate | 2 also every other cheerleader hidden, 1/6 rate
+  let cheerAccum = 0, cheerFrame = 0;
+
+  // The crowd is purely decorative and far from the camera, so it's the first thing to trim when a
+  // device can't keep up: skip its shadows, then animate it less often, then show fewer of it.
+  function applyQuality() {
+    const shadows = quality < 1;
+    [cheerGroup, cameramanGroup].forEach((g) => g.traverse((o) => { if (o.isMesh) o.castShadow = shadows; }));
+    cheerGroup.children.forEach((m, i) => { m.visible = quality < 2 || i % 2 === 0; });
+  }
 
   function buildCheerleaders() {
     cheerGroup.clear();
@@ -86,6 +96,7 @@ export function createSidelineCrew(root, { lengthYards = 100 } = {}) {
         addCheerleader(i, sign * SIDELINE_X, startZ + (endZ - startZ) * t, facingY);
       }
     });
+    applyQuality();
   }
 
   function buildCameramen() {
@@ -113,6 +124,7 @@ export function createSidelineCrew(root, { lengthYards = 100 } = {}) {
         });
       });
     }
+    applyQuality();
   }
 
   const loadFail = (what) => (err) => console.error(`${what} failed to load`, err);
@@ -138,8 +150,14 @@ export function createSidelineCrew(root, { lengthYards = 100 } = {}) {
   const local = new THREE.Vector3();
   return {
     // dt: seconds since the last frame. target: world-space point the photographers should follow.
+    setQuality(level) { quality = level; applyQuality(); },
     update(dt, target) {
-      for (const m of cheerMixers) m.update(dt);
+      cheerAccum += dt;
+      const stride = quality >= 2 ? 6 : quality >= 1 ? 3 : 1;
+      if (++cheerFrame % stride === 0) {
+        cheerMixers.forEach((m, i) => { if (cheerGroup.children[i] && cheerGroup.children[i].visible) m.update(cheerAccum); });
+        cheerAccum = 0;
+      }
       if (!target) return;
       local.copy(target);
       root.worldToLocal(local);

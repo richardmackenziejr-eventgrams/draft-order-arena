@@ -100,7 +100,7 @@ function hipsOffsetOf(clip) {
   return { interp, first: Array.from(interp.evaluate(0)) };
 }
 
-export function createFieldGoalLine(scene, { blockTimeSec = 5.2 } = {}) {
+export function createFieldGoalLine(scene, { blockTimeSec = 5.0 } = {}) {
   const loader = (url) => new Promise((res) => new GLTFLoader().load(url, res, undefined, (err) => { console.error(url + ' failed to load', err); res(null); }));
   const group = new THREE.Group();
   scene.add(group);

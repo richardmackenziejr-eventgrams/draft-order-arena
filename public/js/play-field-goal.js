@@ -10,8 +10,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { createSidelineCrew } from '/js/sideline-crew.js';
-import { createFieldGoalLine, LOS_YARDS_AHEAD, BALL_REST_Y } from '/js/fg-line.js?v=4';
+import { createSidelineCrew } from '/js/sideline-crew.js?v=2';
+import { createFieldGoalLine, LOS_YARDS_AHEAD, BALL_REST_Y } from '/js/fg-line.js?v=5';
 import { createStadium, GOALPOST_SETBACK, ENDZONE_DEPTH, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js';
 
 const instanceId = qs('instance');
@@ -78,7 +78,7 @@ let lastCrewFrameMs = performance.now();
 // Seconds the player has after the hike to finish BOTH clicks before the pass
 // rush gets there -- must match BLOCK_TIME_MS in lib/gameEngine/fieldGoal.js
 // (the server is what actually enforces it).
-const BLOCK_TIME_S = 5.2;
+const BLOCK_TIME_S = 5.0;
 // 7 offensive + 7 defensive linemen at the line of scrimmage, plus two
 // edge players (red rushers + blue blockers) -- one red breaks free if the player takes too long. See fg-line.js.
 const line = createFieldGoalLine(scene, { blockTimeSec: BLOCK_TIME_S });
@@ -1334,7 +1334,7 @@ function showDone(message) {
 // hikeClientT0 is the performance.now() reading of the moment of the hike, derived
 // from the SERVER's own hike timestamp and clock (serverNow - hikedAt) so a player's
 // wrong system clock can't shift it. Everything on the line is a function of
-// seconds-since-hike, and the 5.2-second deadline counts from the same zero.
+// seconds-since-hike, and the 5-second deadline counts from the same zero.
 let renderedKickIndex = null;
 let hikeClientT0 = null;
 let blockWatch = null;
@@ -1714,12 +1714,13 @@ async function performKick(outcome, distanceYards) {
 // whatever the current size is, and again automatically any time the
 // element's actual layout size changes for any reason (a stylesheet
 // finishing load, a font swap reflowing the page, the window resizing).
+let pixelRatioCap = Math.min(window.devicePixelRatio, 2);
 function resize() {
   const w = wrap.clientWidth;
   const h = wrap.clientHeight;
   if (!w || !h) return; // not laid out yet — the observer will fire again once it is
   renderer.setSize(w, h, false);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(pixelRatioCap);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   // ResizeObserver's own initial callback fires asynchronously (not in this
@@ -1760,10 +1761,59 @@ function renderFrame() {
 
   renderer.render(scene, camera);
 }
-function animate() {
+function animate(now) {
   requestAnimationFrame(animate);
+  perfGovernor(now);
   renderFrame();
 }
+
+// ---- Performance governor ------------------------------------------------------------------
+// The scene is heavy (a stadium, ~60 animated characters, shadows), and a phone's screen has
+// 3x the pixels per inch of a monitor. The meters are clock-driven, so lag never changes what a
+// click scores -- but a slow frame rate makes the markers look like they stutter. So: phones
+// start a notch down, and any device that's averaging worse than ~45fps steps down further
+// until it keeps up (it never steps back up, so it can't flap).
+//   level 0  full quality (desktop)
+//   level 1  render at 1x pixel density, no crowd shadows, crowd animates at 1/3 rate  (phones start here)
+//   level 2  half the crowd hidden, crowd at 1/6 rate, half-size shadow map
+//   level 3  shadows off entirely
+// ?perf=0..3 in the URL forces a level and turns the auto-adjust off (handy for testing a device).
+const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
+const forcedPerf = qs('perf');
+let perfLevel = -1;
+function applyPerfLevel(level) {
+  if (level === perfLevel) return;
+  perfLevel = level;
+  pixelRatioCap = level >= 1 ? 1 : Math.min(window.devicePixelRatio, isTouchDevice ? 1.5 : 2);
+  crew.setQuality(level);
+  if (level >= 2 && sun.shadow.mapSize.x > 1024) {
+    sun.shadow.mapSize.set(1024, 1024);
+    if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+  }
+  if (level >= 3 && renderer.shadowMap.enabled) {
+    renderer.shadowMap.enabled = false;
+    scene.traverse((o) => { if (o.material) [].concat(o.material).forEach((m) => { m.needsUpdate = true; }); }); // materials recompile without the shadow code
+  }
+  resize();
+}
+let perfLastMs = 0, perfSum = 0, perfFrames = 0, perfSettle = 120; // skip the first couple of seconds: model/texture loading hitches don't count
+function perfGovernor(now) {
+  if (forcedPerf != null || typeof now !== 'number') return;
+  const dt = now - perfLastMs;
+  perfLastMs = now;
+  if (document.hidden || dt <= 0 || dt > 500) return; // a backgrounded tab or a one-off hitch isn't a trend
+  if (perfSettle > 0) { perfSettle--; return; }
+  perfSum += dt;
+  if (++perfFrames < 60) return;
+  const avg = perfSum / perfFrames;
+  perfSum = 0; perfFrames = 0;
+  if (avg > 22 && perfLevel < 3) {
+    console.info(`[perf] averaging ${avg.toFixed(1)}ms/frame -- dropping to quality level ${perfLevel + 1}`);
+    applyPerfLevel(perfLevel + 1);
+    perfSettle = 60; // let the change take effect before judging again
+  }
+}
+applyPerfLevel(forcedPerf != null ? Math.max(0, Math.min(3, Number(forcedPerf) || 0)) : (isTouchDevice ? 1 : 0));
 // A page load can land in a browser tab/window that isn't yet considered
 // "visible" for compositing purposes (not focused, covered by another
 // window, etc.) — Chromium can defer requestAnimationFrame indefinitely for
