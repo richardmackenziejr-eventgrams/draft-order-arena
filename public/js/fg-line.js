@@ -5,6 +5,11 @@
 //     defensive line, and two "original" blue players (the blocker model)
 //     standing behind the offensive line toward its outside ends.
 //
+//   * A holder (the original blue model) kneeling beside the ball's spot, frozen at the
+//     start of the Football Hike clip until the ball is snapped to him; he catches it,
+//     sets it down on its spot, and holds that final pose through the kick. The ball sits
+//     on the ground at the line of scrimmage until the hike, then flies back to him.
+//
 // On the hike the linemen stand up and push; each red edge player rises and
 // charges the outside end of the line while the blue player behind it runs up
 // to meet him, and the two lock up in a block. They stay engaged until ONE of
@@ -47,6 +52,15 @@ const WAYPOINT_AHEAD = 3.5;       // ...to this far past the LOS before cutting 
 const END_SHORT = 0.55;           // stops this far from the ball
 
 const FADE = 0.2; // seconds for a weight to swing between clips
+
+// Holder / snap. The Mixamo Football Hike clip is ~3.3s of mocap; played at HIKE_SPEED
+// it's a believable ~1.4s from snap to the ball being set down.
+const HIKE_SPEED = 2.4;
+const HIKE_CATCH_CLIP_T = 1.35;   // clip-seconds at which his hands close on the ball
+const HIKE_PLACE_CLIP_T = 2.1;    // clip-seconds by which the ball is down
+const SNAP_AT = 0.05;             // seconds after the hike the ball leaves the center
+const BALL_PRE_Y = 0.115;         // ball lying on the ground at the LOS
+export const BALL_REST_Y = 0.19;  // ball set down on its spot (upright, a hair off the turf under the holder's fingers)
 
 // Moment (seconds after the hike) the breaking red gets free. Deliberately a bit
 // before the block deadline: the beaten blocker goes down, the red runs a wide arc,
@@ -98,6 +112,10 @@ export function createFieldGoalLine(scene, { blockTimeSec = 6 } = {}) {
   let rushOutcome = null;    // null | 'blocked' | 'late'
   let breakCancelled = false; // kick struck before the break: the block just holds
   let pairs = {};            // per side: start/engagement points and the breaker's route
+  let holderChar = null;
+  let holderEnd = { x: 0, z: 0 }; // where his left hand ends up when he's at the origin facing -Z (used to put his hand over the ball's spot)
+  let ballObj = null;        // the game's football, moved here until the kick is struck
+  let ballControlled = true;
   const BREAK_AT = breakFreeAt(blockTimeSec);
   const ARRIVE_AT = arriveAt(blockTimeSec);
 
@@ -106,13 +124,14 @@ export function createFieldGoalLine(scene, { blockTimeSec = 6 } = {}) {
     loader('/models/defender.glb'), loader('/models/blocker.glb'),
     loader('/models/football-stance.glb'), loader('/models/push.glb'), loader('/models/running.glb'),
     loader('/models/flex.glb'), loader('/models/sad-idle.glb'),
-    loader('/models/breathing-idle.glb'), loader('/models/falling-down.glb'),
-  ]).then(([ol, dl, red, blue, stance, push, run, flex, sad, idle, fall]) => {
-    if (![ol, dl, red, blue, stance, push, run, flex, sad, idle, fall].every(Boolean)) return; // a missing piece just means no line -- the kick still plays
+    loader('/models/breathing-idle.glb'), loader('/models/falling-down.glb'), loader('/models/football-hike.glb'),
+  ]).then(([ol, dl, red, blue, stance, push, run, flex, sad, idle, fall, hike]) => {
+    if (![ol, dl, red, blue, stance, push, run, flex, sad, idle, fall, hike].every(Boolean)) return; // a missing piece just means no line -- the kick still plays
     assets = {
       ol: ol.scene, dl: dl.scene, red: red.scene, blue: blue.scene,
       stance: stance.animations[0], push: push.animations[0], run: run.animations[0],
       flex: flex.animations[0], sad: sad.animations[0], idle: idle.animations[0], fall: fall.animations[0],
+      hike: hike.animations[0],
     };
     assets.stanceOffset = hipsOffsetOf(assets.stance);
     assets.fallOffset = hipsOffsetOf(assets.fall);
@@ -170,8 +189,38 @@ export function createFieldGoalLine(scene, { blockTimeSec = 6 } = {}) {
       Object.assign(blue, { role: 'blue', side: s });
       chars.push(red, blue);
     });
+    holderChar = makeChar('blue', assets.blue, ['hike'], { hike: THREE.LoopOnce });
+    Object.assign(holderChar, { role: 'holder' });
+    holderChar.actions.hike.paused = true; // its time is set by hand: frozen at 0 until the hike, then driven by hikeT
+    holderChar.holder.rotation.y = Math.PI; // faces -Z, toward the line, to take the snap
+    holderChar.yaw = Math.PI;
+    chars.push(holderChar);
+    measureHolder();
     layout();
     applyFrame(0, null);
+  }
+
+  // With the holder at the origin in his final pose, where is his left hand (the one
+  // that ends up over the ball)? layout() then slides him so that point sits on the ball's spot.
+  function measureHolder() {
+    const c = holderChar;
+    c.holder.position.set(0, 0, 0);
+    c.holder.rotation.y = Math.PI;
+    c.actions.hike.enabled = true;
+    c.actions.hike.setEffectiveWeight(1);
+    c.actions.hike.time = assets.hike.duration;
+    c.mixer.update(0);
+    c.holder.updateMatrixWorld(true);
+    const lh = boneOf(c, 'mixamorigLeftHand');
+    const v = new THREE.Vector3();
+    if (lh) lh.getWorldPosition(v);
+    holderEnd = { x: v.x, z: v.z };
+  }
+
+  function boneOf(c, name) {
+    if (!c.boneCache) c.boneCache = {};
+    if (!(name in c.boneCache)) { let b = null; c.model.traverse((o) => { if (o.name === name) b = o; }); c.boneCache[name] = b; }
+    return c.boneCache[name];
   }
 
   function layout() {
@@ -183,6 +232,7 @@ export function createFieldGoalLine(scene, { blockTimeSec = 6 } = {}) {
         c.holder.position.set(x, 0, c.role === 'ol' ? losZ + LINE_HALF_GAP : losZ - LINE_HALF_GAP);
       }
     });
+    if (holderChar) holderChar.holder.position.set(spot.x - holderEnd.x, 0, spot.z - holderEnd.z);
     pairs = {};
     [1, -1].forEach((s) => {
       const redStart = new THREE.Vector3(spot.x + s * RED_START_X, 0, losZ - LINE_HALF_GAP);
@@ -234,6 +284,7 @@ export function createFieldGoalLine(scene, { blockTimeSec = 6 } = {}) {
   // stance's crouch and the fall's drop, applied as offsets from each clip's first frame.
   function finishChar(c) {
     if (!c.hips) return;
+    if (c.role === 'holder') return; // his kneel IS the hips height -- keep the clip's own hips motion
     c.hips.position.copy(c.hipsBind);
     const add = (off, time, w) => {
       if (!off || !(w > 0)) return;
@@ -318,15 +369,54 @@ export function createFieldGoalLine(scene, { blockTimeSec = 6 } = {}) {
     stepWeights(c, dt, fade);
   }
 
+  function updateHolder(c, dt, hikeT) {
+    const dur = assets.hike.duration;
+    c.actions.hike.time = hikeT == null ? 0 : Math.min(dur, Math.max(0, hikeT) * HIKE_SPEED); // frozen at the start until the hike, frozen at the end after it
+    setTarget(c, 'hike');
+    stepWeights(c, dt, 0.001);
+  }
+
+  const bz = (a, b, c2, t) => { const u = 1 - t; return new THREE.Vector3(u * u * a.x + 2 * u * t * b.x + t * t * c2.x, u * u * a.y + 2 * u * t * b.y + t * t * c2.y, u * u * a.z + 2 * u * t * b.z + t * t * c2.z); };
+  const _hl = new THREE.Vector3(), _hr = new THREE.Vector3();
+  // The ball: on the ground at the LOS until the hike, flies back to the holder's hands, rides
+  // them down, and ends upright on its spot.
+  function driveBall(hikeT) {
+    if (!ballObj || !ballControlled || !holderChar) return;
+    const losZ = spot.z - LOS_YARDS_AHEAD;
+    const pre = new THREE.Vector3(spot.x, BALL_PRE_Y, losZ + 0.02);
+    const rest = new THREE.Vector3(spot.x, BALL_REST_Y, spot.z);
+    const catchT = HIKE_CATCH_CLIP_T / HIKE_SPEED;
+    const placeT = HIKE_PLACE_CLIP_T / HIKE_SPEED;
+    if (hikeT == null || hikeT < SNAP_AT) { ballObj.position.copy(pre); ballObj.rotation.set(0, 0, 0); return; }
+    if (hikeT >= placeT) { ballObj.position.copy(rest); ballObj.rotation.set(Math.PI / 2, 0, 0); return; }
+    holderChar.holder.updateMatrixWorld(true);
+    const lh = boneOf(holderChar, 'mixamorigLeftHand'), rh = boneOf(holderChar, 'mixamorigRightHand');
+    if (lh) lh.getWorldPosition(_hl);
+    if (rh) rh.getWorldPosition(_hr);
+    const hands = new THREE.Vector3().addVectors(_hl, _hr).multiplyScalar(0.5);
+    if (hikeT < catchT) {
+      const f = (hikeT - SNAP_AT) / (catchT - SNAP_AT); // the snap back
+      const mid = new THREE.Vector3().addVectors(pre, hands).multiplyScalar(0.5); mid.y += 0.7;
+      ballObj.position.copy(bz(pre, mid, hands, f));
+      ballObj.rotation.set(0, 0, 0);
+    } else {
+      const g = smooth((hikeT - catchT) / (placeT - catchT)); // carried down onto its spot
+      ballObj.position.lerpVectors(hands, rest, g);
+      ballObj.rotation.set((Math.PI / 2) * g, 0, 0);
+    }
+  }
+
   function applyFrame(dt, hikeT) {
     if (!assets) return;
     for (const c of chars) {
       if (c.role === 'red') updateRed(c, dt, hikeT);
       else if (c.role === 'blue') updateBlue(c, dt, hikeT);
+      else if (c.role === 'holder') updateHolder(c, dt, hikeT);
       else updateLineman(c, dt, hikeT);
       c.mixer.update(dt);
       finishChar(c);
     }
+    driveBall(hikeT);
   }
 
   return {
@@ -336,10 +426,18 @@ export function createFieldGoalLine(scene, { blockTimeSec = 6 } = {}) {
       breakerSide = side;
       layout();
     },
+    // The football the line moves until the kick is struck (the game owns it afterwards).
+    setBall(b) { ballObj = b; },
+    releaseBall() { ballControlled = false; },
+    // Put the ball where it belongs for this moment of the play right now (e.g. after the game reset it).
+    syncBall(hikeT) { driveBall(hikeT); },
+    // Seconds after the hike by which the holder has the ball set down -- the kicker waits for this.
+    get holderDoneAt() { return assets ? assets.hike.duration / HIKE_SPEED : 0; },
     // Back to the pre-snap look: everyone set, nobody committed to a break.
     reset() {
       rushOutcome = null;
       breakCancelled = false;
+      ballControlled = true;
       if (assets) { layout(); applyFrame(0, null); }
     },
     // hikeT = seconds since the hike (null before it). dt = frame time in seconds.

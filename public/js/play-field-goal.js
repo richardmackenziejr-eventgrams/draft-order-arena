@@ -11,7 +11,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createSidelineCrew } from '/js/sideline-crew.js';
-import { createFieldGoalLine, LOS_YARDS_AHEAD } from '/js/fg-line.js?v=2';
+import { createFieldGoalLine, LOS_YARDS_AHEAD, BALL_REST_Y } from '/js/fg-line.js?v=3';
 import { createStadium, GOALPOST_SETBACK, ENDZONE_DEPTH, CROSSBAR_Y, UPRIGHT_TOP_Y, UPRIGHT_HALF_SPAN } from '/js/stadium.js';
 
 const instanceId = qs('instance');
@@ -490,13 +490,13 @@ const referees = [-1, 1].map((side) => {
 
 // ---- Ball on tee -----------------------------------------------------------
 // z is set by updateDistance() below.
-const BALL_REST_Y = 0.24; // resting height on the tee — reused by resetPose() after a kick
 const tee = new THREE.Mesh(
   new THREE.ConeGeometry(0.06, 0.16, 10),
   new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 })
 );
 tee.position.y = 0.08;
 tee.castShadow = true;
+tee.visible = false; // no tee any more -- a holder sets the ball down (see fg-line.js)
 scene.add(tee);
 
 const ball = new THREE.Mesh(
@@ -508,6 +508,7 @@ ball.rotation.x = Math.PI / 2;
 ball.position.y = BALL_REST_Y;
 ball.castShadow = true;
 scene.add(ball);
+line.setBall(ball); // the line moves it (on the ground at the LOS, snapped back to the holder) until the kick is struck
 
 // (Stadium -- field, stands, goalposts -- comes from the shared stadium.js, created in the Field section above.)
 
@@ -1089,6 +1090,7 @@ function renderKick(gi, { trustLocalPowerSnap = false } = {}) {
   }
 
   resetPose(); // clears whatever the previous kick's flight animation left behind
+  line.syncBall(hikeSeconds()); // resetPose put the ball on its spot; before the hike it belongs on the ground at the LOS
   rebuildPowerMeter(k.distance);
   rebuildDirectionMeter();
   rebuildWindIndicator();
@@ -1141,6 +1143,7 @@ function renderKick(gi, { trustLocalPowerSnap = false } = {}) {
 // until /field-goal/next is called).
 function showFrozenResult(k) {
   resetPose();
+  line.releaseBall(); // the kick has been struck: the ball is placed by hand below, not by the line
   rebuildWindIndicator();
   const attempt = k.attempt;
 
@@ -1535,7 +1538,7 @@ function resetPose() {
     anim.mixer.setTime(0);
     anim.hips.position.copy(anim.hipsBindLocalPos);
   }
-  tee.visible = true;
+  tee.visible = false;
   ball.visible = true;
   setMetersVisible(true); // renderKick() then sets the marker/arrow to whichever phase is live
   ball.position.x = 0;
@@ -1565,6 +1568,10 @@ const END_CAM_FOV = 62;
 async function performKick(outcome, distanceYards) {
   controls.enabled = false; // hands-off for the whole sequence; the next renderKick()'s resetPose() gives it back
 
+  // The kicker can't swing at a ball that isn't down yet: if both clicks beat the hike
+  // animation (snap -> catch -> set), hold the run-up until the holder has it on its spot.
+  while (hikeClientT0 != null && hikeSeconds() < line.holderDoneAt) await wait(25);
+
   const ballStartZ = ball.position.z;
   const startPos = kicker.position.clone();
   const plantPos = { x: -0.22, z: ballStartZ + 0.1 };
@@ -1580,6 +1587,7 @@ async function performKick(outcome, distanceYards) {
   // enough down the field to be worth following there.
   function fireContact() {
     tee.visible = false;
+    line.releaseBall(); // struck: from here the ball belongs to the flight/deflection tweens below
     setMetersVisible(false); // the kick is made -- the meters have done their job and would just hang in the end-zone shot
 
     if (outcome === 'blocked') {
