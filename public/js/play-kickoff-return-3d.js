@@ -1462,80 +1462,92 @@ function buildEndzoneStands(lengthYards) {
 // frame regardless, so whichever model finishes loading second just
 // naturally shows up on the next frame with no extra handling needed
 // here.
-new GLTFLoader().load('/models/stadium-stand.glb', (gltf) => {
+// Every piece of scenery (stands, crowd, coaches, sideline players, benches...) loads on its own,
+// independent of the character models -- but the player shouldn't be able to start a return while
+// any of it is still streaming in and would pop into view mid-play. Each load reports into
+// sceneryLoads (it resolves whether the model arrived or failed -- the scenery is decoration), and
+// init() waits on all of them, plus a few rendered frames, before the Start Return button unlocks.
+const sceneryLoads = [];
+function loadScenery(url, label, onLoad) {
+  sceneryLoads.push(new Promise((resolve) => {
+    new GLTFLoader().load(url, (gltf) => { try { onLoad(gltf); } finally { resolve(); } }, undefined, (err) => { console.error(label, err); resolve(); });
+  }));
+}
+
+loadScenery('/models/stadium-stand.glb', 'stadium stand model load failed', (gltf) => {
   standStraightGltf = gltf;
   buildEndzoneStands(fieldYards);
-}, undefined, (err) => console.error('stadium stand model load failed', err));
-new GLTFLoader().load('/models/stadium-corner.glb', (gltf) => {
+});
+loadScenery('/models/stadium-corner.glb', 'stadium corner model load failed', (gltf) => {
   standCornerGltf = gltf;
   buildEndzoneStands(fieldYards);
-}, undefined, (err) => console.error('stadium corner model load failed', err));
+});
 
 for (let ci = 0; ci < CHEERLEADER_COUNT; ci++) {
   const idx = ci;
-  new GLTFLoader().load(`/models/cheerleader-${idx + 1}.glb`, (gltf) => {
+  loadScenery(`/models/cheerleader-${idx + 1}.glb`, `cheerleader ${idx + 1} model load failed`, (gltf) => {
     cheerleaderTemplates[idx] = gltf.scene;
     buildCheerleaders(fieldYards);
-  }, undefined, (err) => console.error(`cheerleader ${idx + 1} model load failed`, err));
+  });
 }
-new GLTFLoader().load('/models/cheer-cheering.glb', (gltf) => {
+loadScenery('/models/cheer-cheering.glb', 'cheer animation load failed', (gltf) => {
   cheerCheeringClip = gltf.animations[0];
   buildCheerleaders(fieldYards);
-}, undefined, (err) => console.error('cheer animation load failed', err));
+});
 
-new GLTFLoader().load('/models/referee.glb', (gltf) => {
+loadScenery('/models/referee.glb', 'referee model load failed', (gltf) => {
   refereeTemplate = gltf.scene;
   buildReferees(fieldYards);
   buildRunningReferees(fieldYards);
-}, undefined, (err) => console.error('referee model load failed', err));
-
-new GLTFLoader().load('/models/cameraman.glb', (gltf) => {
-  cameramanTemplate = gltf.scene;
-  buildCameraman(fieldYards);
-}, undefined, (err) => console.error('cameraman model load failed', err));
-
-new GLTFLoader().load('/models/standing-cameraman.glb', (gltf) => {
-  standingCameramanTemplate = gltf.scene;
-  buildStandingCameramen(fieldYards);
-}, undefined, (err) => console.error('standing cameraman model load failed', err));
-
-['blue', 'red'].forEach((key) => {
-  new GLTFLoader().load(`/models/coach-${key}.glb`, (gltf) => {
-    coachTemplates[key] = { scene: gltf.scene, clip: gltf.animations[0] };
-    buildCoaches(fieldYards);
-  }, undefined, (err) => console.error(`${key} coach model load failed`, err));
 });
 
-new GLTFLoader().load('/models/sideline-bored.glb', (gltf) => {
+loadScenery('/models/cameraman.glb', 'cameraman model load failed', (gltf) => {
+  cameramanTemplate = gltf.scene;
+  buildCameraman(fieldYards);
+});
+
+loadScenery('/models/standing-cameraman.glb', 'standing cameraman model load failed', (gltf) => {
+  standingCameramanTemplate = gltf.scene;
+  buildStandingCameramen(fieldYards);
+});
+
+['blue', 'red'].forEach((key) => {
+  loadScenery(`/models/coach-${key}.glb`, `${key} coach model load failed`, (gltf) => {
+    coachTemplates[key] = { scene: gltf.scene, clip: gltf.animations[0] };
+    buildCoaches(fieldYards);
+  });
+});
+
+loadScenery('/models/sideline-bored.glb', 'sideline bored animation load failed', (gltf) => {
   sidelineBoredClip = gltf.animations[0];
   buildSidelinePlayers(fieldYards);
-}, undefined, (err) => console.error('sideline bored animation load failed', err));
-new GLTFLoader().load('/models/sideline-idle.glb', (gltf) => {
+});
+loadScenery('/models/sideline-idle.glb', 'sideline idle animation load failed', (gltf) => {
   sidelineIdleClip = gltf.animations[0];
   buildSidelinePlayers(fieldYards);
-}, undefined, (err) => console.error('sideline idle animation load failed', err));
-new GLTFLoader().load('/models/sideline-looking-around.glb', (gltf) => {
+});
+loadScenery('/models/sideline-looking-around.glb', 'sideline looking-around animation load failed', (gltf) => {
   sidelineLookingAroundClip = gltf.animations[0];
   buildSidelinePlayers(fieldYards);
-}, undefined, (err) => console.error('sideline looking-around animation load failed', err));
+});
 
-new GLTFLoader().load('/models/bench.glb', (gltf) => {
+loadScenery('/models/bench.glb', 'bench model load failed', (gltf) => {
   benchTemplate = gltf.scene;
   buildBenches(fieldYards);
-}, undefined, (err) => console.error('bench model load failed', err));
+});
 
-new GLTFLoader().load('/models/sitting-talking.glb', (gltf) => {
+loadScenery('/models/sitting-talking.glb', 'sitting-talking animation load failed', (gltf) => {
   sittingTalkingClip = gltf.animations[0];
   buildBenches(fieldYards);
-}, undefined, (err) => console.error('sitting-talking animation load failed', err));
-new GLTFLoader().load('/models/sitting-angry.glb', (gltf) => {
+});
+loadScenery('/models/sitting-angry.glb', 'sitting-angry animation load failed', (gltf) => {
   sittingAngryClip = gltf.animations[0];
   buildBenches(fieldYards);
-}, undefined, (err) => console.error('sitting-angry animation load failed', err));
-new GLTFLoader().load('/models/sitting-rubbing-arm.glb', (gltf) => {
+});
+loadScenery('/models/sitting-rubbing-arm.glb', 'sitting-rubbing-arm animation load failed', (gltf) => {
   sittingRubbingArmClip = gltf.animations[0];
   buildBenches(fieldYards);
-}, undefined, (err) => console.error('sitting-rubbing-arm animation load failed', err));
+});
 
 // ---- Runner -------------------------------------------------------------
 const RUNNER_GROUP = new THREE.Group();
@@ -3908,12 +3920,31 @@ async function init() {
   // running) while this awaits, so there's no dead/frozen moment -- just
   // a beat before the button appears, instead of a button that can start
   // a return still missing its defenders/blockers.
-  await charactersLoaded;
+  // The Start button shows up right away but disabled ("Loading…") so it's clear something is
+  // still on its way; it unlocks once the characters AND all the scenery are in and the GPU has had
+  // a few frames to upload them. (If something stalls for good it unlocks after 25s anyway.)
+  const startBtn = document.getElementById('start-return-btn');
+  const startLabel = startBtn.textContent;
+  if (gi.currentReturn.index === 0) {
+    startBtn.textContent = 'Loading…';
+    startBtn.disabled = true;
+    startBtn.style.display = 'inline-block';
+  }
+  const nextFrames = (n) => new Promise((resolve) => {
+    const step = () => (--n <= 0 ? resolve() : requestAnimationFrame(step));
+    requestAnimationFrame(step);
+  });
+  await Promise.race([
+    Promise.all([charactersLoaded, ...sceneryLoads]).then(() => nextFrames(3)),
+    new Promise((resolve) => setTimeout(resolve, 25000)),
+  ]);
+  await charactersLoaded; // game-critical: never start without the players, even if the 25s fallback fired
 
   if (gi.currentReturn.index === 0) {
     currentReturnConfig = gi.currentReturn;
     document.getElementById('return-info').textContent = `Return 1 of ${returnsPerPlayer}`;
-    document.getElementById('start-return-btn').style.display = 'inline-block';
+    startBtn.textContent = startLabel;
+    startBtn.disabled = false;
     document.getElementById('start-return-btn').addEventListener('click', () => {
       document.getElementById('start-return-btn').style.display = 'none';
       startReturn(gi.currentReturn);
