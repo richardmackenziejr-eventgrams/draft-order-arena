@@ -18,7 +18,7 @@ import { createStadium } from '/js/stadium.js?v=2';
 import { createSidelineCrew } from '/js/sideline-crew.js?v=3';
 import { setupFullscreenToggle } from '/js/fullscreen.js?v=1';
 import * as R from '/js/drill-rules.js?v=3';
-import { loadDrillAssets, Actor } from '/js/drill-actors.js?v=3';
+import { loadDrillAssets, Actor, QB_THROW_CLIP } from '/js/drill-actors.js?v=5';
 
 let instanceId = qs('instance');
 const leagueId = qs('league');
@@ -146,7 +146,7 @@ function updateHud() {
 }
 
 // ---- building the teams ---------------------------------------------------------------------------------
-const ALL_CLIPS = ['idle', 'run', 'strafeL', 'strafeR', 'catch', 'fall', 'victory', 'flex', 'sad', 'throw'];
+const ALL_CLIPS = ['idle', 'run', 'strafeL', 'strafeR', 'catch', 'fall', 'victory', 'flex', 'sad', 'throw', 'crouchSprint'];
 const LINE_CLIPS = ['stance', 'push', 'fall', 'flex', 'idle'];
 
 function buildTeams(assets) {
@@ -201,6 +201,16 @@ function routeAt(rec, t) {
   return { x: clamp(b.x + dx * extra, -24, 24), z: Math.max(GOAL_Z + 2, b.z + dz * extra), dx, dz, moving: true };
 }
 
+// A receiver waits in the crouch (the first frame of the crouch-to-sprint clip, held), then bursts out of it on the snap.
+function crouchReceiver(r) {
+  if (!r.actions.crouchSprint) return;
+  r.play('crouchSprint', { fade: 0.05, timeScale: 0 });
+  r.snapNext = true;
+}
+function burstReceiver(r) {
+  if (r.actions.crouchSprint && r.override === 'crouchSprint') r.play('crouchSprint', { fade: 0.05, timeScale: 1 });
+}
+
 // Everybody back to the huddle spot for the next snap.
 function lineUp() {
   const z0 = -S.drive.losYard;
@@ -218,7 +228,7 @@ function lineUp() {
   A.dl.forEach((a, i) => { a.place(FORMATION.dl[i], z0 - 0.45, DEF); a.override = 'stance'; a.stanceT = a.assets.hipsOffset.stance.duration; a.snapNext = true; });
   A.qb.place(0, z0 + QB_BACK, OFF); A.qb.clearOverride(); A.qb.throwU = -1;
   A.rb.place(1.9, z0 + QB_BACK, OFF); A.rb.clearOverride();
-  A.recs.forEach((r, i) => { r.place(R.RECEIVER_SPOTS[i].x, z0 + R.RECEIVER_SPOTS[i].z, OFF); r.clearOverride(); });
+  A.recs.forEach((r, i) => { r.place(R.RECEIVER_SPOTS[i].x, z0 + R.RECEIVER_SPOTS[i].z, OFF); r.clearOverride(); crouchReceiver(r); });
   setRoutes();
   A.lb.place(0.6, z0 - 4.2, DEF); A.lb.clearOverride();
   A.dbs.forEach((a, i) => {
@@ -334,6 +344,7 @@ function doSnap() {
   S.t = 0;
   S.snapBall = { from: new THREE.Vector3(0, 0.12, S.z0), done: false };
   S.ballMode = 'snap';
+  A.recs.forEach(burstReceiver);
 }
 
 function doThrow(i) {
@@ -343,7 +354,8 @@ function doThrow(i) {
   S.throwing = { rec, t: 0, released: false };
   A.qb.speed = 0; S.qbVel.set(0, 0, 0);
   A.qb.throwU = 0;
-  if (A.qb.actions.throw) A.qb.play('throw', { fade: 0.08, timeScale: 1.4 });
+  // the real throwing motion, started only now (see QB_THROW_CLIP): the QB stays in his normal ready/run stance until a number is pressed
+  if (A.qb.actions.throw) A.qb.play('throw', { fade: 0.1, timeScale: QB_THROW_CLIP.speed, startTime: QB_THROW_CLIP.start });
 }
 
 function doSpike() {
@@ -391,6 +403,8 @@ function updateLinemen(dt) {
 // ---- per-frame: the receivers, the QB, the defense ---------------------------------------------------------------------------------
 function updateReceivers(dt) {
   A.recs.forEach((rec) => {
+    // out of the crouch into the normal run once the burst clip has played
+    if (rec.override === 'crouchSprint' && S.phase !== 'presnap' && rec.actions.crouchSprint.time >= rec.assets.clips.crouchSprint.duration - 0.02) rec.clearOverride();
     if (S.carrier === rec) return;
     if (rec.caught) return;
     const p = routeAt(rec, S.t);
@@ -412,9 +426,13 @@ function updateQb(dt) {
     qb.speed = 0; qb.back = false; qb.strafe = 0;
     qb.faceXZ(S.throwing.rec.pos.x, S.throwing.rec.pos.z, dt, 20);
     S.throwing.t += dt;
+    // with the real clip, the ball leaves at the clip's own release frame; without it, on the old fixed timing
+    const clip = !!qb.actions.throw;
+    const releaseAt = clip ? (QB_THROW_CLIP.release - QB_THROW_CLIP.start) / QB_THROW_CLIP.speed : RELEASE_AT;
+    const doneAt = clip ? (QB_THROW_CLIP.end - QB_THROW_CLIP.start) / QB_THROW_CLIP.speed : WINDUP + 0.25;
     qb.throwU = clamp(S.throwing.t / WINDUP, 0, 1);
-    if (!S.throwing.released && S.throwing.t >= RELEASE_AT) releaseBall();
-    if (S.throwing.t >= WINDUP + 0.25) { qb.throwU = -1; qb.clearOverride(); S.throwing = null; }
+    if (!S.throwing.released && S.throwing.t >= releaseAt) releaseBall();
+    if (S.throwing.t >= doneAt) { qb.throwU = -1; qb.clearOverride(); S.throwing = null; }
     return;
   }
   if (S.carrier === qb) return; // running with it: handled by updateCarrier

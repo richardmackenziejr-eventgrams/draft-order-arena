@@ -25,8 +25,16 @@ const CLIP_URLS = {
 // Clips that lower the body (a crouch, a diving catch, a fall): their hips motion is applied as an
 // offset from the clip's first frame so the player sinks without sliding off his mark. Every other
 // clip has its hips pinned (movement is driven by code, not baked root motion).
-const HIPS_OFFSET_CLIPS = ['stance', 'fall', 'catch'];
-const OPTIONAL_CLIPS = { throw: '/models/qb-throw.glb' }; // a real Mixamo "Quarterback Pass", if one has been added
+const HIPS_OFFSET_CLIPS = ['stance', 'fall', 'catch', 'throw', 'crouchSprint'];
+
+// The Mixamo "Quarterback Pass" clip (qb-throw.glb) is 7.7s long: he stands ready, drops back, sets with the ball
+// at his chest, steps into the throw, releases, and follows through. The QB's drop-back is the player's to drive,
+// so the game plays ONLY the throw itself -- from the set position (start) to the end of the follow-through (end),
+// sped up so the release (release) comes about a third of a second after the number is pressed. All three are
+// seconds into the clip.
+export const QB_THROW_CLIP = { start: 4.4, release: 5.5, end: 6.2, speed: 3.2 };
+// a real Mixamo "Quarterback Pass" and "Crouched To Sprinting" (the receivers' start off the line), if they've been added
+const OPTIONAL_CLIPS = { throw: '/models/qb-throw.glb', crouchSprint: '/models/crouch-sprint.glb' };
 
 const loadGltf = (url) => new Promise((resolve) => {
   new GLTFLoader().load(url, resolve, undefined, (err) => { console.error(`${url} failed to load`, err); resolve(null); });
@@ -55,7 +63,15 @@ export async function loadDrillAssets() {
   HIPS_OFFSET_CLIPS.forEach((k) => {
     const clip = clips[k];
     const track = clip && clip.tracks.find((t) => t.name === 'mixamorigHips.position');
-    if (track) { const interp = track.createInterpolant(); hipsOffset[k] = { interp, first: Array.from(interp.evaluate(0)), duration: clip.duration }; }
+    if (track) {
+      const interp = track.createInterpolant();
+      // The throw is measured from where the played segment begins, and only its up/down motion is used: the big
+      // sideways/forward lunge baked into the clip would otherwise slide him off his mark.
+      // The crouch-to-sprint starts low and ends upright, so it is measured from its LAST frame (the sprint, which
+      // matches the pinned run) and the receiver sinks to the crouch below that.
+      const from = k === 'throw' ? QB_THROW_CLIP.start : k === 'crouchSprint' ? clip.duration : 0;
+      hipsOffset[k] = { interp, first: Array.from(interp.evaluate(from)), duration: clip.duration, zOnly: k === 'throw' || k === 'crouchSprint' };
+    }
   });
   return { tpl, clips, hipsOffset };
 }
@@ -99,7 +115,7 @@ function makeHeldBall(model, group) {
   return mesh;
 }
 
-const ONE_SHOTS = new Set(['catch', 'fall', 'victory', 'flex', 'throw']);
+const ONE_SHOTS = new Set(['catch', 'fall', 'victory', 'flex', 'throw', 'crouchSprint']);
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const lerpAngle = (a, b, k) => { const d = ((b - a + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI; return a + d * k; };
 
@@ -180,13 +196,13 @@ export class Actor {
   turnTo(yaw, dt, rate = 12) { this.yaw = lerpAngle(this.yaw, yaw, 1 - Math.exp(-rate * dt)); this.group.rotation.y = this.yaw; }
   faceXZ(x, z, dt, rate) { this.turnTo(Math.atan2(x - this.pos.x, z - this.pos.z), dt, rate); }
 
-  play(name, { fade = 0.12, timeScale = 1, restart = true } = {}) {
+  play(name, { fade = 0.12, timeScale = 1, restart = true, startTime = 0 } = {}) {
     const a = this.actions[name];
     if (!a) return;
     this.override = name;
     this.overrideFade = fade;
     a.timeScale = timeScale;
-    if (restart) a.reset();
+    if (restart) { a.reset(); if (startTime) a.time = startTime; }
   }
   clearOverride() { this.override = null; }
 
@@ -228,8 +244,10 @@ export class Actor {
         if (!off || !(w > 0.001)) continue;
         const t = k === 'stance' ? this.stanceT : this.actions[k].time;
         const v = off.interp.evaluate(clamp(t, 0, off.duration));
-        this.hips.position.x += (v[0] - off.first[0]) * w;
-        this.hips.position.y += (v[1] - off.first[1]) * w;
+        if (!off.zOnly) {
+          this.hips.position.x += (v[0] - off.first[0]) * w;
+          this.hips.position.y += (v[1] - off.first[1]) * w;
+        }
         this.hips.position.z += (v[2] - off.first[2]) * w;
       }
     }
