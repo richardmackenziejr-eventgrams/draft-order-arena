@@ -5,6 +5,7 @@ const { checkAndFinalizeCompetition } = require('../lib/competition');
 const trivia = require('../lib/gameEngine/trivia');
 const fieldGoal = require('../lib/gameEngine/fieldGoal');
 const kickoffReturn = require('../lib/gameEngine/kickoffReturn');
+const twoMinuteDrill = require('../lib/gameEngine/twoMinuteDrill');
 
 // Shared by any async game with a solo test-drive mode (see /leagues/:id/test-*
 // in routes/leagues.js): test instances have no real competition/league behind
@@ -326,6 +327,39 @@ module.exports = function gamesRouter() {
     res.json({ gameInstance: viewForMember(gi, memberId) });
   });
 
+  // Two-Minute Drill — one real-time drive per player, simulated entirely in the
+  // browser. The only server call is this one: report how the drive ended, get it
+  // scored (points come from the outcome, never from a reported number), and
+  // finish the player. Idempotent — a retried request keeps the first result.
+  router.post('/game-instances/:id/two-minute-drill/submit', async (req, res) => {
+    const { memberId, report } = req.body || {};
+    if (!memberId) return res.status(400).json({ error: 'memberId is required.' });
+
+    const db = await store.load();
+    const gi = db.gameInstances[req.params.id];
+    if (!gi || gi.gameType !== 'twoMinuteDrill') return res.status(404).json({ error: 'Two-minute drill game not found.' });
+    if (gi.status === 'completed') return res.status(400).json({ error: 'This two-minute drill contest is already finished.' });
+    const membership = checkMembership(db, gi, memberId);
+    if (!membership.ok) return res.status(403).json({ error: membership.error });
+
+    const outcome = twoMinuteDrill.submitDrive(gi.state, memberId, report);
+    if (outcome && outcome.error) return res.status(400).json({ error: outcome.error });
+
+    if (gi.isTest) {
+      gi.results = twoMinuteDrill.computeResults(gi.state);
+      gi.status = 'completed';
+    } else {
+      const memberIds = membership.league.members.map((m) => m.id);
+      if (twoMinuteDrill.isComplete(gi.state, memberIds)) {
+        gi.results = twoMinuteDrill.computeResults(gi.state);
+        gi.status = 'completed';
+        checkAndFinalizeCompetition(db, gi.competitionId);
+      }
+    }
+    await store.save(db);
+    res.json({ outcome, gameInstance: viewForMember(gi, memberId) });
+  });
+
   return router;
 };
 
@@ -370,6 +404,23 @@ function viewForMember(gi, memberId) {
       // The kick the player should see right now (power/direction/result
       // phase), or null once they've taken all their kicks.
       currentKick: player ? mod.currentKickView(gi.state, player) : null,
+      completedBy,
+      results: gi.status === 'completed' ? gi.results : [],
+    };
+  }
+
+  if (gi.gameType === 'twoMinuteDrill') {
+    const players = gi.state.players || {};
+    const player = memberId ? players[memberId] : null;
+    const completedBy = Object.entries(players).filter(([, p]) => p.completed).map(([mid]) => mid);
+    return {
+      ...base,
+      hasCompleted: player ? player.completed : false,
+      yourScore: player ? player.totalPoints : null,
+      yourYards: player ? player.totalYards : null,
+      // The drive's setup (shared seed, field position, clock, timeouts), plus the
+      // resolved result once submitted, or null once this player has finished.
+      currentDrive: player ? mod.currentDriveView(gi.state, player) : mod.currentDriveView(gi.state, { completed: false, attempt: null }),
       completedBy,
       results: gi.status === 'completed' ? gi.results : [],
     };

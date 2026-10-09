@@ -81,11 +81,15 @@ function gameStatusLine(gi) {
     const n = (gi.completedBy || []).length;
     return gi.status === 'completed' ? 'All returns in' : `${n} finished so far`;
   }
+  if (gi.gameType === 'twoMinuteDrill') {
+    const n = (gi.completedBy || []).length;
+    return gi.status === 'completed' ? 'All drives in' : `${n} finished so far`;
+  }
   return gi.status;
 }
 
 function gameLink(gi) {
-  const pageByType = { trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html', kickoffReturn: 'play-kickoff-return-3d.html' };
+  const pageByType = { trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html', kickoffReturn: 'play-kickoff-return-3d.html', twoMinuteDrill: 'play-two-minute-drill.html' };
   const page = pageByType[gi.gameType];
   return `/${page}?instance=${gi.id}&league=${leagueId}`;
 }

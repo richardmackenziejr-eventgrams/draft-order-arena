@@ -191,6 +191,31 @@ router.post('/leagues/:id/test-kickoff-return', async (req, res) => {
   res.status(201).json({ instanceId: giId });
 });
 
+// Same idea, for Two-Minute Drill. The game is still a prototype (hidden from the
+// public catalog), so this is how it gets opened: the game page's ?preview=1 link calls it.
+router.post('/leagues/:id/test-two-minute-drill', async (req, res) => {
+  const db = await store.load();
+  const league = db.leagues[req.params.id];
+  if (!league) return res.status(404).json({ error: 'League not found.' });
+
+  const mod = getModule('twoMinuteDrill');
+  const init = mod.initInstance();
+  const giId = store.makeId('gi');
+  db.gameInstances[giId] = {
+    id: giId,
+    competitionId: null,
+    gameType: 'twoMinuteDrill',
+    mode: 'async',
+    config: init.config,
+    status: init.status,
+    state: init.state,
+    results: [],
+    isTest: true,
+  };
+  await store.save(db);
+  res.status(201).json({ instanceId: giId });
+});
+
 router.post('/competitions/:id/start', async (req, res) => {
   const db = await store.load();
   const competition = db.competitions[req.params.id];
@@ -237,7 +262,7 @@ function summarizeCompetition(c) {
 function publicGameInstance(gi) {
   const mod = getModule(gi.gameType);
   const base = { id: gi.id, gameType: gi.gameType, gameName: mod.name, mode: gi.mode, status: gi.status, config: gi.config };
-  if (gi.gameType === 'trivia' || gi.gameType === 'fieldGoal' || gi.gameType === 'kickoffReturn') {
+  if (gi.gameType === 'trivia' || gi.gameType === 'fieldGoal' || gi.gameType === 'kickoffReturn' || gi.gameType === 'twoMinuteDrill') {
     const players = (gi.state && gi.state.players) || {};
     const completedBy = Object.entries(players).filter(([, p]) => p.completed).map(([mid]) => mid);
     return { ...base, completedBy, results: gi.status === 'completed' ? gi.results : [] };

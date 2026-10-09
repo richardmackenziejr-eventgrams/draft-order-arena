@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Two-Minute Drill — Draft Order Arena</title>
+<link rel="icon" type="image/png" href="/favicon.png?v=20261003" />
+<link rel="stylesheet" href="/style.css?v=20261008a" />
+<style>
+  /* leave room for the Full screen button in the panel's corner: beside the title on a wide screen, above it on a phone */
+  #drill-info { padding: 0 7.5em; }
+  @media (max-width: 640px) { #drill-info { padding: 34px 0 0; font-size: 1.05rem; } }
+  #drill-stage { position: relative; }
+  #drill-canvas-wrap { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius); overflow: hidden; background: #8ec9f0; }
+  #drill-canvas-wrap canvas { display: block; width: 100%; height: 100%; }
+  .drill-font { font: 800 15px/1.2 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #eaf3ec; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+
+  /* scoreboard along the top of the picture */
+  #drill-hud { position: absolute; top: 8px; left: 10px; right: 10px; display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none; gap: 8px; }
+  .hud-box { background: rgba(8, 16, 12, 0.72); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; padding: 5px 10px; }
+  #hud-clock { font: 800 clamp(18px, 3.2vw, 30px)/1 "Segoe UI", -apple-system, Roboto, Arial, sans-serif; color: #eaf3ec; letter-spacing: 0.04em; min-width: 3.6ch; text-align: center; }
+  #hud-clock.low { color: #f87171; }
+  #hud-clock.stopped { color: #9db3a3; }
+  #hud-mid { text-align: center; }
+  #hud-down { font-weight: 800; font-size: clamp(13px, 1.8vw, 18px); color: #eaf3ec; }
+  #hud-spot { font-size: clamp(11px, 1.4vw, 14px); color: #9db3a3; margin-top: 2px; }
+  #hud-timeouts { font-size: clamp(11px, 1.4vw, 14px); color: #9db3a3; text-align: right; }
+  #hud-timeouts b { color: #f4c542; letter-spacing: 0.15em; }
+
+  /* big message in the middle ("FIRST DOWN", "INCOMPLETE", ...) */
+  #drill-banner { position: absolute; left: 0; right: 0; top: 28%; text-align: center; pointer-events: none; opacity: 0; transition: opacity 0.18s; }
+  #drill-banner.show { opacity: 1; }
+  #drill-banner span { display: inline-block; background: rgba(8, 16, 12, 0.78); border: 2px solid rgba(255,255,255,0.3); border-radius: 12px; padding: 8px 22px; font: 900 clamp(20px, 4vw, 44px)/1.15 "Segoe UI", -apple-system, Roboto, Arial, sans-serif; color: #eaf3ec; text-shadow: 0 3px 10px rgba(0,0,0,0.6); }
+  #drill-banner.good span { color: #4ade80; border-color: #4ade80; }
+  #drill-banner.bad span { color: #f87171; border-color: #f87171; }
+
+  /* the numbers floating over each receiver's head */
+  #drill-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .rl { position: absolute; transform: translate(-50%, -100%); width: clamp(20px, 3vw, 30px); height: clamp(20px, 3vw, 30px); border-radius: 50%; display: none; align-items: center; justify-content: center; font: 900 clamp(12px, 1.8vw, 17px)/1 "Segoe UI", -apple-system, Arial, sans-serif; color: #08140d; background: #eaf3ec; border: 2px solid #08140d; box-shadow: 0 2px 6px rgba(0,0,0,0.5); }
+  .rl.open { background: #4ade80; }
+  .rl.maybe { background: #f4c542; }
+  .rl.covered { background: #f87171; }
+  .rl.target { outline: 3px solid #fff; }
+
+  /* on-screen controls for phones/tablets: stick (right), receiver buttons (left) */
+  #drill-touch { display: none; position: absolute; inset: 0; pointer-events: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  #drill-touch.on { display: block; }
+  #drill-stick { position: absolute; right: 3%; bottom: 7%; width: clamp(96px, 24vmin, 150px); aspect-ratio: 1; border-radius: 50%; background: rgba(0,0,0,0.28); border: 2px solid rgba(255,255,255,0.5); pointer-events: auto; touch-action: none; }
+  #drill-stick-knob { position: absolute; left: 30%; top: 30%; width: 40%; height: 40%; border-radius: 50%; background: rgba(255,255,255,0.7); box-shadow: 0 2px 6px rgba(0,0,0,0.4); pointer-events: none; }
+  #drill-recv { position: absolute; left: 3%; bottom: 7%; display: grid; grid-template-columns: repeat(2, auto); gap: 10px; }
+  .drill-rbtn { width: clamp(52px, 13vmin, 80px); aspect-ratio: 1; border-radius: 50%; border: 2px solid rgba(255,255,255,0.7); background: rgba(20,60,120,0.55); color: #fff; font: 900 clamp(16px, 4vmin, 26px)/1 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; pointer-events: auto; touch-action: none; padding: 0; cursor: pointer; }
+  .drill-rbtn.down { background: rgba(60,140,255,0.85); transform: scale(0.94); }
+  @media (orientation: portrait) {
+    #drill-touch.on { position: static; display: flex; flex-direction: row-reverse; justify-content: space-between; align-items: center; margin-top: 12px; padding: 0 2%; }
+    #drill-stick { position: relative; right: auto; bottom: auto; width: 120px; }
+    #drill-recv { position: static; }
+    .drill-rbtn { width: 62px; }
+  }
+
+  .drill-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-items: center; }
+  .drill-actions .btn { min-width: 8.5em; }
+  .kr-hint-touch { display: none; }
+  @media (pointer: coarse) { .kr-hint-desktop { display: none; } .kr-hint-touch { display: block; } }
+  #drill-result { text-align: center; font-weight: 800; margin: 10px 0 0; min-height: 1.4em; }
+</style>
+</head>
+<body>
+<header class="site">
+  <a class="logo" href="/">Draft Order <span>Arena</span></a>
+</header>
+<main class="kr-page game-wide">
+  <h1>Two-Minute Drill</h1>
+  <p class="lead" id="status-line">Loading…</p>
+  <p class="lead" id="lead-line" style="font-size:0.9rem">You're the quarterback. 2:00 on the clock, ball on your own 25. Drive for a touchdown.</p>
+
+  <div class="panel" id="drill-panel" style="display:none">
+    <p class="kr-return-info" id="drill-info">Your drive</p>
+    <div id="drill-stage">
+      <div id="drill-canvas-wrap">
+        <div id="drill-hud">
+          <div class="hud-box"><div id="hud-clock">2:00</div></div>
+          <div class="hud-box" id="hud-mid"><div id="hud-down">1st &amp; 10</div><div id="hud-spot">Ball on OWN 25</div></div>
+          <div class="hud-box" id="hud-timeouts">Timeouts <b>&bull;&bull;&bull;</b></div>
+        </div>
+        <div id="drill-banner"><span id="drill-banner-text"></span></div>
+        <div id="drill-labels"></div>
+      </div>
+      <div id="drill-touch">
+        <div id="drill-stick"><div id="drill-stick-knob"></div></div>
+        <div id="drill-recv">
+          <button type="button" class="drill-rbtn" data-r="0">1</button>
+          <button type="button" class="drill-rbtn" data-r="1">2</button>
+          <button type="button" class="drill-rbtn" data-r="2">3</button>
+          <button type="button" class="drill-rbtn" data-r="3">4</button>
+        </div>
+      </div>
+    </div>
+    <div class="kr-controls-row">
+      <p class="kr-hint kr-hint-desktop"><strong>Space</strong> snap the ball<br /><strong>Arrow keys</strong> move the QB<br /><strong>1 2 3 4</strong> throw to that receiver</p>
+      <p class="kr-hint kr-hint-desktop"><strong>S</strong> spike &nbsp; <strong>T</strong> timeout<br /><strong>F</strong> field goal</p>
+      <p class="kr-hint kr-hint-touch"><strong>Stick:</strong> move the QB<br /><strong>1-4:</strong> throw to that receiver</p>
+      <div class="drill-actions">
+        <button id="btn-snap" class="btn" type="button" disabled>Loading…</button>
+        <button id="btn-spike" class="btn secondary" type="button" disabled>Spike</button>
+        <button id="btn-timeout" class="btn secondary" type="button" disabled>Timeout</button>
+        <button id="btn-fg" class="btn secondary" type="button" disabled>Field goal</button>
+      </div>
+    </div>
+    <p id="drill-result"></p>
+  </div>
+
+  <div class="panel" id="done-panel" style="display:none">
+    <p id="done-message"></p>
+  </div>
+
+  <p><a class="btn secondary" id="back-link" href="/" style="display:none">Home</a></p>
+</main>
+<footer class="site">Draft Order Arena — prototype</footer>
+<script src="/js/common.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three/build/three.module.js",
+    "three/addons/": "/vendor/three/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="/js/play-two-minute-drill.js?v=5"></script>
+</body>
+</html>

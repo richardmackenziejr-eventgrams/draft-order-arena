@@ -9,7 +9,7 @@ if (!leagueId || !member) {
 document.getElementById('greeting').textContent = `Hi, ${member.name}!`;
 
 function gameLink(gi) {
-  const pageByType = { trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html', kickoffReturn: 'play-kickoff-return-3d.html' };
+  const pageByType = { trivia: 'play-trivia.html', fieldGoal: 'play-field-goal.html', kickoffReturn: 'play-kickoff-return-3d.html', twoMinuteDrill: 'play-two-minute-drill.html' };
   return `/${pageByType[gi.gameType]}?instance=${gi.id}&league=${leagueId}&member=${member.id}`;
 }
 
@@ -18,6 +18,7 @@ function actionLabel(gi) {
   if (gi.gameType === 'trivia') return gi.hasCompleted ? 'View / waiting' : 'Take the quiz';
   if (gi.gameType === 'fieldGoal') return gi.hasCompleted ? 'View / waiting' : 'Take your kicks';
   if (gi.gameType === 'kickoffReturn') return gi.hasCompleted ? 'View / waiting' : 'Return kicks';
+  if (gi.gameType === 'twoMinuteDrill') return gi.hasCompleted ? 'View / waiting' : 'Run your drive';
   return 'Open';
 }
 
