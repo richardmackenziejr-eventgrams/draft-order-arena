@@ -72,6 +72,33 @@ function clipFor(model, key, clip) {
   return c;
 }
 
+// A football in a player's hand, the way Kickoff Return's runner carries one: the ball sits where his
+// fingers close, along their direction, and rides his right hand bone through every animation. The QB's
+// model (player-kick.glb) already has one baked in ('HeldFootball'); the other models get one built from
+// their own finger bones in the bind pose -- the same placement the Blender script uses.
+function makeHeldBall(model, group) {
+  const bone = (n) => model.getObjectByName(n);
+  const hand = bone('mixamorigRightHand');
+  const fingers = ['mixamorigRightHandIndex2', 'mixamorigRightHandMiddle2', 'mixamorigRightHandThumb1'].map(bone).filter(Boolean);
+  if (!hand || !fingers.length) return null;
+  group.updateMatrixWorld(true);
+  const handPos = new THREE.Vector3(); hand.getWorldPosition(handPos);
+  const centroid = new THREE.Vector3();
+  fingers.forEach((f) => { const v = new THREE.Vector3(); f.getWorldPosition(v); centroid.add(v); });
+  centroid.multiplyScalar(1 / fingers.length);
+  const toward = centroid.clone().sub(handPos);
+  const len = toward.length();
+  const dir = toward.clone().normalize();
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), new THREE.MeshStandardMaterial({ color: 0x8a4b26, roughness: 0.5 }));
+  mesh.scale.set(1, 1, 1.5);
+  mesh.position.copy(handPos).addScaledVector(dir, len * 1.15);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+  mesh.castShadow = true;
+  mesh.visible = false;
+  hand.attach(mesh); // keeps its place in the world while becoming a child of the hand
+  return mesh;
+}
+
 const ONE_SHOTS = new Set(['catch', 'fall', 'victory', 'flex', 'throw']);
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const lerpAngle = (a, b, k) => { const d = ((b - a + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI; return a + d * k; };
@@ -88,17 +115,23 @@ export class Actor {
     scene.add(this.group);
     this.pos = this.group.position;
 
-    let hips = null, rightArm = null, rightFore = null;
+    let hips = null, rightArm = null, rightFore = null, rightHand = null;
     this.model.traverse((o) => {
       if (o.isBone && o.name === 'mixamorigHips') hips = o;
       if (o.isBone && o.name === 'mixamorigRightArm') rightArm = o;
       if (o.isBone && o.name === 'mixamorigRightForeArm') rightFore = o;
+      if (o.isBone && o.name === 'mixamorigRightHand') rightHand = o;
     });
+    this.rightHand = rightHand;
     this.hips = hips;
     this.hipsBind = hips ? hips.position.clone() : null;
     this.rightArm = rightArm; this.rightFore = rightFore;
     this.armBind = rightArm ? rightArm.rotation.clone() : null;
     this.foreBind = rightFore ? rightFore.rotation.clone() : null;
+
+    // the football this player carries (hidden until he has the ball)
+    this.heldBall = kind === 'ol' || kind === 'dl' ? null : (this.model.getObjectByName('HeldFootball') || makeHeldBall(this.model, this.group));
+    if (this.heldBall) this.heldBall.visible = false;
 
     this.mixer = new THREE.AnimationMixer(this.model);
     this.actions = {};
@@ -127,6 +160,14 @@ export class Actor {
     this.throwU = -1;       // procedural throw pose progress (0..1), -1 = off
     this.fade = 0.15;
     this.snapNext = true;   // first frame: jump straight to the target weights
+  }
+
+  setHeldBall(on) { if (this.heldBall) this.heldBall.visible = !!on; }
+  // where his throwing hand is, in the world (a throw leaves from here). The QB's baked football is skinned
+  // geometry, so its own node sits at the model origin -- the hand bone is what actually moves with the ball.
+  heldBallPosition(target) {
+    if (this.rightHand) { this.model.updateMatrixWorld(true); return this.rightHand.getWorldPosition(target); }
+    return target.set(this.pos.x, 1.6, this.pos.z);
   }
 
   place(x, z, yaw) {

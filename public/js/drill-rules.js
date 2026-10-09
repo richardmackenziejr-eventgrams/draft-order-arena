@@ -54,7 +54,7 @@ export function ordinal(n) { return ['', '1st', '2nd', '3rd', '4th'][n] || `${n}
 
 export function downAndDistanceText(d) {
   const goalToGo = d.losYard + d.toGo >= FIELD_YARDS;
-  return `${ordinal(d.down)} & ${goalToGo ? 'Goal' : d.toGo}`;
+  return `${ordinal(d.down)} & ${goalToGo ? 'Goal' : Math.round(d.toGo)}`;
 }
 
 export function ballOnText(yard) {
@@ -138,9 +138,9 @@ export function applyPlay(d, play) {
     d.down += 1; d.clockRunning = false;
     text = play.kind === 'spike' ? 'Ball spiked — clock stopped' : 'Incomplete';
   } else { // complete | run | sack
-    const newYard = clamp(play.endYard, -5, FIELD_YARDS);
+    const newYard = clamp(Math.round(play.endYard), -5, FIELD_YARDS); // the ball is spotted to the nearest yard
     if (newYard <= 0) { d.over = true; d.clockRunning = false; d.endReason = 'safety'; d.losYard = 0; return 'SAFETY'; }
-    const gain = Math.round(newYard) - Math.round(d.losYard);
+    const gain = newYard - d.losYard;
     d.losYard = newYard;
     if (gain >= d.toGo) {
       d.down = 1;

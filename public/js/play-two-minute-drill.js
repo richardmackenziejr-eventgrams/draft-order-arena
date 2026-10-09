@@ -17,8 +17,8 @@ import * as THREE from 'three';
 import { createStadium } from '/js/stadium.js?v=2';
 import { createSidelineCrew } from '/js/sideline-crew.js?v=3';
 import { setupFullscreenToggle } from '/js/fullscreen.js?v=1';
-import * as R from '/js/drill-rules.js?v=2';
-import { loadDrillAssets, Actor } from '/js/drill-actors.js?v=1';
+import * as R from '/js/drill-rules.js?v=3';
+import { loadDrillAssets, Actor } from '/js/drill-actors.js?v=3';
 
 let instanceId = qs('instance');
 const leagueId = qs('league');
@@ -85,6 +85,7 @@ const RELEASE_AT = 0.22;
 const RISE_TIME = 0.9;         // linemen standing up out of their stance
 const THROW_SPEED = 21;        // yards per second
 const REC_SPEED = 7.8;
+const QB_FORWARD_SPEED = 5.9;   // yards/second: a mobile QB, but slower than the linemen (6.8), linebacker (7.0) and backs (8.0) who run him down
 const BALL_HELD = 1.25;
 
 const S = {
@@ -161,8 +162,8 @@ function buildTeams(assets) {
   };
   // Everyone who plays defense, with the data the AI needs.
   A.defenders = [
-    ...A.dl.map((actor, i) => ({ actor, role: 'dl', idx: i, speed: 6.7 })),
-    { actor: A.lb, role: 'lb', idx: 0, speed: 6.6 },
+    ...A.dl.map((actor, i) => ({ actor, role: 'dl', idx: i, speed: 6.8 })),
+    { actor: A.lb, role: 'lb', idx: 0, speed: 7.0 },
     ...A.dbs.map((actor, i) => ({ actor, role: 'db', idx: i, speed: 8.0, cushion: i === 0 || i === 3 ? 6 : 4.5 })),
   ];
   A.recs.forEach((r, i) => { r.slot = i; r.routeSpeed = REC_SPEED; });
@@ -349,7 +350,7 @@ function doSpike() {
   if (S.phase !== 'presnap' || S.drive.over) return;
   S.phase = 'dead'; S.deadT = 0;
   A.qb.throwU = 0; S.spiking = true;
-  ball.position.set(A.qb.pos.x, 1.3, A.qb.pos.z - 0.2); S.ballMode = 'ground';
+  ball.position.set(A.qb.pos.x, 1.3, A.qb.pos.z - 0.2); S.ballMode = 'ground'; showHeldBall(null);
   banner(R.applyPlay(S.drive, { kind: 'spike' }), '', 1.6);
   A.qb.place(A.qb.pos.x, A.qb.pos.z, Math.PI);
 }
@@ -365,6 +366,7 @@ function doFieldGoal() {
   S.phase = 'fg';
   S.fg = { t: 0, made, from: new THREE.Vector3(0, 0.3, S.z0 + 7), x: made ? (S.rng() - 0.5) * 3 : (S.rng() < 0.5 ? -1 : 1) * (4.2 + S.rng() * 2.5) };
   S.ballMode = 'fgflight';
+  showHeldBall(null);
   hideBanner();
   banner(`Field goal attempt — ${R.fieldGoalKickDistance(S.drive.losYard)} yards`, '', 2.2);
 }
@@ -420,7 +422,7 @@ function updateQb(dt) {
 
   const inp = S.qbHasBall || S.t < BALL_ARRIVES ? inputVector() : { x: 0, z: 0 };
   // speeds: forward is quickest, backpedaling slowest
-  const target = new THREE.Vector3(inp.x * 4.9, 0, inp.z < 0 ? inp.z * 6.1 : inp.z * 3.6);
+  const target = new THREE.Vector3(inp.x * 4.7, 0, inp.z < 0 ? inp.z * QB_FORWARD_SPEED : inp.z * 3.6);
   S.qbVel.lerp(target, 1 - Math.exp(-9 * dt));
   qb.pos.x = clamp(qb.pos.x + S.qbVel.x * dt, -SIDELINE_X - 0.3, SIDELINE_X + 0.3);
   qb.pos.z = clamp(qb.pos.z + S.qbVel.z * dt, S.z0 - 40, 6);
@@ -435,7 +437,7 @@ function releaseBall() {
   const th = S.throwing;
   th.released = true;
   const qb = A.qb, rec = th.rec;
-  const from = new THREE.Vector3(qb.pos.x, 1.75, qb.pos.z);
+  const from = qb.heldBallPosition(new THREE.Vector3()); // the ball leaves his hand
   // lead the receiver: he'll be where his route puts him by the time the ball gets there
   let T = 0.8, target = routeAt(rec, S.t + T);
   for (let k = 0; k < 4; k++) { // a few passes of "how long will it take to reach where he'll be"
@@ -470,12 +472,12 @@ function updateDefense(dt) {
     if (carrier) {
       d.state = 'pursue'; a.override = null;
       const lead = 0.28;
-      moveToward(a, carrier.pos.x + (carrier.vx || 0) * lead, carrier.pos.z + (carrier.vz || 0) * lead, d.role === 'dl' ? d.speed * 0.9 : d.speed, dt);
+      moveToward(a, carrier.pos.x + (carrier.vx || 0) * lead, carrier.pos.z + (carrier.vz || 0) * lead, d.speed, dt);
       return;
     }
     if (qbRunning) { // the QB crossed the line: everyone converges on him
       d.state = 'pursue'; if (d.role === 'dl') { d.rushing = true; a.override = null; }
-      moveToward(a, qb.pos.x, qb.pos.z, d.speed * (d.role === 'db' ? 0.95 : 0.9), dt);
+      moveToward(a, qb.pos.x, qb.pos.z, d.speed, dt);
       return;
     }
     if (!live) { stopActor(a); return; }
@@ -600,7 +602,7 @@ function updateCarrier(dt) {
   if (c === A.qb && S.phase !== 'dead') {
     // the QB running it himself (past the line): the player steers
     const inp = inputVector();
-    const target = new THREE.Vector3(inp.x * 5.4, 0, inp.z < 0 ? inp.z * 6.4 : inp.z * 4);
+    const target = new THREE.Vector3(inp.x * 5.0, 0, inp.z < 0 ? inp.z * QB_FORWARD_SPEED : inp.z * 4);
     S.qbVel.lerp(target, 1 - Math.exp(-9 * dt));
     c.pos.x += S.qbVel.x * dt; c.pos.z += S.qbVel.z * dt;
     c.vx = S.qbVel.x; c.vz = S.qbVel.z;
@@ -682,12 +684,16 @@ function updateFieldGoal(dt) {
 }
 
 // ---- the ball ----------------------------------------------------------------------------------------------------------------------------------
-function holdAt(actor, height = BALL_HELD, forward = 0.32) {
-  ball.position.set(actor.pos.x + Math.sin(actor.yaw) * forward, height, actor.pos.z + Math.cos(actor.yaw) * forward);
-  ball.rotation.set(0, actor.yaw, 0);
+// While a player has the ball it lives in his hand (see drill-actors.js); the loose ball is hidden.
+// Everyone else's hand-ball is hidden. `holder` = null means the ball is loose / in the air.
+function showHeldBall(holder) {
+  [A.qb, ...A.recs, A.lb, ...A.dbs].forEach((a) => a.setHeldBall(a === holder));
+  ball.visible = !holder;
 }
 
 function updateBall(dt) {
+  const holder = S.ballMode === 'held' ? A.qb : S.ballMode === 'carried' ? S.carrier : S.ballMode === 'picked' && S.picker ? S.picker.actor : null;
+  showHeldBall(holder);
   switch (S.ballMode) {
     case 'snap': {
       // center -> QB hands (shotgun)
@@ -698,7 +704,7 @@ function updateBall(dt) {
       if (u >= 1) S.ballMode = 'held';
       break;
     }
-    case 'held': holdAt(A.qb); break;
+    case 'held': break; // in the QB's hand
     case 'flight': {
       const f = S.flight;
       const u = f.u, v = 1 - u;
@@ -710,8 +716,7 @@ function updateBall(dt) {
       ball.rotation.z += 14 * dt; // spiral
       break;
     }
-    case 'carried': if (S.carrier) holdAt(S.carrier, 1.15, 0.3); break;
-    case 'picked': if (S.picker) holdAt(S.picker.actor, 1.15, 0.3); break;
+    case 'carried': case 'picked': break; // in the carrier's / defender's hand
     default: break;
   }
 }
