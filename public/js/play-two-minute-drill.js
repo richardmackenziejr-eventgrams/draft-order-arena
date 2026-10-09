@@ -750,21 +750,26 @@ let camSnap = true;
 function updateCamera(dt) {
   if (!A) return;
   let px, py, pz, lx, ly, lz;
+  let chase = false;
   const qb = A.qb;
   if (S.phase === 'presnap' || S.phase === 'loading') {
     px = 0; py = 5.2; pz = S.z0 + 13.8; lx = 0; ly = 1.4; lz = S.z0 - 9;   // far enough back that the wide receivers (11 yards out) are inside the frame
-  } else if ((S.phase === 'yac' || (S.phase === 'dead' && S.carrier)) && S.carrier) {
+  } else if (((S.phase === 'yac' || S.phase === 'play' || S.phase === 'dead') && S.carrier)) {
+    // chasing whoever has the ball once he's running with it (a receiver after the catch, or the QB
+    // who has scrambled past the line): stay right behind him, left and right as well as downfield
     const c = S.carrier;
-    px = c.pos.x * 0.75; py = 4.0; pz = c.pos.z + 8.2; lx = c.pos.x; ly = 1.3; lz = c.pos.z - 10;
+    px = clamp(c.pos.x * 0.94, -22, 22); py = 4.0; pz = c.pos.z + 8.2; lx = clamp(c.pos.x, -24, 24); ly = 1.3; lz = c.pos.z - 10;
+    chase = true;
   } else if (S.phase === 'fg') {
     px = 0; py = 7; pz = S.z0 + 14; lx = S.fg ? S.fg.x * 0.3 : 0; ly = 6; lz = -100;
   } else {
-    px = qb.pos.x * 0.6; py = 4.5; pz = qb.pos.z + 8.6; lx = qb.pos.x * 0.35; ly = 1.7; lz = qb.pos.z - 14;
+    // in the pocket: behind the QB, tracking him sideways too so a scramble never leaves the picture
+    px = clamp(qb.pos.x * 0.92, -22, 22); py = 4.5; pz = qb.pos.z + 8.6; lx = clamp(qb.pos.x * 0.85, -24, 24); ly = 1.7; lz = qb.pos.z - 14;
     if (S.phase === 'flight' && S.flight) { // keep the throw in frame
       lx = lx * 0.5 + ball.position.x * 0.5; lz = lz * 0.45 + ball.position.z * 0.55; ly = 1.8;
     }
   }
-  const k = camSnap ? 1 : 1 - Math.exp(-4.2 * dt);
+  const k = camSnap ? 1 : 1 - Math.exp(-(chase ? 6.5 : 4.2) * dt);
   camSnap = false;
   camPos.x += (px - camPos.x) * k; camPos.y += (py - camPos.y) * k; camPos.z += (pz - camPos.z) * k;
   camLook.x += (lx - camLook.x) * k; camLook.y += (ly - camLook.y) * k; camLook.z += (lz - camLook.z) * k;
