@@ -155,7 +155,7 @@ function buildTeams(assets) {
     ol: FORMATION.ol.map(() => mk('ol', LINE_CLIPS)),
     qb: mk('qb', ALL_CLIPS),
     rb: mk('wr', ['idle', 'run']),
-    recs: [0, 1, 2, 3].map(() => mk('wr', ALL_CLIPS)),
+    recs: [0, 1, 2, 3].map(() => mk('wr', [...ALL_CLIPS, 'stance'])),
     dl: FORMATION.dl.map(() => mk('dl', LINE_CLIPS)),
     lb: mk('db', ALL_CLIPS),
     dbs: [0, 1, 2, 3].map(() => mk('db', ALL_CLIPS)),
@@ -201,14 +201,24 @@ function routeAt(rec, t) {
   return { x: clamp(b.x + dx * extra, -24, 24), z: Math.max(GOAL_Z + 2, b.z + dz * extra), dx, dz, moving: true };
 }
 
-// A receiver waits in the crouch (the first frame of the crouch-to-sprint clip, held), then bursts out of it on the snap.
+// How a receiver waits for the snap: 'stance' = the two-point stance (the lineman stance clip held part-way down:
+// knees bent, leaning forward, hands low), then he just runs; 'crouchSprint' = the deeper crouch that bursts out
+// through the Mixamo crouch-to-sprint clip.
+const WR_START = 'stance';
+const WR_STANCE_DEPTH = 0.5; // how far down the stance clip the receiver is held (0 standing .. 1 full crouch)
 function crouchReceiver(r) {
-  if (!r.actions.crouchSprint) return;
-  r.play('crouchSprint', { fade: 0.05, timeScale: 0 });
-  r.snapNext = true;
+  if (WR_START === 'stance' && r.actions.stance) {
+    r.override = 'stance'; r.overrideFade = 0.05;
+    r.stanceT = r.assets.hipsOffset.stance.duration * WR_STANCE_DEPTH;
+    r.snapNext = true;
+  } else if (r.actions.crouchSprint) {
+    r.play('crouchSprint', { fade: 0.05, timeScale: 0 });
+    r.snapNext = true;
+  }
 }
 function burstReceiver(r) {
-  if (r.actions.crouchSprint && r.override === 'crouchSprint') r.play('crouchSprint', { fade: 0.05, timeScale: 1 });
+  if (r.override === 'stance') r.clearOverride(); // fades into the run as he leaves his mark
+  else if (r.actions.crouchSprint && r.override === 'crouchSprint') r.play('crouchSprint', { fade: 0.05, timeScale: 1 });
 }
 
 // Everybody back to the huddle spot for the next snap.
