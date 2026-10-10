@@ -154,7 +154,7 @@ function buildTeams(assets) {
   A = {
     ol: FORMATION.ol.map(() => mk('ol', LINE_CLIPS)),
     qb: mk('qb', ALL_CLIPS),
-    rb: mk('wr', ['idle', 'run']),
+    rb: mk('wr', ['idle', 'run', 'stance']),
     recs: [0, 1, 2, 3].map(() => mk('wr', [...ALL_CLIPS, 'stance'])),
     dl: FORMATION.dl.map(() => mk('dl', LINE_CLIPS)),
     lb: mk('db', ALL_CLIPS),
@@ -237,7 +237,7 @@ function lineUp() {
   A.ol.forEach((a, i) => { a.place(FORMATION.ol[i], z0 + 0.45, OFF); a.override = 'stance'; a.stanceT = a.assets.hipsOffset.stance.duration; a.snapNext = true; });
   A.dl.forEach((a, i) => { a.place(FORMATION.dl[i], z0 - 0.45, DEF); a.override = 'stance'; a.stanceT = a.assets.hipsOffset.stance.duration; a.snapNext = true; });
   A.qb.place(0, z0 + QB_BACK, OFF); A.qb.clearOverride(); A.qb.throwU = -1;
-  A.rb.place(1.9, z0 + QB_BACK, OFF); A.rb.clearOverride();
+  A.rb.place(1.9, z0 + QB_BACK, OFF); A.rb.clearOverride(); crouchReceiver(A.rb);
   A.recs.forEach((r, i) => { r.place(R.RECEIVER_SPOTS[i].x, z0 + R.RECEIVER_SPOTS[i].z, OFF); r.clearOverride(); crouchReceiver(r); });
   setRoutes();
   A.lb.place(0.6, z0 - 4.2, DEF); A.lb.clearOverride();
@@ -354,7 +354,7 @@ function doSnap() {
   S.t = 0;
   S.snapBall = { from: new THREE.Vector3(0, 0.12, S.z0), done: false };
   S.ballMode = 'snap';
-  A.recs.forEach(burstReceiver);
+  A.recs.forEach(burstReceiver); burstReceiver(A.rb);
 }
 
 function doThrow(i) {
